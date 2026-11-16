@@ -43,7 +43,8 @@ describe("M3 Coordinator + Ledger", () => {
     const reopened = Ledger.open(path);
     expect(reopened.decisions[0].id).toBe(result.id);
     expect(reopened.events[0].id).toBe(dispatch.event.id);
-    expect(JSON.parse(readFileSync(path, "utf8")).entries.map((entry: any) => entry.kind)).toEqual(["event", "case", "decision"]);
+    expect(JSON.parse(readFileSync(path, "utf8")).entries.map((entry: any) => entry.kind)).toEqual(["event", "case", "decision", "decision"]);
+    expect(ledger.history("decision").map((item) => item.state)).toEqual(["thinking", "routed"]);
   });
 
   test("全局 6 次预算用完后第 7 次不调用 coordinator，只落 waiting 卡", async () => {

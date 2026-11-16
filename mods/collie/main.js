@@ -7,8 +7,8 @@ import {
   setShared, shared, theme,
 } from "herdr";
 import {
-  diffTarget, parseQueue, queuePath, receiptPath, settledDecisions, taskTarget,
-  waitingQueue, workingCount, workingDecisions,
+  diffTarget, inboxDecisions, parseQueue, queuePath, receiptPath, taskTarget,
+  waitingQueue, workingBadge, workingCount,
 } from "./lib/inbox-queue.js";
 
 const v = () => div().flex().flex_col();
@@ -67,10 +67,17 @@ function action(id, label, enabled, onClick, t) {
     .child(label);
 }
 
+function receiptSection(t, label, text) {
+  return v().w_full().gap(6).rounded(8).p(12).bg(t.raised)
+    .child(div().text_size(11).font_semibold().text_color(t.muted).child(label))
+    .child(div().line_height("20px").child(text || "—"));
+}
+
 export default class Inbox extends View {
   init(_props, cx) {
     this.view = _props?.view ?? props()?.view ?? "queue";
-    this.filter = shared("inbox.filter") ?? "waiting";
+    this.filter = shared("inbox.filter") ?? "all";
+    this.tickets = [];
     this.rows = [];
     this.decisions = [];
     this.targets = new Map();
@@ -101,12 +108,16 @@ export default class Inbox extends View {
         const links = await navigation(this.decisions);
         this.targets = new Map([...links].map(([id, value]) => [id, value.target]));
         this.receipts = new Map([...links].map(([id, value]) => [id, value.receipt]));
-        const rows = this.filter === "working" ? workingDecisions(this.decisions)
-          : this.filter === "settled" ? settledDecisions(this.decisions)
-          : waitingQueue(this.decisions);
-        this.rows = rows;
+        this.rows = inboxDecisions(this.decisions, this.filter);
         this.error = null;
         setShared("inbox.queue", { waiting: waitingQueue(this.decisions).length, working: workingCount(this.decisions), at: Date.now() });
+        const current = selected();
+        if (current?.decision) {
+          const decision = this.decisions.find((d) => d.id === current.decision.id);
+          if (decision) setShared("inbox.selected", {
+            decision, target: this.targets.get(decision.id), receipt: this.receipts.get(decision.id),
+          });
+        }
       } catch (e) {
         this.rows = [];
         this.error = String(e?.message ?? e);
@@ -124,9 +135,12 @@ export default class Inbox extends View {
     this.error = null;
     cx.notify();
     try {
-      const result = await exec(REQUEST(), ["--goal", goal]);
+      const args = ["--goal", goal];
+      for (const ticket of this.tickets) args.push("--ticket", ticket.id);
+      const result = await exec(REQUEST(), args);
       if (result.code !== 0) throw new Error(result.stderr || result.stdout || "request failed");
       this.goal.set_value("");
+      this.tickets = [];
       this.refresh(cx);
     } catch (e) { this.error = String(e?.message ?? e); }
     finally { this.building = false; cx.notify(); }
@@ -139,36 +153,60 @@ export default class Inbox extends View {
   setFilter(filter, cx) {
     this.filter = filter;
     setShared("inbox.filter", filter);
-    this.rows = filter === "working" ? workingDecisions(this.decisions)
-      : filter === "settled" ? settledDecisions(this.decisions) : waitingQueue(this.decisions);
+    this.rows = inboxDecisions(this.decisions, filter);
     cx.notify();
+  }
+
+  quote(decision, cx) {
+    if (this.tickets.some((ticket) => ticket.id === decision.id)) return;
+    const target = this.targets.get(decision.id);
+    this.tickets.push({
+      id: decision.id,
+      title: decision.card?.question ?? target?.title ?? decision.why ?? decision.id,
+    });
+    cx.notify();
+  }
+
+  ticketChip(ticket, t) {
+    return h().id(`collie-ticket-${ticket.id}`).max_w_full().h(28).pl(8).pr(3).gap(5)
+      .items_center().rounded(6).bg(t.raised)
+      .child(div().min_w(0).truncate().text_size(11).text_color(t.muted).child(`${ticket.id} · ${ticket.title}`))
+      .child(action(`collie-unquote-${ticket.id}`, "×", true, (cx) => {
+        this.tickets = this.tickets.filter((item) => item.id !== ticket.id);
+      }, t));
   }
 
   row(decision, t) {
     const target = this.targets.get(decision.id);
     const receipt = this.receipts.get(decision.id);
     const title = decision.card?.question ?? target?.title ?? decision.why;
+    const badge = workingBadge(decision);
     return v().id(`inbox-${decision.id}`).flex_none().p(10).gap(7).rounded(8).border_1().border_color(t.border)
       .cursor_pointer().hover((s) => s.bg(t.hover)).on_click(() => openDetails(decision, target, receipt))
       .child(h().w_full().gap(8).items_start()
         .child(div().flex_1().min_w(0).font_medium().text_color(t.foreground).child(title))
-        .child(div().flex_none().text_size(11).text_color(t.dim).child(decision.state)))
+        .child(div().flex_none().px(6).py(2).rounded_full().bg(t.raised).text_size(11).text_color(t.dim)
+          .child(badge ?? decision.state)))
       .child(div().w_full().text_size(12).text_color(t.muted).child(decision.why))
       .child(h().w_full().gap(6).items_center()
         .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(decision.space))
-        .child(div().text_size(11).text_color(t.dim).child(target?.ref ?? decision.run?.task_ref ?? "Decision")));
+        .child(div().text_size(11).text_color(t.dim).child(target?.ref ?? decision.run?.task_ref ?? "Decision"))
+        .child(action(`collie-quote-${decision.id}`, "引用", true, (cx) => this.quote(decision, cx), t)));
   }
 
   queue(t) {
-    const tabs = [["waiting", "Needs you"], ["working", "Working"], ["settled", "Settled"]];
+    const tabs = [["all", "All"], ["waiting", "Needs you"], ["working", "Working"], ["review", "Review"], ["settled", "Settled"]];
     return v().id("collie").size_full().min_h(0).bg(t.background).text_color(t.foreground).text_size(13)
       .child(h().h(46).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
         .child(div().font_semibold().child("Inbox"))
         .children(tabs.map(([id, label]) => action(`inbox-${id}`, label, true, (cx) => this.setFilter(id, cx), t)))
         .child(div().px(6).text_size(11).text_color(t.dim).child("New / Build")))
-      .child(h().flex_none().px(10).py(8).gap(8).border_b(1).border_color(t.border)
-        .child(Input.new(this.goal))
-        .child(action("collie-build-go", this.building ? "Working…" : "Send", !this.building, (cx) => this.newBuild(cx), t)))
+      .child(v().flex_none().border_b(1).border_color(t.border)
+        .when(this.tickets.length > 0, (el) => el.child(h().flex_wrap().px(10).pt(8).gap(6)
+          .children(this.tickets.map((ticket) => this.ticketChip(ticket, t)))))
+        .child(h().flex_none().px(10).py(8).gap(8)
+          .child(Input.new(this.goal).flex_1().min_w(0))
+          .child(action("collie-build-go", this.building ? "Working…" : "Send", !this.building, (cx) => this.newBuild(cx), t))))
       .when(this.error, (el) => el.child(div().px(12).py(6).text_color(t.ansi1).child(this.error)))
       .child(v().flex_1().min_h(0).overflow_y_scrollbar().p(6).gap(6)
         .children(this.rows.map((row) => this.row(row, t)))
@@ -220,14 +258,20 @@ export default class Inbox extends View {
         .child(action("collie-detail-diff", "Diff", Boolean(diffTarget(target)), () => openDiff(target), t)))
       .child(v().flex_1().min_h(0).overflow_y_scrollbar().p(16).gap(14)
         .child(div().text_size(17).font_semibold().child(decision.card?.question ?? target?.title ?? decision.why))
-        .child(div().text_color(t.muted).child(decision.why))
+        .child(div().text_color(t.muted).child(`Why · ${decision.why}`))
         .child(h().gap(8).text_size(11).text_color(t.dim)
           .child(decision.id).child(decision.state).child(target?.ref ?? decision.run?.task_ref ?? ""))
-        .when(receipt, (el) => el.child(v().gap(8).rounded(8).p(12).bg(t.raised)
-          .child(div().font_semibold().child(receipt.summary ?? "Receipt"))
-          .child(div().child(receipt.details ?? ""))
-          .child(div().font_family("JetBrains Mono").text_size(11).text_color(t.dim)
-            .child((receipt.proof?.refs ?? []).join("\n")))))
+        .child(v().w_full().gap(5).rounded(8).p(12).bg(t.raised).text_size(12)
+          .child(`Task state · ${target?.state ?? receipt?.task?.state ?? "unknown"}`)
+          .child(`run.task_ref · ${decision.run?.task_ref ?? "—"}`))
+        .when(receipt, (el) => el
+          .child(receiptSection(t, "Receipt summary", receipt.summary))
+          .child(receiptSection(t, "Receipt details", receipt.details))
+          .child(v().w_full().gap(6).rounded(8).p(12).bg(t.raised)
+            .child(div().text_size(11).font_semibold().text_color(t.muted).child("Receipt proof"))
+            .child(div().line_height("20px").child(receipt.proof?.text ?? "—"))
+            .child(div().font_family("JetBrains Mono").text_size(11).text_color(t.dim)
+              .child((receipt.proof?.refs ?? []).join("\n")))))
         .when(waiting, (el) => el.child(v().gap(10)
           .child(Input.new(this.note))
           .child(h().gap(8)

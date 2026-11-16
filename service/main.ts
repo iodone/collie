@@ -110,7 +110,7 @@ export class InboxService {
     return this.acceptReceipt(decision.id, receipt);
   }
 
-  async request(space: string, goal: string): Promise<Json> {
+  async request(space: string, goal: string, ticketRefs: string[] = []): Promise<Json> {
     if (!/^[a-z0-9][a-z0-9_-]{1,63}$/.test(space)) throw new Error("invalid space");
     if (typeof goal !== "string" || !goal.trim() || goal.length > 4000) throw new Error("goal must be 1–4000 chars");
     const at = (this.#options.now ?? (() => new Date()))().toISOString();
@@ -118,11 +118,12 @@ export class InboxService {
     const directory = join(this.stateDir, "requests");
     mkdirSync(directory, { recursive: true });
     const dataRef = join(directory, `${id}.md`);
-    writeFileSync(dataRef, goal, { mode: 0o600 });
+    const requestBody = JSON.stringify({ goal, ticket_refs: ticketRefs });
+    writeFileSync(dataRef, requestBody, { mode: 0o600 });
     const event = {
       id, source: "im", key: `human:${id}`, type: "human.requested",
       object: { kind: "none", id }, title: goal.split(/\r?\n/)[0].slice(0, 80).replace(/^[-\s]+/, "Request "),
-      data_ref: dataRef, data_digest: `sha256:${createHash("sha256").update(goal).digest("hex")}`,
+      data_ref: dataRef, data_digest: `sha256:${createHash("sha256").update(requestBody).digest("hex")}`,
       hops: 0, received_at: at,
       merge: { lane_key: `coordinator:none:${id}`, object_key: `none:${id}`, first_seen_at: at, occurrences: 1 },
       space_candidates: [space],
@@ -130,6 +131,8 @@ export class InboxService {
     this.ledger.append("event", event);
     const decision = await coordinate({ kind: "coordinator", laneKey: event.merge.lane_key, space, ruleId: null, event }, {
       ledger: this.ledger, ruleset: this.#options.ruleset, stream: "chat_turn",
+      onDecision: () => this.#projectQueue(),
+      spaceNote: ticketRefs.length ? `引用 Ticket：${ticketRefs.join("、")}` : `${space} · coordinator`,
       decide: this.#options.decide ?? (async (job: Json) => {
         if (!this.#options.coordinator) throw new Error(`space ${space} has no coordinator configured`);
         const config = coordinatorConfig(this.#coordinatorSettings(), space);
@@ -161,6 +164,7 @@ export class InboxService {
       });
       const decision = await coordinate(dispatch, {
         ledger: this.ledger, ruleset: this.#options.ruleset, decide,
+        onDecision: () => this.#projectQueue(),
         ...(this.#options.now ? { now: this.#options.now } : {}),
         ...(this.#options.rolePromptRef ? { rolePromptRef: this.#options.rolePromptRef } : {}),
       });

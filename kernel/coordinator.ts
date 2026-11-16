@@ -20,6 +20,7 @@ export interface CoordinateOptions {
   running?: Json[];
   rolePromptRef?: string;
   stream?: "job_turn" | "chat_turn";
+  onDecision?: (decision: Json) => void;
 }
 
 const baseDecision = (dispatch: Dispatch, at: string, caseRef: string | null): Json => ({
@@ -129,11 +130,20 @@ export async function coordinate(dispatch: Dispatch, options: CoordinateOptions)
   assertValid(job, "urn:collie:case:v1");
   ledger.append("case", job);
 
+  const thinking = {
+    ...baseDecision(dispatch, at, job.id),
+    state: "thinking",
+    why: "Coordinator 正在分析输入并生成 Decision",
+    actions: [],
+  };
+  ledger.append("decision", thinking);
+  options.onDecision?.(thinking);
+
   const output = await decide(structuredClone(job));
   const round = ledger.decisions.filter((decision) => decision.occurrence.object_key === dispatch.event.merge.object_key).length + 1;
   const candidate = {
     ...baseDecision(dispatch, at, job.id), ...output,
-    id: ledgerId("dc"), case_ref: job.id, decided_by: "coordinator", decided_at: at,
+    id: thinking.id, case_ref: job.id, decided_by: "coordinator", decided_at: at,
     occurrence: { ...baseDecision(dispatch, at, job.id).occurrence, round },
     run: { ...baseDecision(dispatch, at, job.id).run, ...output.run },
     human_boundary: { form: output.state === "waiting" ? "card" : "none", chat_injection: false },

@@ -16,7 +16,7 @@ export function startAnswerServer(service: InboxService, socketPath: string) {
       try {
         const input = JSON.parse(body);
         const result = request.url === "/request"
-          ? await service.request(input.space, input.goal)
+          ? await service.request(input.space, input.goal, input.ticket_refs ?? [])
           : await service.answerCard(input.decisionId, input.answer, input.coordinatorAddress);
         response.writeHead(200, { "content-type": "application/json" });
         response.end(JSON.stringify(result));

@@ -73,7 +73,8 @@ describe("Coordinator Host", () => {
         title: "Build request", brief_ref: "/tmp/brief.md", base: "current", review: true, merge: false, access: "edit", tells: "needed",
       } }] }),
     });
-    const decision = await service.request("collie", "实现 New Build");
+    const decision = await service.request("collie", "实现 New Build", ["COLLIE-42"]);
+    expect(service.ledger.cases[0].snapshot.space_note).toContain("COLLIE-42");
     expect(decision.run.task_ref).toBe("HAT-42");
     expect(service.ledger.cases[0]).toMatchObject({ stream: "chat_turn", wake: false, visibility: "chat" });
     expect(service.ledger.cases[0].snapshot.budget.used).toBe(0);

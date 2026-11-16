@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   diffTarget,
+  inboxDecisions,
   parseQueue,
   queuePath,
   receiptPath,
@@ -9,6 +13,7 @@ import {
   workingDecisions,
   taskTarget,
   waitingQueue,
+  workingBadge,
   workingCount,
 } from "../lib/inbox-queue.js";
 
@@ -56,6 +61,29 @@ describe("mods/collie pure queue projection", () => {
     expect(workingDecisions(rows).map((d) => d.id)).toEqual(["dc_work"]);
     expect(settledDecisions(rows).map((d) => d.id)).toEqual(["dc_closed", "dc_done"]);
     expect(waitingQueue(rows).map((d) => d.id)).toEqual(["dc_wait"]);
+  });
+
+  test("固定过滤器覆盖 All / Needs you / Working / Review / Settled，Working 角标来自 Decision", () => {
+    const rows = [
+      waiting("dc_needs"),
+      waiting("dc_review", { receipt_ref: "rc_12345678", card: { kind: "accept" } }),
+      { ...waiting("dc_thinking"), state: "thinking" },
+      { ...waiting("dc_routed"), state: "routed" },
+      { ...waiting("dc_progress"), state: "acting" },
+      { ...waiting("dc_done"), state: "done" },
+      { ...waiting("dc_internal"), state: "new" },
+    ];
+    expect(inboxDecisions(rows, "all").map((d) => d.id).sort()).toEqual([
+      "dc_done", "dc_needs", "dc_progress", "dc_review", "dc_routed", "dc_thinking",
+    ]);
+    expect(inboxDecisions(rows, "waiting").map((d) => d.id)).toEqual(["dc_needs", "dc_review"]);
+    expect(inboxDecisions(rows, "working").map((d) => d.id)).toEqual(["dc_progress", "dc_routed", "dc_thinking"]);
+    expect(inboxDecisions(rows, "review").map((d) => d.id)).toEqual(["dc_review"]);
+    expect(inboxDecisions(rows, "settled").map((d) => d.id)).toEqual(["dc_done"]);
+    expect(workingBadge(rows[2])).toBe("Thinking");
+    expect(workingBadge(rows[3])).toBe("In progress");
+    expect(workingBadge(rows[4])).toBe("In progress");
+    expect(workingBadge(rows[0])).toBeNull();
   });
 
   test("同优先级同时间用 id 稳定排序", () => {
@@ -125,6 +153,50 @@ test("mod 只导入包内共享库拷贝，不越过 herdr 模块边界", () => 
   expect(copied).toBe(shared);
 });
 
+test("Inbox 固定五个过滤器，引用 chip 与 Receipt/Task 详情不经过原生 Accept", () => {
+  const source = readFileSync(new URL("../mods/collie/main.js", import.meta.url), "utf8");
+  expect(source).toContain('[["all", "All"], ["waiting", "Needs you"], ["working", "Working"], ["review", "Review"], ["settled", "Settled"]]');
+  expect(source).not.toContain('["thinking", "Thinking"]');
+  expect(source).not.toContain('["progress", "In progress"]');
+  expect(source).toContain('action(`collie-quote-${decision.id}`, "引用"');
+  expect(source).toContain('args.push("--ticket", ticket.id)');
+  expect(source).toContain("Receipt summary");
+  expect(source).toContain("receipt.proof?.text");
+  expect(source).toContain("Task state");
+  expect(source).toContain("run.task_ref");
+  expect(source).not.toContain('exec(CLI(), ["accept"');
+});
+
+test("collie-request 将重复的 --ticket 全部交给 request socket", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "collie-request-"));
+  const socket = join(dir, "service.sock");
+  let posted: any;
+  const server = createServer((request, response) => {
+    let body = "";
+    request.on("data", (chunk) => { body += chunk; });
+    request.on("end", () => {
+      posted = JSON.parse(body);
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end('{"ok":true}');
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(socket, resolve));
+  try {
+    const child = Bun.spawn([
+      process.execPath, "bin/collie-request", "--state-dir", dir, "--space", "collie", "--goal", "Ship it",
+      "--ticket", "dc_first01", "--ticket", "dc_second2",
+    ], { stdout: "pipe", stderr: "pipe" });
+    const [code, stdout, stderr] = await Promise.all([
+      child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+    ]);
+    expect({ code, stdout, stderr }).toEqual({ code: 0, stdout: '{"ok":true}\n', stderr: "" });
+    expect(posted).toEqual({ space: "collie", goal: "Ship it", ticket_refs: ["dc_first01", "dc_second2"] });
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 describe("mods/collie navigation targets", () => {
   const decision = waiting("dc_12345678");
   const receipt = {
@@ -138,6 +210,7 @@ describe("mods/collie navigation targets", () => {
       key: "hat#42",
       ref: "HAT-42",
       title: "Implement inbox",
+      state: "running",
       live: [{ address: "t88" }],
     }],
   }];
@@ -153,6 +226,7 @@ describe("mods/collie navigation targets", () => {
     expect(target).toMatchObject({
       ref: "HAT-42",
       title: "Implement inbox",
+      state: "running",
       folder: "/repo/collie",
       worktree: "/worktrees/collie/inbox",
       terminal: "t88",
