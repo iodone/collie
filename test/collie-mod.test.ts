@@ -160,7 +160,11 @@ test("Inbox 固定五个过滤器，引用 chip 与 Receipt/Task 详情不经过
   expect(source).not.toContain('["progress", "In progress"]');
   expect(source).toContain('action(`collie-quote-${decision.id}`, "引用"');
   expect(source).toContain('args.push("--ticket", ticket.id)');
-  expect(source).toContain("Receipt summary");
+  expect(source).toContain('receiptSection(t, "Details", receipt.details)');
+  expect(source).toContain('div().font_semibold().child("Checks")');
+  expect(source).toContain('div().text_size(11).font_semibold().text_color(t.muted).child("Proof")');
+  expect(source).not.toContain('div().font_semibold().child("Inbox")');
+  expect(source).not.toContain('child("New / Build")');
   expect(source).toContain("receipt.proof?.text");
   expect(source).toContain("Task state");
   expect(source).toContain("run.task_ref");

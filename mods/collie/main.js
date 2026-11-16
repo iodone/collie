@@ -51,7 +51,14 @@ async function navigation(decisions) {
     if (target && (!target.start || !target.worktree)) {
       try {
         const shown = await exec(CLI(), ["show", target.ref, "--folder", target.folder, "--json", "--evidence"]);
-        if (shown.code === 0) target = taskTarget(decision, receipt, groups, JSON.parse(shown.stdout));
+        if (shown.code === 0) {
+          const detail = JSON.parse(shown.stdout);
+          target = taskTarget(decision, receipt, groups, detail);
+          if (target) {
+            target.state = detail.state;
+            target.evidence = detail.evidence;
+          }
+        }
       } catch { /* keep the list-only target */ }
     }
     return [decision.id, { target, receipt }];
@@ -198,9 +205,7 @@ export default class Inbox extends View {
     const tabs = [["all", "All"], ["waiting", "Needs you"], ["working", "Working"], ["review", "Review"], ["settled", "Settled"]];
     return v().id("collie").size_full().min_h(0).bg(t.background).text_color(t.foreground).text_size(13)
       .child(h().h(46).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
-        .child(div().font_semibold().child("Inbox"))
-        .children(tabs.map(([id, label]) => action(`inbox-${id}`, label, true, (cx) => this.setFilter(id, cx), t)))
-        .child(div().px(6).text_size(11).text_color(t.dim).child("New / Build")))
+        .children(tabs.map(([id, label]) => action(`inbox-${id}`, label, true, (cx) => this.setFilter(id, cx), t))))
       .child(v().flex_none().border_b(1).border_color(t.border)
         .when(this.tickets.length > 0, (el) => el.child(h().flex_wrap().px(10).pt(8).gap(6)
           .children(this.tickets.map((ticket) => this.ticketChip(ticket, t)))))
@@ -245,7 +250,11 @@ export default class Inbox extends View {
   }
 
   detail(t) {
-    const current = selected();
+    const deepLink = props()?.decisionId;
+    const current = deepLink ? {
+      decision: this.decisions.find((item) => item.id === deepLink),
+      target: this.targets.get(deepLink), receipt: this.receipts.get(deepLink),
+    } : selected();
     const decision = current?.decision;
     const target = current?.target;
     const receipt = current?.receipt;
@@ -257,21 +266,36 @@ export default class Inbox extends View {
         .child(div().flex_1())
         .child(action("collie-detail-diff", "Diff", Boolean(diffTarget(target)), () => openDiff(target), t)))
       .child(v().flex_1().min_h(0).overflow_y_scrollbar().p(16).gap(14)
-        .child(div().text_size(17).font_semibold().child(decision.card?.question ?? target?.title ?? decision.why))
-        .child(div().text_color(t.muted).child(`Why · ${decision.why}`))
+        .child(v().gap(6)
+          .child(div().text_size(17).font_semibold().child(receipt?.summary ?? decision.card?.question ?? target?.title ?? decision.why))
+          .child(div().text_color(t.muted).child(decision.card?.question ?? target?.title ?? decision.why)))
         .child(h().gap(8).text_size(11).text_color(t.dim)
           .child(decision.id).child(decision.state).child(target?.ref ?? decision.run?.task_ref ?? ""))
-        .child(v().w_full().gap(5).rounded(8).p(12).bg(t.raised).text_size(12)
+        .child(v().w_full().gap(5).py(10).border_b(1).border_color(t.border).text_size(12)
+          .child(`Why · ${decision.why}`)
           .child(`Task state · ${target?.state ?? receipt?.task?.state ?? "unknown"}`)
           .child(`run.task_ref · ${decision.run?.task_ref ?? "—"}`))
-        .when(receipt, (el) => el
-          .child(receiptSection(t, "Receipt summary", receipt.summary))
-          .child(receiptSection(t, "Receipt details", receipt.details))
-          .child(v().w_full().gap(6).rounded(8).p(12).bg(t.raised)
-            .child(div().text_size(11).font_semibold().text_color(t.muted).child("Receipt proof"))
-            .child(div().line_height("20px").child(receipt.proof?.text ?? "—"))
-            .child(div().font_family("JetBrains Mono").text_size(11).text_color(t.dim)
-              .child((receipt.proof?.refs ?? []).join("\n")))))
+        .when(receipt, (el) => {
+          const evidence = decision.ui_evidence ?? target?.evidence ?? {};
+          const commits = evidence.commits?.list ?? [];
+          const files = evidence.diff?.list ?? [];
+          return el
+            .child(receiptSection(t, "Details", receipt.details))
+            .child(v().w_full().gap(6).py(12).border_b(1).border_color(t.border)
+              .child(div().font_semibold().child(`Changes · ${evidence.commits?.count ?? commits.length} commits / ${files.length} files`))
+              .children(commits.map((commit) => div().font_family("JetBrains Mono").text_size(11)
+                .child(Array.isArray(commit) ? `${commit[0]}  ${commit[1]}` : String(commit))))
+              .children(files.map((file) => div().text_size(11).text_color(t.muted)
+                .child(Array.isArray(file) ? file.join("  ") : `${file.path ?? file.name ?? file.file ?? file} +${file.added ?? 0} -${file.removed ?? 0}`))))
+            .child(v().w_full().gap(5).py(12).border_b(1).border_color(t.border)
+              .child(div().font_semibold().child("Checks"))
+              .child(div().text_color(t.muted).child(evidence.checks?.text ?? "No checks reported")))
+            .child(v().w_full().gap(6).rounded(8).p(12).bg(t.raised)
+              .child(div().text_size(11).font_semibold().text_color(t.muted).child("Proof"))
+              .child(div().line_height("20px").child(receipt.proof?.text ?? "—"))
+              .child(div().font_family("JetBrains Mono").text_size(11).text_color(t.dim)
+                .child((receipt.proof?.refs ?? []).join("\n"))));
+        })
         .when(waiting, (el) => el.child(v().gap(10)
           .child(Input.new(this.note))
           .child(h().gap(8)
