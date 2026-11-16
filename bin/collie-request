@@ -1,0 +1,29 @@
+#!/usr/bin/env bun
+import { request } from "node:http";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+
+const args = process.argv.slice(2);
+const value = (name: string) => args[args.indexOf(name) + 1];
+const stateDir = value("--state-dir") ?? join(homedir(), ".local", "state", "collie");
+const goal = value("--goal");
+let space = value("--space");
+if (!space) {
+  const path = join(stateDir, "workspaces.json");
+  if (existsSync(path)) space = Object.keys(JSON.parse(readFileSync(path, "utf8")))[0];
+}
+if (!space || !goal) {
+  console.error("usage: collie-request --space SPACE --goal TEXT");
+  process.exit(2);
+}
+const result = await new Promise<string>((resolve, reject) => {
+  const req = request({ socketPath: join(stateDir, "service.sock"), path: "/request", method: "POST" }, (res) => {
+    let body = "";
+    res.on("data", (chunk) => { body += chunk; });
+    res.on("end", () => res.statusCode === 200 ? resolve(body) : reject(new Error(body)));
+  });
+  req.on("error", reject);
+  req.end(JSON.stringify({ space, goal }));
+});
+console.log(result);

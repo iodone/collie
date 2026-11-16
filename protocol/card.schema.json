@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:collie:card:v1",
+  "title": "Card",
+  "description": "Card 不是新对象，是 Decision{state:\"waiting\"} 的别名：本 schema 只做一次 const 收窄，不新增任何字段。界面上『inbox 队列里的一行』就是这个状态的决定。",
+  "allOf": [
+    { "$ref": "urn:collie:decision:v1" },
+    {
+      "required": ["state", "card", "human_boundary"],
+      "properties": {
+        "state": {
+          "const": "waiting",
+          "description": "冻结为 waiting。把 state 改成 routed/done 的同一个对象就不再是卡片——这是『队列』与『工作计数』的分界线。"
+        },
+        "card": {
+          "type": "object",
+          "description": "卡片的三态与人的回答，字段定义在 decision.schema.json#/$defs/card（单一定义处）。"
+        },
+        "human_boundary": {
+          "type": "object",
+          "required": ["form", "chat_injection"],
+          "properties": {
+            "form": {
+              "const": "card",
+              "description": "对人只能以卡片形式出现。不可能是 chat 消息。"
+            },
+            "chat_injection": {
+              "const": false,
+              "description": "结构上禁止把机器事件注入人的对话。"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

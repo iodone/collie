@@ -1,0 +1,287 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:collie:case:v1",
+  "title": "Case",
+  "description": "内核递给 coordinator 的一条『活事件 + 有界快照』，即一次 job turn（DESIGN §3.2）。它只存在于 Ledger，不进 chat 历史；同一个 space 也可能有 chat turn，但两者共用一套记忆（Ledger），不共用会话。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "created_at",
+    "stream",
+    "wake",
+    "visibility",
+    "space",
+    "event",
+    "scope",
+    "snapshot",
+    "memory",
+    "instruction"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^ca_[0-9a-z]{8,32}$",
+      "description": "Case 标识，ca_ 前缀加 8–32 位小写字母数字。一个 Case 对应最多一次唤醒计费。"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "递出时刻。**预算的唯一计费依据**：invariants.checkBudget 按它数窗口内的 Case 数。"
+    },
+    "stream": {
+      "enum": ["job_turn", "chat_turn"],
+      "description": "哪个入口产生的。job_turn = 内核递的事件，headless、不可见；chat_turn = 人说话。DESIGN §3.2：两个入口、两套会话，但只有一套记忆。"
+    },
+    "wake": {
+      "type": "boolean",
+      "description": "是否消耗唤醒预算。job_turn 恒为 true、chat_turn 恒为 false（下面 allOf 强制）：人主动说话不算唤醒，否则人自己会把自己的预算吃光。"
+    },
+    "visibility": {
+      "enum": ["ledger_only", "chat"],
+      "description": "job_turn 必须是 ledger_only——机器事件进不了人的对话；chat_turn 是 chat。schema 用 allOf 强制这条对应关系。"
+    },
+    "space": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["primary", "candidates", "resolution"],
+      "description": "[开放问题 #5] 归属解算结果。判断按 space 切，所以这条必须显式落盘，不能靠 coordinator 猜。",
+      "properties": {
+        "primary": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$",
+          "description": "这条事件归哪个 space 的 coordinator 判。多候选时的胜者由 resolution 说明依据。"
+        },
+        "candidates": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$" },
+          "uniqueItems": true,
+          "minItems": 1,
+          "maxItems": 8,
+          "description": "全部候选 space（folder→space 表命中的结果）。长度 >1 即为跨 space 事件，是否出卡问人尚未拍板。"
+        },
+        "resolution": {
+          "enum": ["single", "rule_table", "remembered", "card"],
+          "description": "候选怎么收敛成 primary：single=只有一个候选；rule_table=规则指定；remembered=人上次的选择（记住答案）；card=这次出卡问了人。M0 只冻结这四个取值，哪种策略占优见 protocol/README.md 的开放问题 #5。"
+        }
+      },
+      "allOf": [
+        {
+          "if": { "required": ["candidates"], "properties": { "candidates": { "minItems": 2 } } },
+          "then": { "required": ["resolution"], "properties": { "resolution": { "enum": ["rule_table", "remembered", "card"] } } }
+        }
+      ]
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref", "key", "type", "hops", "lane_key", "object_key", "occurrences"],
+      "description": "被归并后的活事件摘要（正文仍在 data_ref，不复制进来）。",
+      "properties": {
+        "ref": {
+          "type": "string",
+          "pattern": "^ev_[0-9a-z]{8,32}$",
+          "description": "代表事件 id（Event.id）。"
+        },
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "去重键 (source,key) 的拼合形式，与 Event.key 一致。"
+        },
+        "type": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$",
+          "description": "事件 type，coordinator 判断的起点。"
+        },
+        "hops": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "当前跳数（原样带入，不在 Case 里改）。coordinator 读它做熔断判断的依据之一。"
+        },
+        "lane_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "归并泳道（rule_id:object_key），与 Event.merge.lane_key 一致。"
+        },
+        "object_key": {
+          "type": "string",
+          "pattern": "^(mr|issue|pipeline|none):.+$",
+          "description": "绑定对象键，priority 计数与卡片合并的单位。"
+        },
+        "occurrences": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "泳道累计事件数。>1 表示这是『4 个 commit 判一次』的那一次。"
+        }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["forbidden_expand", "snapshot_bytes_max"],
+      "description": "[照抄 agent-autoloop 会坏的第 2 处的前置] coordinator 只能看内核给的快照，不许自己 git/gh 扩大视野——否则『全局』会变成『全局噪音』（DESIGN §3.2）。",
+      "properties": {
+        "forbidden_expand": {
+          "const": true,
+          "description": "禁止主动扩大视野（跑 git/gh/网络查询补上下文）。可选 helper 必须派成不入任务库的侧任务。"
+        },
+        "snapshot_bytes_max": {
+          "const": 4096,
+          "description": "快照硬上限 4KB。冻结为常量：它同时是『上下文撑爆』这条风险的缓解措施。"
+        }
+      }
+    },
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bytes", "truncated", "space_note", "queue", "running", "recent", "rules_version", "budget"],
+      "description": "有界快照（DESIGN §3.2）。由内核拼，coordinator 只读。",
+      "properties": {
+        "bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4096,
+          "description": "实际序列化字节数，硬上限 4096。超了就截断并置 truncated。"
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "是否截断过。true 时 coordinator 应当只做粗判，并把细节留给 worker。"
+        },
+        "space_note": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "这个 space 的 folder / base / 约定摘要，一句话。"
+        },
+        "queue": {
+          "type": "array",
+          "maxItems": 10,
+          "description": "未结的等待决定（每条一行 key + 40 字理由），最多 10 条。",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["key", "why"],
+            "properties": {
+              "key": { "type": "string", "minLength": 1, "maxLength": 240, "description": "决定的 key，用于跟进。" },
+              "why": { "type": "string", "minLength": 1, "maxLength": 40, "description": "40 字以内的理由，防止快照被长文本吃掉。" }
+            }
+          }
+        },
+        "running": {
+          "type": "array",
+          "maxItems": 16,
+          "description": "在跑的任务，每条带 task id、状态、状态行与时长的秒数。**判断依据是状态有没有前进**，不是进程在不在。",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["task_id", "state", "state_changed_at", "elapsed_seconds"],
+            "properties": {
+              "task_id": { "type": "string", "minLength": 1, "maxLength": 80, "description": "herdr-task 任务 id（外部标识）。" },
+              "state": {
+                "enum": ["todo", "queued", "working", "ready", "merging", "done"],
+                "description": "herdr-task 的状态，原样带入，本设计不改它的语义（DESIGN §4.2）。"
+              },
+              "state_changed_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "[照抄 autoloop 会坏的第 1 处] 最近一次状态变化时刻。用它算『多久没前进』，而不是用进程存活与否。"
+              },
+              "elapsed_seconds": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "已运行秒数。与 state_changed_at 一起区分『长的正常任务』与『卡住的 unknown』。"
+              }
+            }
+          }
+        },
+        "recent": {
+          "type": "array",
+          "maxItems": 10,
+          "description": "该 space 最近的决定（防抖，DESIGN §3.2『读最近 10 条决定』）。这是记忆外置的读视图，实体在 Ledger。",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["decision_id", "object_key", "why"],
+            "properties": {
+              "decision_id": { "type": "string", "pattern": "^dc_[0-9a-z]{8,32}$", "description": "决定 id。" },
+              "object_key": { "type": "string", "pattern": "^(mr|issue|pipeline|none):.+$", "description": "该决定绑定的对象键。" },
+              "why": { "type": "string", "minLength": 1, "maxLength": 140, "description": "当时的一行理由，用来防止同一件事被反复改判。" }
+            }
+          }
+        },
+        "rules_version": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "本次判断依据的规则集版本号（Ruleset.version）。"
+        },
+        "budget": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["scope", "limit", "used", "remaining", "window_start", "reset_at"],
+          "description": "**全局**预算剩余，不是本 space 的（DESIGN §3.2：按 space 算 10 个 space 就是 60 次）。",
+          "properties": {
+            "scope": { "const": "global", "description": "计费域，冻结为 global。" },
+            "limit": { "type": "integer", "minimum": 1, "maximum": 60, "description": "窗口上限，默认 6。" },
+            "used": { "type": "integer", "minimum": 0, "description": "窗口内已用次数（全 machine 合计）。" },
+            "remaining": { "type": "integer", "minimum": 0, "description": "剩余次数。为 0 时内核不再递 Case，降级为卡片。" },
+            "window_start": { "type": "string", "format": "date-time", "description": "窗口起点。" },
+            "reset_at": { "type": "string", "format": "date-time", "description": "窗口滑出、预算恢复的时刻。" }
+          }
+        }
+      }
+    },
+    "memory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ledger_ref", "recent_decisions"],
+      "description": "记忆外置（DESIGN §3.2）：持久记忆是 Ledger 的决定日志，不是会话。换会话/重启/换模型，记忆不丢。",
+      "properties": {
+        "ledger_ref": {
+          "type": "string",
+          "pattern": "^/[^\\s]+$",
+          "description": "Ledger 文件绝对路径。coordinator 可读、只走只读接口。"
+        },
+        "recent_decisions": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10,
+          "description": "快照里带了几条最近决定（上限 10）。人问『为什么这么派』时它读这里回答。"
+        }
+      }
+    },
+    "instruction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role_prompt_ref", "output_contract"],
+      "description": "这次 turn 的输入约定。角色提示词是 templates/collie-coordinator.md（从 shepherdr 的 assistant.md 改）。",
+      "properties": {
+        "role_prompt_ref": {
+          "type": "string",
+          "pattern": "^/[^\\s]+$",
+          "description": "coordinator 角色提示词路径（安装后落在 ~/.config/herdr-core/templates/）。"
+        },
+        "output_contract": {
+          "const": "urn:collie:decision:v1",
+          "description": "coordinator 必须回一个 Decision（或一组 Decision action）。冻结为 Decision schema 的 $id：产出形状不可协商，换 schema 就是换协议版本。"
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "required": ["stream"], "properties": { "stream": { "const": "job_turn" } } },
+      "then": {
+        "required": ["visibility", "wake"],
+        "properties": { "visibility": { "const": "ledger_only" }, "wake": { "const": true } }
+      }
+    },
+    {
+      "if": { "required": ["stream"], "properties": { "stream": { "const": "chat_turn" } } },
+      "then": {
+        "required": ["visibility", "wake"],
+        "properties": { "visibility": { "const": "chat" }, "wake": { "const": false } }
+      }
+    }
+  ]
+}

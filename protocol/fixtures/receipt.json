@@ -1,0 +1,40 @@
+{
+  "id": "rc_01h9z3k7m2n4p6q8",
+  "decision_ref": "dc_01h9z3k7m2n4p6q9",
+  "received_at": "2026-11-13T10:41:30Z",
+  "origin": "herdr-task ready",
+  "last_message_used": false,
+  "task": {
+    "id": "t-8842",
+    "space": "collie",
+    "state": "ready",
+    "previous_state": "working",
+    "state_changed_at": "2026-11-13T10:41:20Z",
+    "started_at": "2026-11-13T10:00:30Z"
+  },
+  "progress": {
+    "basis": "task_state_advance",
+    "advanced": true,
+    "verdict": "advanced"
+  },
+  "summary": "补了 protocol 五个不变量的单测，node --test 全绿",
+  "details": "新增 protocol/test/invariants.test.mjs；覆盖 hops 熔断、预算窗口、priority 第 3 次出卡、护栏不可绕过、ack≠settled。未改任何已冻结的 schema 字段。",
+  "proof": {
+    "refs": [
+      "commit:9f2c1ab",
+      "cmd:node --test protocol/test/",
+      "/home/user/.local/state/collie/proofs/rc_01h9z3k7m2n4p6q8.log"
+    ],
+    "text": "ok 1 - hops ≤ 8\nok 2 - 卡片回答不清零 hops\nok 3 - 全局预算 6/小时\nok 4 - priority 第 3 次必须出卡\nok 5 - askFirst 七条不可绕过\nok 6 - ack ≠ settled"
+  },
+  "review": {
+    "reviewed": true,
+    "reviewer_ref": "reviewer:t-8842-r1",
+    "must_fix": 0
+  },
+  "risk": {
+    "tags": [],
+    "level": "low",
+    "auto_accept": true
+  }
+}

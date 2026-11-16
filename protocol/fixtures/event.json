@@ -1,0 +1,23 @@
+{
+  "id": "ev_01h9z3k7m2n4p6q8",
+  "source": "gitlab",
+  "key": "mr!93@head_sha",
+  "type": "merge_request.updated",
+  "object": {
+    "kind": "mr",
+    "id": "mr!93",
+    "url": "https://gitlab.example.com/example/collie/-/merge_requests/93"
+  },
+  "title": "protocol: 冻结 M0 schema",
+  "data_ref": "/home/user/.local/state/collie/events/ev_01h9z3k7m2n4p6q8.json",
+  "data_digest": "sha256:3b1f6f2c4d5e6a7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d",
+  "hops": 0,
+  "received_at": "2026-11-13T09:58:12Z",
+  "merge": {
+    "lane_key": "mr-review:mr:mr!93",
+    "object_key": "mr:mr!93",
+    "first_seen_at": "2026-11-13T09:12:00Z",
+    "occurrences": 4
+  },
+  "space_candidates": ["collie"]
+}

@@ -1,0 +1,652 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:collie:decision:v1",
+  "title": "Decision",
+  "description": "coordinator（或路由表）对一件事件做出的判断：干什么、为什么。DESIGN §3.3：inbox 的状态管理就是这一个状态机，没有第二个。Card = state=waiting 的 Decision（见 card.schema.json），不是新对象。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "key",
+    "space",
+    "state",
+    "why",
+    "decided_by",
+    "decided_at",
+    "occurrence",
+    "actions",
+    "risk",
+    "run",
+    "human_boundary",
+    "ack",
+    "settled"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^dc_[0-9a-z]{8,32}$",
+      "description": "决定标识，dc_ 前缀加 8–32 位小写字母数字。只追加，不修改。"
+    },
+    "key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240,
+      "description": "去重键，形如 <source>:<event.key>。DESIGN §3.3 的四个管理字段之一：同一 key 已有未终结的决定时，新事件归并进去而不是再判一次。"
+    },
+    "space": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$",
+      "description": "这条判断属于哪个 space。判断按 space 切（上下文是 space 的），但预算/跳数/路由表不切——见 invariants.checkBudget 的全局口径。"
+    },
+    "space_candidates": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$" },
+      "uniqueItems": true,
+      "maxItems": 8,
+      "description": "[开放问题 #5] 归属候选。当一个事件同时属于多个仓时，Ingress 把全部候选写在这里，space 字段仍是解算出的 primary；解算规则尚未拍板，M0 只冻结形状。"
+    },
+    "event_ref": {
+      "type": ["string", "null"],
+      "description": "来源事件 id（Event.id）。活事件归并后指向代表事件；纯流程决定可为 null。"
+    },
+    "case_ref": {
+      "type": ["string", "null"],
+      "description": "触发这次判断的 Case id（一个 job turn）。路由表直派（没过 coordinator）时为 null——这正是区分『高频模式』与『真的想了想』的字段。"
+    },
+    "state": {
+      "enum": ["new", "thinking", "waiting", "routed", "acting", "done", "failed", "closed"],
+      "description": "DESIGN §3.3 状态机：new→thinking→(routed|waiting)；routed→acting→(done|failed)；failed→routed（带退避）；waiting→routed 或 closed。waiting 即界面上队列的一行（= Card）。"
+    },
+    "why": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 140,
+      "description": "一行理由，≤140 字。DESIGN §3.2 要求每条动作都带 why；M3 验收就是『决定带 why』。它是 Ledger 记忆的实体，不是日志装饰。"
+    },
+    "decided_by": {
+      "enum": ["rule_table", "coordinator", "human"],
+      "description": "谁做的判断。rule_table = 路由表缓存命中（不烧模型）；human = 人直接在卡片或 chat 里改判。用于算『同类事件第二次不叫 coordinator 的比例』（M7）。"
+    },
+    "decided_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "判断写入 Ledger 的时刻。budget 与 priority 的窗口计算以它为准。"
+    },
+    "occurrence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["object_key", "kind", "round", "hops"],
+      "description": "DESIGN §3.3 的 occurrence：绑定对象 + turn。跳数就挂在这里——所以卡片回答不可能把它清零，只有一个函数能推进它。",
+      "properties": {
+        "object_key": {
+          "type": "string",
+          "pattern": "^(mr|issue|pipeline|none):.+$",
+          "description": "绑定对象键（与 Event.merge.object_key 同构）。priority 变更计数、卡片合并都以它为单位。"
+        },
+        "kind": {
+          "enum": ["mr", "issue", "pipeline", "none"],
+          "description": "对象种类，冗余一份以便索引不必回查 Event。"
+        },
+        "round": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "该对象上的第几轮处理（1 起）。rework 后回来是新一轮，但 hops 不变。"
+        },
+        "hops": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "委派深度。只由 invariants.nextHops（派发新任务 +1）与 answerCard（**保持不变**）两个函数产生；coordinator 输出的 JSON 里出现 hops 一律被 applyGuard 覆盖。"
+        }
+      }
+    },
+    "actions": {
+      "type": "array",
+      "description": "这次决定要做的事，可以为零条（state=waiting 时由卡片承载）。kind 枚举里**没有 chat_message**——机器事件不能变成人对话里的一句话，这是 DESIGN §4.1 的结构性保证。",
+      "items": { "$ref": "#/$defs/action" }
+    },
+    "risk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tags", "forced_waiting"],
+      "description": "护栏判定结果。由 invariants.applyGuard 写入，不接受 coordinator 自填。",
+      "properties": {
+        "tags": {
+          "type": "array",
+          "items": { "enum": ["delete_data", "stop_service", "spend_money", "outbound_message", "product_direction", "rotate_secret", "change_permission"] },
+          "uniqueItems": true,
+          "maxItems": 7,
+          "description": "命中的护栏项。非空即 forced_waiting 必须为 true。"
+        },
+        "forced_waiting": {
+          "type": "boolean",
+          "description": "true 表示这次决定被护栏钉在 waiting，coordinator 与规则都无法改为 routed。"
+        }
+      },
+      "allOf": [
+        {
+          "if": { "required": ["tags"], "properties": { "tags": { "minItems": 1 } } },
+          "then": {
+            "required": ["forced_waiting"],
+            "properties": { "forced_waiting": { "const": true } }
+          }
+        }
+      ]
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claimed_until", "unknown_policy", "task_ref", "coordinator_ref"],
+      "description": "运行态。**照抄 agent-autoloop 会坏的第 1 处**落在这里：一轮不是一次 agent turn，run 保持 claimed 直到 task ready；这期间 unknown 是正常态（unknown_policy 冻结为 normal），判断依据是任务状态有没有前进，见 Receipt.progress 与 invariants.judgeProgress。",
+      "properties": {
+        "claimed_until": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "本次 run 的认领到期时刻。null = 不按墙钟超时，只等 task 状态推进（长任务可能跑一小时）。"
+        },
+        "unknown_policy": {
+          "const": "normal",
+          "description": "冻结为 normal：长任务期间没收到回执不是失败信号，不得据此判 failed。"
+        },
+        "task_ref": {
+          "type": ["string", "null"],
+          "maxLength": 80,
+          "description": "spawn 后由 herdr-task 返回的任务 key 或 id；它是 Working 视图与 Task/Diff 导航的持久关联，不是第二份任务状态。未派发时为 null。"
+        },
+        "coordinator_ref": {
+          "type": ["string", "null"],
+          "maxLength": 200,
+          "description": "产生这次 Decision 的 agent 会话引用。New / Build 建立会话，Card answer 按它恢复原 coordinator；机器 job turn 可为独立会话。"
+        }
+      }
+    },
+    "human_boundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["form", "chat_injection"],
+      "description": "人与机器的边界：机器只能给卡片，永远不能给聊天消息。DESIGN §4.1『图里没有一步是往人的对话里注入一句话』就是这个字段。",
+      "properties": {
+        "form": {
+          "enum": ["card", "none"],
+          "description": "对人呈现的形式。card = 出卡；none = 这次判断不碰人。**没有 chat 这个取值**。"
+        },
+        "chat_injection": {
+          "const": false,
+          "description": "结构上禁止把机器事件注入人的对话。要改成 true 必须换 schema 版本，等于改协议。"
+        }
+      }
+    },
+    "priority": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["value", "set_at"],
+      "description": "调序。数值越小越先看。同一 object 24h 内最多改 2 次，第 3 次必须出卡（invariants.checkPriorityChange）。",
+      "properties": {
+        "value": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9,
+          "description": "优先级，0 最高、9 最低。只表达相对顺序，不表达『多急』。"
+        },
+        "set_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "这一优先级设定的时刻，用于 24h 窗口计算。"
+        }
+      }
+    },
+    "hold": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["until", "reason"],
+      "description": "压住这条（DESIGN §3.2 的 hold）。压住不等于完结：state 不变，队列里仍占一行但排在后面。",
+      "properties": {
+        "until": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "压到何时；null 表示等人处理，无自动到期。"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 140,
+          "description": "为什么压。到期后 coordinator 读它判断还该不该继续压。"
+        }
+      }
+    },
+    "card": {
+      "description": "人面投影的三态与回答。state=waiting 时必须非 null——Card 不是新对象，就是这个字段。字段定义只此一处（$defs/card），card.schema.json 不重复定义。",
+      "anyOf": [
+        { "type": "null", "description": "还没出卡（或已不需要卡）：routed/acting/thinking 等状态的正常取值。" },
+        { "$ref": "#/$defs/card" }
+      ]
+    },
+    "receipt_ref": {
+      "type": ["string", "null"],
+      "description": "最近一次回执（Receipt.id）。任务状态永远从 herdr-task 读，这里只存指针，不存第二份状态（DESIGN §3.3『不做的事』）。"
+    },
+    "proposal": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["draft_ref", "summary"],
+      "description": "propose_rule 的产物：一条待沉淀的规则草稿指针。[开放问题 #4] 是否也走卡片尚未拍板。",
+      "properties": {
+        "draft_ref": {
+          "type": "string",
+          "pattern": "^/[^\\s]+$",
+          "description": "规则草稿文件的绝对路径（JSON，形状见 rule.schema.json）。"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 140,
+          "description": "一句话说明这条规则要挡下什么重复判断。"
+        }
+      }
+    },
+    "ack": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["at", "by"],
+      "description": "『人看过了』。**与 settled 无关、不可互推**：ack 只说明注意力到过这里（例如卡片被展开），它不改 state、不释放队列。DESIGN §0 的第 2 个病就是这两者被混为一谈。",
+      "properties": {
+        "at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "看到的时刻。"
+        },
+        "by": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "谁看的（herdr 终端 label 或人名标识）。"
+        }
+      }
+    },
+    "settled": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["at", "by", "outcome"],
+      "description": "『处理完了』。只有它能让 state 进入 done/closed；判断依据是 outcome，不是 ack。",
+      "properties": {
+        "at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "结掉的时刻。"
+        },
+        "by": {
+          "enum": ["coordinator", "human", "expiry"],
+          "description": "谁结的。expiry = 超时自动终结（必须有 why 说明）。"
+        },
+        "outcome": {
+          "enum": ["accepted", "merged", "commented", "superseded", "dropped", "expired", "failed"],
+          "description": "怎么结的。superseded = 被后来的决定覆盖；dropped = 明确不做；expired = 过期。"
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "required": ["state"], "properties": { "state": { "const": "waiting" } } },
+      "then": {
+        "required": ["card", "human_boundary"],
+        "properties": {
+          "card": { "type": "object" },
+          "human_boundary": { "properties": { "form": { "const": "card" } } }
+        }
+      }
+    },
+    {
+      "if": { "required": ["state"], "properties": { "state": { "enum": ["done", "closed"] } } },
+      "then": {
+        "required": ["settled"],
+        "properties": { "settled": { "type": "object" } }
+      }
+    },
+    {
+      "if": { "required": ["state"], "properties": { "state": { "const": "failed" } } },
+      "then": {
+        "required": ["card"],
+        "properties": { "card": { "type": "object" } }
+      }
+    },
+    {
+      "if": {
+        "required": ["settled"],
+        "properties": { "settled": { "type": "object" } }
+      },
+      "then": {
+        "required": ["state"],
+        "properties": { "state": { "enum": ["done", "closed"] } }
+      }
+    }
+  ],
+  "$defs": {
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "risk_tags"],
+      "description": "一条动作。DESIGN §3.2 的五种输出（spawn / priority / hold / ask / propose_rule）+ 出站命令 + noop。为什么用单一对象加条件必填而不是五个 oneOf：action 种类会长（domain 词汇），单对象让『加一种』只动一处。",
+      "properties": {
+        "kind": {
+          "enum": ["spawn_task", "emit_command", "ask", "hold", "priority", "propose_rule", "noop"],
+          "description": "动作种类。spawn_task = 委派（= herdr-task add + start，不是新协议）；emit_command = 出站（评论/合并/关单/IM）；ask = 出卡问人；noop = 判断结果是『不动』。"
+        },
+        "risk_tags": {
+          "type": "array",
+          "items": { "enum": ["delete_data", "stop_service", "spend_money", "outbound_message", "product_direction", "rotate_secret", "change_permission"] },
+          "uniqueItems": true,
+          "maxItems": 7,
+          "description": "这条动作触碰的不可逆/外部影响面。由 action 自己声明，applyGuard 据此强制出卡——coordinator 写什么 state/tells 都不影响判定。emit_command 的对外动作至少带一个 tag。"
+        },
+        "why": {
+          "type": "string",
+          "maxLength": 140,
+          "description": "为什么做这一条，可省略（外层 decision.why 已在）。细到单条动作时填。"
+        },
+        "spawn": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["title", "brief_ref", "base", "review", "merge", "access", "tells"],
+          "description": "kind=spawn_task 时必填。只表达『派了什么、为什么』，不定义新的派工协议（DESIGN §3.2）。",
+          "properties": {
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^(?![\\s-])[^{}\\r\\n]*$",
+              "description": "任务标题，同 Event.title 的 isTitle 约束（会被当命令行参数）。"
+            },
+            "brief_ref": {
+              "type": "string",
+              "pattern": "^/[^\\s]+$",
+              "description": "brief 文件绝对路径。[开放问题 #1] 建议由内核渲染（保证指令数据分离）；M0 只冻结为路径引用，不冻结渲染者。"
+            },
+            "base": {
+              "enum": ["main", "current", "branch"],
+              "description": "从哪起 worktree：main = 远端主干；current = 该 space 当前分支；branch = 由 payload 指定的分支（requires branch 字段）。"
+            },
+            "branch": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "description": "base=branch 时的分支名。"
+            },
+            "review": {
+              "type": "boolean",
+              "description": "是否起只读 reviewer。一票否决任何写成 false 的护栏相关任务由 guard 处理，不在这里。"
+            },
+            "merge": {
+              "type": "boolean",
+              "description": "ready 后是否允许自动合并。true 且命中护栏时仍会出 Accept 卡。"
+            },
+            "access": {
+              "enum": ["read", "edit", "full"],
+              "description": "worker 的沙箱级别。coordinator 只能降不能升：applyGuard 不允许它超过来源规则的 access（见 protocol/README.md『保留判据』）。"
+            },
+            "tells": {
+              "enum": ["always", "needed", "never"],
+              "description": "这个任务出不出卡。needed = 仅在与护栏冲突时出；never 也不能压掉护栏。"
+            },
+            "parallel": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 8,
+              "description": "这次拆成几个并行 worker。省略按规则的 limits.parallel。"
+            }
+          },
+          "allOf": [
+            {
+              "if": { "required": ["base"], "properties": { "base": { "const": "branch" } } },
+              "then": { "required": ["branch"] }
+            }
+          ]
+        },
+        "egress": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["target", "op", "payload_ref"],
+          "description": "kind=emit_command 时必填。对外动作的一等公民；DESIGN §0『出口有两种，两者对称，都叫 delivery』。",
+          "properties": {
+            "target": {
+              "enum": ["gitlab", "github", "im"],
+              "description": "出站目标，对应 delivery 这道缝。"
+            },
+            "op": {
+              "enum": ["merge", "comment", "close", "notify"],
+              "description": "具体动作。merge/close 必须带 delete_data 之外的对应 tag；对外发消息一律带 outbound_message。"
+            },
+            "payload_ref": {
+              "type": "string",
+              "pattern": "^/[^\\s]+$",
+              "description": "出站内容的文件路径。理由同 data_ref：正文不内联，避免外部文字回流进提示词。"
+            }
+          }
+        },
+        "ask": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "question", "options"],
+          "description": "kind=ask 时必填。唯一碰人的方式。卡片详情写进 decision.card（同一个对象，不另存）。",
+          "properties": {
+            "kind": {
+              "enum": ["approval", "accept", "question", "alert"],
+              "description": "卡片用途。approval 只能由 guard 产生（人被护栏叫来，不是 coordinator 想聊天）。"
+            },
+            "question": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "description": "一句话问什么。超过 200 字说明这件事该拆。"
+            },
+            "options": {
+              "type": "array",
+              "items": { "enum": ["accept", "rework", "drop", "later"] },
+              "uniqueItems": true,
+              "minItems": 1,
+              "maxItems": 4,
+              "description": "可选项子集。accept=接受，rework=打回带批注，drop=不做，later=押后（写 snooze_until）。"
+            }
+          }
+        },
+        "hold": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["target_task", "until", "reason"],
+          "description": "kind=hold 时必填。压住一个任务，不等同于关掉。",
+          "properties": {
+            "target_task": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80,
+              "description": "herdr-task 的任务 id（外部标识，本设计不改它的语义）。"
+            },
+            "until": {
+              "type": ["string", "null"],
+              "format": "date-time",
+              "description": "压到何时；null = 等人。"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 140,
+              "description": "为什么压。"
+            }
+          }
+        },
+        "priority": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["target_task", "value"],
+          "description": "kind=priority 时必填。同一 object 24h 第 3 次必须出卡，见 invariants.checkPriorityChange。",
+          "properties": {
+            "target_task": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80,
+              "description": "被调序的任务 id；null 视为调本对象的排队位置，由内核落到该 object 的 waiting 决定上。"
+            },
+            "value": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9,
+              "description": "新优先级，0 最高。"
+            }
+          }
+        },
+        "rule": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["draft_ref", "summary"],
+          "description": "kind=propose_rule 时必填。沉淀成路由表的提议，不直接生效。",
+          "properties": {
+            "draft_ref": {
+              "type": "string",
+              "pattern": "^/[^\\s]+$",
+              "description": "规则草稿文件路径。"
+            },
+            "summary": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 140,
+              "description": "这条规则挡下什么重复判断。"
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "required": ["kind"], "properties": { "kind": { "const": "spawn_task" } } },
+          "then": { "required": ["spawn"] }
+        },
+        {
+          "if": { "required": ["kind"], "properties": { "kind": { "const": "emit_command" } } },
+          "then": { "required": ["egress"] }
+        },
+        {
+          "if": { "required": ["kind"], "properties": { "kind": { "const": "ask" } } },
+          "then": { "required": ["ask"] }
+        },
+        {
+          "if": { "required": ["kind"], "properties": { "kind": { "const": "hold" } } },
+          "then": { "required": ["hold"] }
+        },
+        {
+          "if": { "required": ["kind"], "properties": { "kind": { "const": "priority" } } },
+          "then": { "required": ["priority"] }
+        },
+        {
+          "if": { "required": ["kind"], "properties": { "kind": { "const": "propose_rule" } } },
+          "then": { "required": ["rule"] }
+        }
+      ]
+    },
+    "card": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "question", "options", "state", "created_at", "acked_at", "answer"],
+      "description": "Decision 的人面投影。三态 open→decided→done / open→closed（DESIGN §4.2）；decided 只说明人表过态，不等于执行过。",
+      "properties": {
+        "kind": {
+          "enum": ["approval", "accept", "question", "alert"],
+          "description": "approval 只能由 guard 产生；accept 是 ready 后的人工验收；alert 承载 failed。"
+        },
+        "question": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "卡片上的一句话问题。"
+        },
+        "options": {
+          "type": "array",
+          "items": { "enum": ["accept", "rework", "drop", "later"] },
+          "uniqueItems": true,
+          "minItems": 1,
+          "maxItems": 4,
+          "description": "可选项子集。人是唯一能按它的人。"
+        },
+        "state": {
+          "enum": ["open", "decided", "closed"],
+          "description": "卡片三态。与 decision.state 不是一回事：卡片 decided 时 decision 才刚离开 waiting。"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "出卡时刻，用于排队排序与『等了多久』。"
+        },
+        "acked_at": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "人展开过这张卡的时刻。**只是 ack**：不改变 decision.state，不释放队列，不产生 settled。"
+        },
+        "answer": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["option", "at", "by"],
+          "description": "人的回答。null = 还没答。回答会推进 decision.state（waiting→routed/closed），但**不推进 hops**。",
+          "properties": {
+            "option": {
+              "enum": ["accept", "rework", "drop", "later"],
+              "description": "选了哪一项。rework 必须带 annotations，否则 worker 拿不到改动点。"
+            },
+            "at": {
+              "type": "string",
+              "format": "date-time",
+              "description": "回答时刻。"
+            },
+            "by": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80,
+              "description": "谁回答的。"
+            },
+            "annotations": {
+              "type": "array",
+              "minItems": 1,
+              "description": "rework 的结构化批注（DESIGN §4.2）：它是下一轮 brief 的输入，不是聊天。",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["file", "note"],
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "description": "批注针对的文件路径（相对仓库根）。"
+                  },
+                  "line": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "行号，可省略表示整个文件。"
+                  },
+                  "note": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1000,
+                    "description": "必须改什么。写『这里不对』没有信息量，写判据。"
+                  }
+                }
+              }
+            }
+          },
+          "allOf": [
+            {
+              "if": { "required": ["option"], "properties": { "option": { "const": "rework" } } },
+              "then": { "required": ["annotations"] }
+            }
+          ]
+        },
+        "snooze_until": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "[开放问题 #3] answer.option=later 时的到期时刻。DESIGN 明确它必须新增、不能借用 herdr-task 的 scheduled（两者不同义）。"
+        },
+        "closed_at": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "卡片关闭时刻（含『无需决定』直接关掉的情形）。"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,68 @@
+{
+  "id": "ca_01h9z3k7m2n4p6q8",
+  "created_at": "2026-11-13T10:00:00Z",
+  "stream": "job_turn",
+  "wake": true,
+  "visibility": "ledger_only",
+  "space": {
+    "primary": "collie",
+    "candidates": ["collie"],
+    "resolution": "single"
+  },
+  "event": {
+    "ref": "ev_01h9z3k7m2n4p6q8",
+    "key": "mr!93@head_sha",
+    "type": "merge_request.updated",
+    "hops": 0,
+    "lane_key": "mr-review:mr:mr!93",
+    "object_key": "mr:mr!93",
+    "occurrences": 4
+  },
+  "scope": {
+    "forbidden_expand": true,
+    "snapshot_bytes_max": 4096
+  },
+  "snapshot": {
+    "bytes": 1180,
+    "truncated": false,
+    "space_note": "collie · base main · 只读协议与文档，测试用 node --test",
+    "queue": [
+      {
+        "key": "gitlab:issue#41@opened",
+        "why": "issue 要求规划 M1 的插件边界，需要人定 review 口径"
+      }
+    ],
+    "running": [
+      {
+        "task_id": "t-8842",
+        "state": "working",
+        "state_changed_at": "2026-11-13T09:41:00Z",
+        "elapsed_seconds": 1140
+      }
+    ],
+    "recent": [
+      {
+        "decision_id": "dc_01h9z3k7m2n4p6q8",
+        "object_key": "mr:mr!71",
+        "why": "低风险文档改动，直派 worker 不出卡"
+      }
+    ],
+    "rules_version": 7,
+    "budget": {
+      "scope": "global",
+      "limit": 6,
+      "used": 2,
+      "remaining": 4,
+      "window_start": "2026-11-13T09:30:00Z",
+      "reset_at": "2026-11-13T10:30:00Z"
+    }
+  },
+  "memory": {
+    "ledger_ref": "/home/user/.local/state/collie/ledger.jsonl",
+    "recent_decisions": 1
+  },
+  "instruction": {
+    "role_prompt_ref": "/home/user/.config/herdr-core/templates/collie-coordinator.md",
+    "output_contract": "urn:collie:decision:v1"
+  }
+}

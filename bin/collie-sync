@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+"""Copy the canonical lib/*.js files into every mod's lib directory."""
+
+import argparse
+import hashlib
+import os
+from pathlib import Path
+import shutil
+import tempfile
+
+
+def digest(path):
+    return hashlib.sha256(path.read_bytes()).digest()
+
+
+def copy(source, target):
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f".{target.name}.", dir=target.parent)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(source.read_bytes())
+        shutil.copymode(source, temporary)
+        os.replace(temporary, target)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    checkout = Path(__file__).resolve().parent.parent
+    default_root = checkout if (checkout / "lib").is_dir() and (checkout / "mods").is_dir() else Path.home() / ".config/herdr-app"
+    parser.add_argument("--root", type=Path, default=default_root)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--check", action="store_true", help="report drift without writing")
+    mode.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
+    root = args.root.resolve()
+    library = root / "lib"
+    mods = root / "mods"
+    if not library.is_dir() or not mods.is_dir():
+        parser.error("both lib/ and mods/ must exist")
+    sources = sorted(path for path in library.glob("*.js") if path.is_file())
+    changed = 0
+    for mod in sorted(path for path in mods.iterdir() if path.is_dir()):
+        for source in sources:
+            target = mod / "lib" / source.name
+            if target.exists() and digest(source) == digest(target):
+                continue
+            changed += 1
+            print(f"{'would sync' if args.check or args.dry_run else 'sync'} {source} -> {target}")
+            if not args.check and not args.dry_run:
+                copy(source, target)
+    print(f"{changed} file(s) {'out of sync' if args.check else 'changed'}")
+    return 1 if args.check and changed else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

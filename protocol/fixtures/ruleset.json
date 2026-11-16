@@ -1,0 +1,82 @@
+{
+  "version": 7,
+  "ask_first": [
+    "delete_data",
+    "stop_service",
+    "spend_money",
+    "outbound_message",
+    "product_direction",
+    "rotate_secret",
+    "change_permission"
+  ],
+  "budget": {
+    "per_hour": 6,
+    "window_minutes": 60,
+    "scope": "global"
+  },
+  "max_hops": 8,
+  "priority_changes_per_24h": 2,
+  "rules": [
+    {
+      "id": "mr-review",
+      "enabled": true,
+      "when": {
+        "sources": ["gitlab"],
+        "types": ["merge_request.updated"],
+        "object_kinds": ["mr"]
+      },
+      "to": {
+        "kind": "coordinator",
+        "space": "collie",
+        "cwd": {
+          "path": "~/.local/state/collie",
+          "kind": "state"
+        },
+        "group": "protocol"
+      },
+      "agent": {
+        "access": "read",
+        "tells": "needed"
+      },
+      "limits": {
+        "parallel": 1,
+        "max_running": 3
+      },
+      "paused": {
+        "paused": false
+      }
+    },
+    {
+      "id": "cron-tick",
+      "enabled": true,
+      "when": {
+        "sources": ["cron"],
+        "types": ["cron.tick"]
+      },
+      "to": {
+        "kind": "herdr_task",
+        "cwd": {
+          "path": "~/work/system-weaver/projects/collie",
+          "kind": "git"
+        },
+        "group": "protocol"
+      },
+      "agent": {
+        "access": "edit",
+        "tells": "always",
+        "cli": "claude"
+      },
+      "limits": {
+        "parallel": 1,
+        "max_running": 1
+      },
+      "emits": {
+        "event_type": "merge_request.updated",
+        "hops_increment": 1
+      },
+      "paused": {
+        "paused": false
+      }
+    }
+  ]
+}

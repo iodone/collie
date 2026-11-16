@@ -1,0 +1,137 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:collie:event:v1",
+  "title": "Event",
+  "description": "外部发生的一个事实。由 source 插件写入 Ledger，去重后不可变。正文只以 data_ref 指向磁盘文件，绝不内联——这一条是 DESIGN §3.1 的指令数据分离。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "source",
+    "key",
+    "type",
+    "object",
+    "data_ref",
+    "data_digest",
+    "hops",
+    "received_at",
+    "merge"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^ev_[0-9a-z]{8,32}$",
+      "description": "事件标识，ev_ 前缀加 8–32 位小写字母数字。由 Ingress 生成，写入后不变。"
+    },
+    "source": {
+      "enum": ["gitlab", "github", "cron", "im"],
+      "description": "事件来源，对应一道可替换的缝（DESIGN §1.2）。source 决定 key 的去重命名空间。"
+    },
+    "key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "description": "source 内唯一的去重键，例如 mr!93@head_sha、issue#12@opened。同一 (source, key) 重投即丢弃。"
+    },
+    "type": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$",
+      "maxLength": 80,
+      "description": "事件类型，点分小写，如 merge_request.updated、pipeline.failed、cron.tick。它是路由表 when.types 唯一匹配依据，属于 domain 的事件词汇（DESIGN §6）。"
+    },
+    "object": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id"],
+      "description": "事件绑定的业务对象。归并（同一 object 的多个事件合成一件事）与 priority 计数都以它为键。",
+      "properties": {
+        "kind": {
+          "enum": ["mr", "issue", "pipeline", "none"],
+          "description": "对象种类。none 表示事件不绑定对象（cron、纯 IM 消息），此时 id 用来源自身标识填充。"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "对象在来源系统内的标识，例如 mr!93、issue#12、pipeline 98123。"
+        },
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "description": "对象的可点开地址。kind 非 none 时必填——卡片上「一键跳到源头」靠它。"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["kind"],
+            "properties": { "kind": { "enum": ["mr", "issue", "pipeline"] } }
+          },
+          "then": { "required": ["url"] }
+        }
+      ]
+    },
+    "title": {
+      "type": "string",
+      "maxLength": 200,
+      "pattern": "^(?![\\s-])[^{}\\r\\n]*$",
+      "description": "可选的一行标题。DESIGN §3.1 的 isTitle：纯文本、不含 {}、不以空白或 - 开头——它会被当命令行参数传给 herdr-task，以 - 开头会被当 option，含 {id} 会被当模板。"
+    },
+    "data_ref": {
+      "type": "string",
+      "pattern": "^/[^\\s]+$",
+      "description": "正文文件的绝对路径（落盘后由 worker 自己读）。禁止内联正文、禁止 http(s) 链接：外部文字只能作资料，不能进入提示词。"
+    },
+    "data_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "data_ref 内容的 sha256，用于证明事件不可变：同一 id 的正文若被改写，digest 对不上即视为篡改。"
+    },
+    "hops": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "委派深度，来源不可设置（DESIGN §3.1）。上限 8 不写进 maximum，因为 DESIGN §7.3 要求 >8 的事件『只记录』——拒收会丢证据；熔断由 invariants.checkHops 判定并返回 record_only。"
+    },
+    "received_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Ingress 收到的时刻（RFC3339，带时区）。归并与顺序以它为唯一时间依据。"
+    },
+    "merge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lane_key", "object_key", "first_seen_at", "occurrences"],
+      "description": "归并信息。DESIGN §2.1：lane = rule + subject；同一 lane 的多个事件只判一次。",
+      "properties": {
+        "lane_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "归并泳道，形如 <rule_id>:<object_key>。同一泳道内后到的事件被在跑/排队的 run 一起吃掉。"
+        },
+        "object_key": {
+          "type": "string",
+          "pattern": "^(mr|issue|pipeline|none):.+$",
+          "description": "对象键，形如 mr:mr!93。priority 变更计数与卡片绑定都以它为单位。"
+        },
+        "first_seen_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "该泳道首个事件的收到时刻。用于算『一件事持续了多久』，不随新事件推进。"
+        },
+        "occurrences": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "该泳道累计事件数（含自身）。4 个 commit 推同一 MR 就是 occurrences=4、判一次。"
+        }
+      }
+    },
+    "space_candidates": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$" },
+      "uniqueItems": true,
+      "maxItems": 8,
+      "description": "[开放问题 #5] 候选 space 列表。M0 只冻结形状：Ingress 命中 folder→space 表算出的所有候选，供归属解算使用；谁写 primary、何时记住答案尚未拍板，见 protocol/README.md。"
+    }
+  }
+}

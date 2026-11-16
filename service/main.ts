@@ -1,0 +1,323 @@
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { homedir } from "node:os";
+import { Ingress, type Dispatch } from "../kernel/ingress.ts";
+import { Ledger, ledgerId } from "../kernel/ledger.ts";
+import { coordinate } from "../kernel/coordinator.ts";
+import { decisionFromRule } from "../kernel/route-learning.ts";
+import { renderBrief } from "../kernel/brief.ts";
+import { runHerdrTask, type HerdrAgentOptions } from "../plugins/agent/herdr.ts";
+import { answerHerdrCard, type ChannelRunner } from "../plugins/channel/herdr.ts";
+import { deliverGitlab } from "../plugins/delivery/gitlab.ts";
+import { deliverGithub } from "../plugins/delivery/github.ts";
+import { deliverIm } from "../plugins/delivery/im.ts";
+import type { DeliveryRunner } from "../plugins/delivery/common.ts";
+import { startAnswerServer } from "./answer-server.ts";
+import { applyGuard } from "../protocol/invariants.mjs";
+import { coordinatorConfig, runCoordinator, type CoordinatorRunner } from "../plugins/agent/coordinator.ts";
+import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
+
+type Json = Record<string, any>;
+
+export interface InboxServiceOptions {
+  stateDir: string;
+  ruleset: Json;
+  decide?: (job: Json) => Promise<Json> | Json;
+  agent?: HerdrAgentOptions;
+  now?: () => Date;
+  rolePromptRef?: string;
+  workspaces?: Record<string, { folder: string; cli?: string }>;
+  delivery?: { gitlab?: DeliveryRunner; github?: DeliveryRunner; im?: DeliveryRunner };
+  coordinator?: { settings?: Json; settingsPath?: string; run?: CoordinatorRunner };
+}
+
+export class InboxService {
+  readonly ledger: Ledger;
+  readonly ingress: Ingress;
+  readonly stateDir: string;
+  readonly #options: InboxServiceOptions;
+
+  constructor(options: InboxServiceOptions) {
+    this.#options = options;
+    this.stateDir = resolve(options.stateDir);
+    mkdirSync(this.stateDir, { recursive: true });
+    this.ledger = Ledger.open(join(this.stateDir, "ledger.json"));
+    this.ingress = new Ingress(options.ruleset);
+    const snapshotPath = join(this.stateDir, "ingress.json");
+    if (existsSync(snapshotPath)) this.ingress.restore(JSON.parse(readFileSync(snapshotPath, "utf8")));
+  }
+
+  #projectIngress(): void {
+    const path = join(this.stateDir, "ingress.json");
+    const temporary = `${path}.${process.pid}.tmp`;
+    writeFileSync(temporary, JSON.stringify(this.ingress.snapshot()), { mode: 0o600 });
+    renameSync(temporary, path);
+  }
+
+  #projectQueue(): void {
+    const path = join(this.stateDir, "queue.json");
+    const temporary = `${path}.${process.pid}.tmp`;
+    writeFileSync(temporary, JSON.stringify({ decisions: this.ledger.decisions }), { mode: 0o600 });
+    renameSync(temporary, path);
+  }
+
+  async process(event: Json): Promise<Json[]> {
+    const result = this.ingress.ingest(event);
+    const normalized = result.dispatches.length ? result.dispatches.map((dispatch) => dispatch.event) : [result.event];
+    for (const item of normalized) this.ledger.append("event", item);
+    this.#projectIngress();
+    this.#projectQueue();
+    const decisions = [];
+    for (const dispatch of result.dispatches) decisions.push(await this.#dispatch(dispatch));
+    this.#projectQueue();
+    return decisions;
+  }
+
+  #coordinatorSettings(): Json {
+    if (this.#options.coordinator?.settingsPath && existsSync(this.#options.coordinator.settingsPath)) {
+      return JSON.parse(readFileSync(this.#options.coordinator.settingsPath, "utf8"));
+    }
+    return this.#options.coordinator?.settings ?? {};
+  }
+
+  #agentOptions(decision: Json): HerdrAgentOptions {
+    return {
+      ...this.#options.agent,
+      onSpawn: async (task) => {
+        const latest = this.ledger.decisions.find((item) => item.id === decision.id) ?? decision;
+        this.ledger.append("decision", { ...latest, state: "acting", run: { ...latest.run, task_ref: task.key ?? task.id } });
+        this.#projectQueue();
+        await this.#options.agent?.onSpawn?.(task);
+      },
+    };
+  }
+
+  async #executeSpawn(decision: Json): Promise<Json> {
+    const spawns = decision.actions.filter((action: Json) => action.kind === "spawn_task");
+    if (decision.state !== "routed" || !spawns.length) return decision;
+    if (spawns.length !== 1) throw new Error("M1 executes exactly one spawn_task per decision");
+    const workspace = this.#options.workspaces?.[decision.space];
+    if (!workspace) throw new Error(`no worker workspace configured for space ${decision.space}`);
+    const rule = {
+      to: { kind: "herdr_task", space: decision.space, cwd: { path: workspace.folder, kind: "git" } },
+      agent: { ...(workspace.cli ? { cli: workspace.cli } : {}) },
+    };
+    const receipt = await runHerdrTask(decision, rule, this.#agentOptions(decision));
+    return this.acceptReceipt(decision.id, receipt);
+  }
+
+  async request(space: string, goal: string): Promise<Json> {
+    if (!/^[a-z0-9][a-z0-9_-]{1,63}$/.test(space)) throw new Error("invalid space");
+    if (typeof goal !== "string" || !goal.trim() || goal.length > 4000) throw new Error("goal must be 1–4000 chars");
+    const at = (this.#options.now ?? (() => new Date()))().toISOString();
+    const id = ledgerId("ev");
+    const directory = join(this.stateDir, "requests");
+    mkdirSync(directory, { recursive: true });
+    const dataRef = join(directory, `${id}.md`);
+    writeFileSync(dataRef, goal, { mode: 0o600 });
+    const event = {
+      id, source: "im", key: `human:${id}`, type: "human.requested",
+      object: { kind: "none", id }, title: goal.split(/\r?\n/)[0].slice(0, 80).replace(/^[-\s]+/, "Request "),
+      data_ref: dataRef, data_digest: `sha256:${createHash("sha256").update(goal).digest("hex")}`,
+      hops: 0, received_at: at,
+      merge: { lane_key: `coordinator:none:${id}`, object_key: `none:${id}`, first_seen_at: at, occurrences: 1 },
+      space_candidates: [space],
+    };
+    this.ledger.append("event", event);
+    const decision = await coordinate({ kind: "coordinator", laneKey: event.merge.lane_key, space, ruleId: null, event }, {
+      ledger: this.ledger, ruleset: this.#options.ruleset, stream: "chat_turn",
+      decide: this.#options.decide ?? (async (job: Json) => {
+        if (!this.#options.coordinator) throw new Error(`space ${space} has no coordinator configured`);
+        const config = coordinatorConfig(this.#coordinatorSettings(), space);
+        const result = await runCoordinator(job, config, { ...(this.#options.coordinator.run ? { run: this.#options.coordinator.run } : {}) });
+        return { ...result.decision, run: { ...result.decision.run, coordinator_ref: result.session } };
+      }),
+      ...(this.#options.now ? { now: this.#options.now } : {}),
+      ...(this.#options.rolePromptRef ? { rolePromptRef: this.#options.rolePromptRef } : {}),
+    });
+    this.#projectQueue();
+    return this.#executeSpawn(decision);
+  }
+
+  async #dispatch(dispatch: Dispatch): Promise<Json> {
+    if (dispatch.kind === "record_only") return this.#recordOnly(dispatch);
+    if (dispatch.kind === "coordinator") {
+      const decide = this.#options.decide ?? (async (job: Json) => {
+        if (this.#options.coordinator) {
+          const config = coordinatorConfig(this.#coordinatorSettings(), job.space.primary);
+          const result = await runCoordinator(job, config, { ...(this.#options.coordinator.run ? { run: this.#options.coordinator.run } : {}) });
+          return { ...result.decision, run: { ...result.decision.run, coordinator_ref: result.session } };
+        }
+        const at = new Date().toISOString();
+        return {
+          state: "waiting", why: "没有配置 coordinator 执行器，交人判断",
+          actions: [{ kind: "ask", risk_tags: [], ask: { kind: "question", question: "这条事件需要怎么处理？", options: ["accept", "later", "drop"] } }],
+          card: { kind: "question", question: "这条事件需要怎么处理？", options: ["accept", "later", "drop"], state: "open", created_at: at, acked_at: null, answer: null, snooze_until: null, closed_at: null },
+        };
+      });
+      const decision = await coordinate(dispatch, {
+        ledger: this.ledger, ruleset: this.#options.ruleset, decide,
+        ...(this.#options.now ? { now: this.#options.now } : {}),
+        ...(this.#options.rolePromptRef ? { rolePromptRef: this.#options.rolePromptRef } : {}),
+      });
+      this.ingress.bindDecision(dispatch.laneKey, decision.id);
+      this.#projectIngress();
+      return this.#executeSpawn(decision);
+    }
+    const brief = renderBrief(dispatch, join(this.stateDir, "briefs"));
+    const candidate = decisionFromRule(dispatch, brief, (this.#options.now ?? (() => new Date()))().toISOString());
+    const decision = applyGuard(candidate, this.#options.ruleset, { authoritative: { hops: dispatch.event.hops } }).decision;
+    this.ledger.append("decision", decision);
+    this.ingress.bindDecision(dispatch.laneKey, decision.id);
+    this.#projectIngress();
+    if (decision.state === "waiting") return decision;
+    const receipt = await runHerdrTask(decision, dispatch.rule, this.#agentOptions(decision));
+    return this.acceptReceipt(decision.id, receipt);
+  }
+
+  #recordOnly(dispatch: Dispatch): Json {
+    const at = (this.#options.now ?? (() => new Date()))().toISOString();
+    const event = dispatch.event;
+    const decision = {
+      id: ledgerId("dc"), key: `${event.source}:${event.key}`, space: dispatch.space,
+      space_candidates: event.space_candidates ?? [dispatch.space], event_ref: event.id, case_ref: null,
+      state: "waiting", why: `hops ${event.hops} 超过上限，只记录不再派发`, decided_by: "rule_table", decided_at: at,
+      occurrence: { object_key: event.merge.object_key, kind: event.object.kind, round: 1, hops: event.hops },
+      actions: [{ kind: "ask", risk_tags: [], ask: { kind: "alert", question: "委派跳数已熔断，请检查这条链", options: ["drop"] } }],
+      risk: { tags: [], forced_waiting: false }, run: { claimed_until: null, unknown_policy: "normal", task_ref: null, coordinator_ref: null },
+      human_boundary: { form: "card", chat_injection: false }, priority: null, hold: null,
+      card: { kind: "alert", question: "委派跳数已熔断，请检查这条链", options: ["drop"], state: "open", created_at: at, acked_at: null, answer: null, snooze_until: null, closed_at: null },
+      receipt_ref: null, proposal: null, ack: null, settled: null,
+    };
+    return this.ledger.append("decision", decision);
+  }
+
+  async answerCard(decisionId: string, answer: Json, coordinatorAddress?: string, run?: ChannelRunner): Promise<Json> {
+    const decision = this.ledger.decisions.find((item) => item.id === decisionId);
+    if (!decision) throw new Error(`unknown decision: ${decisionId}`);
+    return answerHerdrCard(decision, answer, coordinatorAddress, {
+      ...(run ? { run } : {}),
+      beforeResume: (answered) => {
+        this.ledger.append("decision", answered);
+        if (answered.state === "closed") {
+          const laneKey = this.ingress.laneForDecision(decisionId);
+          if (laneKey) this.ingress.completeLane(laneKey);
+          this.#projectIngress();
+        }
+        this.#projectQueue();
+      },
+    });
+  }
+
+  async deliver(decisionId: string): Promise<Json> {
+    const decision = this.ledger.decisions.find((item) => item.id === decisionId);
+    if (!decision) throw new Error(`unknown decision: ${decisionId}`);
+    const actions = decision.actions.filter((action: Json) => action.kind === "emit_command");
+    if (actions.length !== 1) throw new Error(`expected one emit_command, got ${actions.length}`);
+    const target = actions[0].egress.target;
+    const deliver = { gitlab: deliverGitlab, github: deliverGithub, im: deliverIm }[target];
+    if (!deliver) throw new Error(`unsupported delivery target: ${target}`);
+    await deliver(decision, { ...(this.#options.delivery?.[target] ? { run: this.#options.delivery[target] } : {}) });
+    const at = (this.#options.now ?? (() => new Date()))().toISOString();
+    const outcome = { merge: "merged", comment: "commented", close: "dropped", notify: "commented" }[actions[0].egress.op];
+    const next = {
+      ...decision, state: "done",
+      human_boundary: { form: "none", chat_injection: false },
+      settled: { at, by: "coordinator", outcome },
+    };
+    const saved = this.ledger.append("decision", next);
+    const laneKey = this.ingress.laneForDecision(decisionId);
+    if (laneKey) this.ingress.completeLane(laneKey);
+    this.#projectIngress();
+    this.#projectQueue();
+    return saved;
+  }
+
+  acceptReceipt(decisionId: string, receipt: Json): Json {
+    const decision = this.ledger.decisions.find((item) => item.id === decisionId);
+    if (!decision) throw new Error(`unknown decision: ${decisionId}`);
+    const receiptDir = join(this.stateDir, "receipts");
+    mkdirSync(receiptDir, { recursive: true });
+    writeFileSync(join(receiptDir, `${receipt.id}.json`), JSON.stringify(receipt), { mode: 0o600 });
+    this.ledger.append("receipt", receipt);
+    const at = receipt.received_at;
+    const waiting = !receipt.risk.auto_accept;
+    const next = {
+      ...decision,
+      state: waiting ? "waiting" : "done",
+      receipt_ref: receipt.id,
+      human_boundary: { form: waiting ? "card" : "none", chat_injection: false },
+      card: waiting ? {
+        kind: "accept", question: "任务已 ready，要接受这次交付吗？", options: ["accept", "rework"],
+        state: "open", created_at: at, acked_at: null, answer: null, snooze_until: null, closed_at: null,
+      } : null,
+      settled: waiting ? null : { at, by: "coordinator", outcome: "accepted" },
+    };
+    const saved = this.ledger.append("decision", next);
+    const laneKey = this.ingress.laneForDecision(decisionId);
+    if (laneKey) this.ingress.completeLane(laneKey);
+    this.#projectIngress();
+    this.#projectQueue();
+    return saved;
+  }
+
+  /** Optional directory intake; source adapters write one immutable Event JSON per file. */
+  async drain(directory: string): Promise<Json[]> {
+    mkdirSync(directory, { recursive: true });
+    const decisions = [];
+    for (const name of readdirSync(directory).filter((name) => name.endsWith(".json")).sort()) {
+      const path = join(directory, name);
+      decisions.push(...await this.process(JSON.parse(readFileSync(path, "utf8"))));
+      renameSync(path, `${path}.done`);
+    }
+    return decisions;
+  }
+}
+
+if (import.meta.main) {
+  const stateDir = process.env.HERDR_INBOX_STATE ?? join(homedir(), ".local", "state", "collie");
+  const rulesetPath = process.env.HERDR_INBOX_RULESET ?? join(stateDir, "ruleset.json");
+  const workspacesPath = join(stateDir, "workspaces.json");
+  const coordinatorPath = join(stateDir, "coordinator.json");
+  const service = new InboxService({
+    stateDir,
+    ruleset: JSON.parse(readFileSync(rulesetPath, "utf8")),
+    rolePromptRef: join(homedir(), ".config", "herdr-core", "templates", "coordinator.md"),
+    ...(existsSync(workspacesPath) ? { workspaces: JSON.parse(readFileSync(workspacesPath, "utf8")) } : {}),
+    coordinator: { settingsPath: coordinatorPath },
+  });
+  const socketPath = join(stateDir, "service.sock");
+  if (existsSync(socketPath)) unlinkSync(socketPath);
+  startAnswerServer(service, socketPath);
+  const incoming = join(stateDir, "incoming");
+  let draining = false;
+  const drain = async () => {
+    if (draining) return;
+    draining = true;
+    try { await service.drain(incoming); }
+    catch (error) { console.error("collie intake failed:", error instanceof Error ? error.message : error); }
+    finally { draining = false; }
+  };
+  await drain();
+  setInterval(drain, 1000);
+  let supervising = false;
+  setInterval(async () => {
+    if (supervising) return;
+    supervising = true;
+    try {
+      const runtimePath = join(stateDir, "coordinator-runtime.json");
+      if (existsSync(runtimePath)) {
+        const runtime = JSON.parse(readFileSync(runtimePath, "utf8"));
+        for (const [space, record] of Object.entries(runtime.spaces ?? {})) {
+          if ((record as Json).enabled) await execFileAsync(join(homedir(), ".config", "herdr-app", "bin", "collie-supervisor"), ["ensure", "--space", space]);
+        }
+      }
+    } catch (error) { console.error("coordinator supervisor failed:", error instanceof Error ? error.message : error); }
+    finally { supervising = false; }
+  }, 10000);
+  console.error(`collie service ready: ${incoming}`);
+}

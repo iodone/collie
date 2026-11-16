@@ -1,0 +1,29 @@
+{
+  "name": "collie",
+  "version": "0.0.0",
+  "layout": "collie",
+  "mods": [
+    "collie",
+    "collie-rail",
+    "collie-rules",
+    "collie-tabs",
+    "collie-chrome",
+    "collie-settings",
+    "collie-chat"
+  ],
+  "needs": {
+    "tasks": ">=3.1.0 <4",
+    "chat": ">=3.1.0 <4"
+  },
+  "helpers": [
+    "collie-sync"
+  ],
+  "templates": [
+    "coordinator.md",
+    "dev/worker.md"
+  ],
+  "keys": {},
+  "switch": {
+    "layout": "collie"
+  }
+}
