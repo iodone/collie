@@ -91,11 +91,11 @@ def source_files(source: Path, root: Path) -> dict[str, Path]:
         if not base.is_dir():
             return
         for path in sorted(base.rglob("*")):
-            if path.is_file() and not path.is_symlink() and "__pycache__" not in path.parts and path.suffix != ".pyc":
+            if path.is_file() and not path.is_symlink() and "__pycache__" not in path.parts and ".last" not in path.parts and path.suffix != ".pyc":
                 rel = path.relative_to(base)
                 files[(destination / rel).as_posix()] = path
 
-    for directory in ("layouts", "mods", "lib"):
+    for directory in ("layouts", "mods", "lib", "core"):
         add_tree(directory, APP / directory)
     for directory in ("kernel", "plugins", "service", "protocol"):
         add_tree(directory, RUNTIME / directory)

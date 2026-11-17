@@ -8,7 +8,7 @@ import { startInbox, count as inboxCount, countsByTab, readyCount, readyByTab, s
 import { serveRemote } from "./secrets.js";
 import { watchService } from "./service.js";
 import { startBridge } from "./bridge.js";
-import { countBadge, H, TEXT, RADIUS } from "./ui.js";
+import { countBadge, H, TEXT, RADIUS } from "./lib/ui.js";
 import { on as addonOn } from "./addons.js";
 import { watchViews } from "./usage.js";
 // A tab's name (what runs in it while Herdr named it): core/menus.js, as the web app's tab bar names it.

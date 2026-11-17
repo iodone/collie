@@ -15,7 +15,7 @@ import { isWorktreePath } from "./core/paths.js";
 import { terminals, panes, spaces as allSpaces } from "./live.js";
 import { chatPane, chatLabel } from "./core/spaces.js";
 import { logSpace } from "./spacelog.js";
-import { toast, plainError } from "./ui.js";
+import { toast, plainError } from "./lib/ui.js";
 
 // "vm/tb12" -> ["vm", "tb12"]; this machine's ids have no prefix.
 const split = (id) => (id?.includes("/") ? [id.split("/")[0], id.split("/").slice(1).join("/")] : ["", id]);

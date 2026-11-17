@@ -399,8 +399,73 @@ Inbox 不是第二个操作台。每行右侧只有一个 **回复** 按钮：
 
 - `lib/ticket-dot.js` ← shepherdr `lib/dot.js` / `mods/tasks/dot.js`
 - `lib/artview.js` ← shepherdr `lib/artview.js`
-- `mods/collie/core/task-artifacts.js` ← shepherdr `core/task-artifacts.js`
+- `core/task-artifacts.js` ← shepherdr `core/task-artifacts.js`
 - `layouts/collie.json` ← shepherdr layout
 - `bin/collie` 的 manifest / backup / doctor ← `bin/shepherdr`
 
-实现顺序：先沿用这些拷贝与 CLI 调用，再改 Decision 三态、Event/Ingress、Work 四态和 Inbox；不为旧 8 态/route table 留兼容层。
+这些共享源的副本由 `lib/COPIES` 声明，`bin/collie-sync` 生成；改源文件，不改 `mods/*/lib` 或 `mods/*/core` 的副本。
+
+---
+
+## 11. Coordinator 与 Service 的生命周期
+
+这一节是解耦后的目标设计，参考 shepherdr 的 Assistant + service，但 coordinator 尽量只依赖 herdr-core，不自己发明常驻层。
+
+### 11.1 Coordinator = Assistant 模型
+
+- **每个 space 一个 coordinator**，tab 固定在最前。
+- tab 里先是 chat pane，**没有 agent**；第一条消息才启动。
+- 启动走 herdr-core：`hc run --bg --no-parent --keep`，用 coordinator 模板，agent 停在 chat pane 后面。
+- 标签至少包含：
+  - `herdr.role=coordinator`
+  - `herdr.chat=<pane>`
+  - `herdr.chat.slot=<slot>`
+  - `herdr.coordinator.space=<space>`
+  - `herdr.coordinator.tab=<tab>`
+- coordinator 是普通 kept terminal，不是 daemon，不需要 per-space supervisor 常驻轮询。
+- 生命周期：
+  - 空 chat → 第一条消息 → starting → live → working/idle；
+  - 菜单 Restart → 新 agent 在同一 tab 启动，handoff 或 resume，旧 agent 结束；
+  - 关闭 tab → 有 worker 时先问 stop/keep；无 worker 直接关；
+  - 进程丢失 → 终端留为 shell，由 tick/revive 原地恢复；
+  - session 丢失 → 新 session + handover，不伪造恢复成功。
+
+### 11.2 Service = 每台机器一个
+
+- **一台机器只有一个 collie service**，不是每个 space 一个。
+- Bun 进程，跑 `service/main.ts`；由 systemd user unit / launchd agent 管理。
+- 负责 Web/API/WebSocket、`incoming/*.json`、`herdr-task tick`、scheduler、远端 tick、coordinator/worker revive。
+- 不拥有 coordinator；coordinator 的生命周期在 herdr-core。
+- unit 负责：`RunAtLoad` / `KeepAlive`（systemd `Restart=always`），开机后自动拉起。
+- 窗口与 service 互备：
+  - service 在：窗口把 tick 让给它；
+  - service 不在：窗口自己 tick，并最多每分钟尝试启动一次 unit；
+  - 两者都不在：任务调度和 revive 暂停，但 coordinator 终端仍由 herdr-core 保活。
+
+### 11.3 三种场景
+
+| 场景 | Coordinator | Service |
+|:--|:--|:--|
+| app 关闭 | 不受影响，herdr-core 保活 | 不受影响，独立进程/unit |
+| 电脑关机 | 进程停止；开机后 core 拉起终端，tick/revive 恢复 | unit 开机拉起 |
+| service 没装/没跑 | 仍可被 herdr-core 保活 | 无；排队任务、scheduler、revive 等窗口打开后继续 |
+
+### 11.4 命令边界
+
+```sh
+collie doctor                         # 安装完整性
+collie status                         # 聚合运行状态（含 coordinator 概览）
+collie service status                 # service: pid / socket / uptime / queue
+```
+
+没有 `collie coordinator ensure` / `stop`：coordinator 的创建、关闭、重启都走 `herdr-app` / `hc`。观察直接用：
+
+```sh
+herdr-app ls
+hc ls
+hc get <coordinator>
+```
+
+停止就是显式关闭 coordinator tab（有 worker 时选 stop/keep），或 `hc rm` 掉终端。service 不做 auto-ensure，所以不需要“阻止自动拉起”的命令。
+
+`collie-supervisor` 整个删除，不保留内部实现。

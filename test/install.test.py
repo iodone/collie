@@ -44,7 +44,7 @@ class InstallTest(unittest.TestCase):
 
     def make_source(self):
         self.source.mkdir()
-        for directory in ("bin", "layouts", "templates", "lib", "mods", "kernel", "plugins", "service", "protocol"):
+        for directory in ("bin", "layouts", "templates", "lib", "core", "mods", "kernel", "plugins", "service", "protocol"):
             if (REPO / directory).exists():
                 shutil.copytree(REPO / directory, self.source / directory)
         shutil.copy2(REPO / "addons.json", self.source / "addons.json")
@@ -247,6 +247,8 @@ class InstallTest(unittest.TestCase):
         library = self.source / "lib/shared.js"
         library.parent.mkdir(exist_ok=True)
         library.write_text("export const value = 1;\n")
+        copies = self.source / "lib/COPIES"
+        copies.write_text(copies.read_text() + "shared.js: collie\n")
         environment = os.environ.copy()
         environment["HOME"] = str(self.home)
         command = [sys.executable, str(self.source / "bin/collie-sync"), "--root", str(self.source)]

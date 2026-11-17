@@ -36,7 +36,7 @@ import { LINE_MAX, REASONS, fit, reqReason, reportReason } from "./core/needs.js
 import { SH } from "./core/paths.js";
 import { dirsReady } from "./dirs.js";
 import { notifies, spaceOfTerminal } from "./notify.js";
-import { toast, toastWho as whoOf } from "./ui.js";
+import { toast, toastWho as whoOf } from "./lib/ui.js";
 import { exec, appHome, home, focused, shared, setShared, watchFolder, readTextFile, writeTextFile, playSound, settings, run, layout } from "herdr";
 import { terminals, agents, panes, spaces } from "./live.js";
 import { chatPane } from "./core/spaces.js";

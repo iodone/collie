@@ -1,8 +1,8 @@
 // The UI building blocks every mod draws with: one size system, one red/green/amber, and the
 // few controls the app repeats (buttons, switch, segmented control, menu row, headings, card
 // header, dialog footer, hover). lib/UI.md lists them and the rules.
-// Shared: the source is lib/ui.js; bin/sync-shared copies it into each mod in lib/COPIES.
-// Edit lib/ui.js, never a mod's copy, then run bin/sync-shared.
+// Shared: the source is lib/ui.js; bin/collie-sync copies it into each mod in lib/COPIES.
+// Edit lib/ui.js, never a mod's copy, then run bin/collie-sync.
 import { div, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import { settings, theme, openOverlay, notify, layout, shared, setShared, spaces } from "herdr";

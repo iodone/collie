@@ -1,7 +1,7 @@
 import { View, div, image, svg } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 import { theme, run, props, window, shared, setShared, updates, layout, openOverlay } from "herdr";
-import { red } from "./ui.js";
+import { red } from "./lib/ui.js";
 import { on as addonOn } from "./addons.js";
 
 // SHEP-135: the voice call on (mods/chat's shared "chat.calls", its heartbeat in the last 45 s), as spaces-chat's liveCall

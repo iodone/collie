@@ -54,11 +54,13 @@ bin/collie doctor --root "$ROOT"
 
 ## 启动后台
 
-默认安装后直接运行：
+开发时可直接运行：
 
 ```sh
 bun "$HOME/.local/share/collie/service/main.ts"
 ```
+
+正式安装由 systemd user unit / launchd agent 管理（见 #9）：`RunAtLoad` + `KeepAlive`，开机自动拉起。**每台机器只有一个 collie service**，不是每个 space 一个。
 
 隔离 root 必须同时隔离进程的 HOME，否则服务会回到真实 HOME 找状态：
 
@@ -117,18 +119,37 @@ space 配置覆盖 Everywhere；未配置有效 `cli` 时不会静默选择另�
 - `drop` 直接 `settled{dropped}`；`later` 保持 `waiting`。
 - 打开/展开只是 `ack`，不会结案；只有 Card answer 的 outcome 才结案。
 
-## Coordinator 常驻与恢复
+## Coordinator 生命周期与恢复
 
-每个 space 的 Coordinator 由 `collie-supervisor` 保证：激活 space 时去重接管，后台每 10 秒检查。恢复语义直接复用 shepherdr 的 `revive.py`：
+Coordinator 参考 shepherdr 的 Assistant，但尽量只依赖 herdr-core：
 
-- live Coordinator 直接接管，不重复启动。
-- 运行中持续记录原 argv、cwd、session 和 log。
+- 每个 space 一个 coordinator，tab 固定在最前。
+- tab 里先是一个 chat pane，没有 agent；第一条消息才启动。
+- agent 是普通 kept terminal：`hc run --bg --no-parent --keep`，停在 chat pane 后面。
+- app 关闭不会杀 coordinator；herdr-core 会保活终端。
+- 电脑关机后，开机由 herdr-core 拉起终端；agent 丢失时由 tick/revive 原地恢复。
+
+恢复语义：
+
+- live coordinator 直接接管，不重复启动。
+- 持续记录原 argv、cwd、session 和 log。
 - kept terminal 退回 shell 时，在同一 terminal 恢复原 session。
-- terminal 已消失时新建 terminal，但仍 resume 同一 session。
 - session log 不存在时新建 session，并带 handover，不伪造恢复成功。
-- 普通关闭 Coordinator Tab 使用 settle；只有 `collie-supervisor stop --space <id>` 才禁止自动拉起。
+- 恢复由 `herdr-task tick` 触发：service 在时由 service 每 15 秒 tick；service 不在时窗口自己 tick。
+- 普通关闭 Coordinator Tab 不能直接 `tab.settle`；有 worker 时问 stop/keep，无 worker 也只会关 tab。
+- 停止就是显式关闭 tab，或 `hc rm` 掉终端；没有 `collie coordinator stop`，因为 service 不做 auto-ensure。
+- 没有 `collie coordinator ensure`；终端被删后不自动重建，人重新打开 coordinator tab。
 
-恢复模块只接管带 `herdr.inbox=true` 的 Coordinator，不处理 shepherdr Assistant 或其他任务。
+运行时观察：
+
+```sh
+collie status
+collie service status
+herdr-app ls
+hc get <coordinator>
+```
+
+`collie doctor` 只检查安装完整性；`collie status` 才看运行状态。`collie-supervisor` 整个删除，不保留公共命令或内部入口。
 
 ## 键位合并
 
@@ -182,15 +203,19 @@ bin/collie uninstall --yes
 
 ## 同步共享 lib
 
-仓库根目录的 `lib/*.js` 是唯一源。修改后同步到每个 mod：
+`lib/<file>` 和 `core/<file>` 是唯一源；`lib/COPIES` 声明哪些 mod 需要副本。不要直接改 `mods/<mod>/lib/` 或 `mods/<mod>/core/` 里的副本。
 
 ```sh
-bin/collie-sync --check
-bin/collie-sync
+bin/collie-sync --check   # 只检查，漂移返回 1
+bin/collie-sync           # 同步
 bin/collie-sync --check
 ```
 
-`--check` 发现差异返回 1，不写文件；`--dry-run` 只打印计划。源码 checkout 与 herdr-app 中的命令自动识别各自 root；`.local/bin` 的 helper 默认使用 `$HOME/.config/herdr-app`。隔离 root 下显式传 `--root "$ROOT/.config/herdr-app"`。
+- `lib/<file>` → `mods/<mod>/lib/<file>`；`core/<file>` → `mods/<mod>/core/<file>`。
+- 手改过的副本不会被静默覆盖；用 `bin/collie-sync --from <copy>` 把它提升为源。
+- `lib/.last/` 记录上次写入内容，已加入 `.gitignore`；安装器不会复制它。
+- `--dry-run` 只打印计划；源码 checkout 和 herdr-app 自动识别 root，`.local/bin` 的 helper 默认使用 `$HOME/.config/herdr-app`。
+- 隔离 root 显式传 `--root "$ROOT/.config/herdr-app"`。
 
 ## 常见故障
 

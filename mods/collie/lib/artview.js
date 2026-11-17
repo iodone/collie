@@ -5,8 +5,8 @@
 // the shown chat pane) it covers that chat pane only, exactly like an opened image; with no
 // pane to cover, the whole window. From a dialog (the Accept card's Proof) it opens as a modal
 // of a fitting size over that dialog instead (artifact.modal), and closing it returns there.
-// Shared: the source is lib/artview.js; bin/sync-shared copies it into each mod in lib/COPIES.
-// Edit lib/artview.js, never a mod's copy, then run bin/sync-shared.
+// Shared: the source is lib/artview.js; bin/collie-sync copies it into each mod in lib/COPIES.
+// Edit lib/artview.js, never a mod's copy, then run bin/collie-sync.
 
 import { exec, appHome, openOverlay, theme, shared, setShared, panes, focused, settings } from "herdr";
 import { toast, plainError } from "./ui.js";
