@@ -20,7 +20,8 @@ def artifacts_of(folder):
     """This folder's artifacts, newest first (collie-artifact's list for it; the same slug rule)."""
     rel = os.path.relpath(folder, HOME) if folder == HOME or folder.startswith(HOME + "/") else folder
     slug = re.sub(r"[^A-Za-z0-9._-]+", "-", "home" if rel == "." else rel.strip("/")).strip("-") or "root"
-    for directory in (ARTIFACTS, LEGACY_ARTIFACTS):
+    legacy = os.environ.get("COLLIE_ARTIFACTS_LEGACY", "").lower() in ("1", "true", "on")
+    for directory in ((ARTIFACTS, LEGACY_ARTIFACTS) if legacy else (ARTIFACTS,)):
         for name in (slug, f"{slug}-{hashlib.sha1(folder.encode()).hexdigest()[:6]}"):
             try:
                 with open(os.path.join(directory, name + ".json")) as f:

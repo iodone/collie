@@ -49,9 +49,10 @@ FILES = os.path.join(STORE, "files")
 # Shepherdr's stores, read-only fallback: listed and shown from, never written. A publish/update reads
 # them and writes the merged result into STORE (new versions' files land under STORE/files); removal
 # of an artifact that lives only there is refused.
-LEGACY = [p for p in (os.path.join(HOME, ".local", "share", "shepherdr", "artifacts"),
-                      os.path.join(HOME, ".herdr", "artifacts"))
-          if os.path.abspath(p) != os.path.abspath(STORE)]
+LEGACY = ([p for p in (os.path.join(HOME, ".local", "share", "shepherdr", "artifacts"),
+                       os.path.join(HOME, ".herdr", "artifacts"))
+           if os.path.abspath(p) != os.path.abspath(STORE)]
+          if os.environ.get("COLLIE_ARTIFACTS_LEGACY", "").lower() in ("1", "true", "on") else [])
 
 
 def stores():

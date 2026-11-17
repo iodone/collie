@@ -74,7 +74,8 @@ test -n "$(ls "$TMP/custom-store"/*.json 2>/dev/null)" || fail "COLLIE_ARTIFACTS
 # ---- no writes under ~/.herdr ---------------------------------------------------------------
 test ! -e "$HOME/.herdr" || fail "wrote ~/.herdr without a legacy store"
 
-# ---- legacy store: read-only fallback -------------------------------------------------------
+# ---- legacy store: read-only fallback, only when explicitly enabled ---------------------------
+export COLLIE_ARTIFACTS_LEGACY=1
 LEG="$TMP/legacy"
 mkdir -p "$LEG/report" "$HOME/.herdr/artifacts/files/legacy-abc/v1"
 cp "$WORK/report/recipe.json" "$LEG/report/recipe.json"
@@ -91,5 +92,6 @@ test "$($CLI show legacy-abc --json | json 'd["title"]')" = "Legacy report" || f
 test -f "$($CLI export legacy-abc --out "$TMP/legacy-out" --json | json 'd["path"]')/recipe.json" || fail "legacy export"
 if $CLI rm legacy-abc >/dev/null 2>&1; then fail "rm removed a legacy-only artifact"; fi
 test -f "$HOME/.herdr/artifacts/$SLUG.json" || fail "rm touched the legacy store"
+unset COLLIE_ARTIFACTS_LEGACY
 
 echo "ok: collie-artifact publish/list/show/export/rm, collie store, legacy read fallback"
