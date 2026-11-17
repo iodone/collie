@@ -54,6 +54,8 @@ import EmojiPicker from "./reactions.js";
 import * as find from "./core/find.js";
 
 const PAGE = 200;
+const COLUMN = 760;
+const BUBBLE = 620;
 const KEEP = 2000;
 const KINDS = { "claude-code": "claude", claude: "claude", codex: "codex" };
 const TEMPLATE = 'dir="$HOME/.config/herdr-core/templates"; ';
@@ -351,14 +353,16 @@ export default class CoordinatorChat extends View {
   list(t, rows, cx) {
     const empty = !this.readOnly && this.phase === "fresh" && !rows.length;
     return div().id("collie-chat-rows").flex().flex_col().flex_1().min_h(0).overflow_y_scrollbar()
-      .track_scroll(this.scroll).px(24).py(12).gap(6)
+      .track_scroll(this.scroll).py(8)
       .when(empty, (el) => el.items_center().justify_center().child(
         div().max_w(420).flex().flex_col().gap(6).items_center()
           .child(div().text_size(15).font_semibold().text_color(t.foreground).child(WORDS.emptyTitle))
           .child(div().text_size(TEXT.body).text_color(t.muted).child(WORDS.emptyBody))
           .when(Boolean(this.pick?.agent), (el2) => el2.child(div().text_size(TEXT.id).text_color(t.dim).child(line(this.pick, this.menus))))))
-      .children(rows.map((r) => this.row(t, r, cx)))
-      .when(this.working(), (el) => el.child(this.workingRow(t, cx)));
+      .children(rows.map((r) => h_flex().w_full().justify_center()
+        .child(div().w_full().max_w(COLUMN + 36).px(18).py(6).child(this.row(t, r, cx)))))
+      .when(this.working(), (el) => el.child(h_flex().w_full().justify_center()
+        .child(div().w_full().max_w(COLUMN + 36).px(18).child(this.workingRow(t, cx)))));
   }
 
   row(t, r, cx) {
@@ -375,11 +379,11 @@ export default class CoordinatorChat extends View {
     if (r.kind === "failed") return this.quiet(t, r, { danger: true });
     if (r.kind === "user") {
       return h_flex().id(r.id).w_full().justify_end().child(
-        div().max_w(560).flex().flex_col().gap(2).items_end()
-          .when(Boolean(r.files?.length), (el) => el.child(h_flex().max_w(520).gap(4).items_center()
+        div().max_w(BUBBLE).flex().flex_col().gap(2).items_end()
+          .when(Boolean(r.files?.length), (el) => el.child(h_flex().max_w(BUBBLE).gap(4).items_center()
             .child(svg("mods/collie-chat/file.svg").size(12).flex_none().text_color(t.dim))
             .child(div().min_w(0).truncate().text_size(11).text_color(t.muted).child(r.files.join(", ")))))
-          .when(Boolean(String(r.text ?? "").trim()), (el) => el.child(div().rounded(RADIUS.card).bg(t.raised).border_1().border_color(t.border).px(12).py(8).text_size(13)
+          .when(Boolean(String(r.text ?? "").trim()), (el) => el.child(div().rounded(12).bg(t.accent + "33").border_1().border_color(t.accent + "4d").px(12).py(8).text_size(13)
             .text_color(t.foreground).child(TextView.markdown(`chat-md-${r.id}`, this.marked(literal(this.mentionsIn(r.text))) || " ").selectable(true))))
           .when(Boolean(r.paths?.length), (el) => el.child(this.thumbs(t, r.paths, r.id, cx, { faded: r.pending })))
           .when(Boolean(r.error), (el) => el.child(div().text_size(11).text_color(t.ansi1).child(notSent(r.error))))
@@ -387,12 +391,14 @@ export default class CoordinatorChat extends View {
             .child(this.reactions_(t, r, cx))
             .child(div().text_size(11).text_color(t.dim).child(r.pending ? "Sending…" : clock(r.at)))));
     }
-    // The agent's own words.
-    return div().id(r.id).w_full().flex().flex_col().gap(2).px(2).py(2)
-      .child(div().text_size(13).text_color(t.foreground).child(TextView.markdown(`chat-md-${r.id}`, this.marked(r.text || " ")).selectable(true)))
-      .child(h_flex().gap(8).items_center()
-        .child(this.reactions_(t, r, cx))
-        .when(Boolean(r.at), (el) => el.child(div().text_size(11).text_color(t.dim).child(clock(r.at)))));
+    // The agent's own words, on the left in its bubble.
+    return h_flex().id(r.id).w_full().justify_start().child(
+      div().max_w(BUBBLE).flex().flex_col().gap(2).items_start()
+        .child(div().rounded(12).bg(t.raised).px(12).py(8).text_size(13).text_color(t.foreground)
+          .child(TextView.markdown(`chat-md-${r.id}`, this.marked(r.text || " ")).selectable(true)))
+        .child(h_flex().gap(8).items_center()
+          .child(this.reactions_(t, r, cx))
+          .when(Boolean(r.at), (el) => el.child(div().text_size(11).text_color(t.dim).child(clock(r.at))))));
   }
 
   // ---- find (#23) ---------------------------------------------------------------------------------
@@ -813,8 +819,8 @@ export default class CoordinatorChat extends View {
     const pick = can ? this.pickShown() : null;
     const list = can ? this.suggestions(cx) : [];
     const sel = Math.min(this.slashSel, Math.max(0, list.length - 1));
-    return v_flex().id("collie-chat-box").w_full().px(16).py(10).gap(6).border_t(1).border_color(t.border)
-      .child(div().w_full().rounded(RADIUS.card).border_1().border_color(t.border).bg(t.raised).overflow_hidden()
+    return v_flex().id("collie-chat-box").w_full().max_w(COLUMN + 28).mx_auto().px(14).pt(8).pb(4).gap(6)
+      .child(div().w_full().rounded(10).border_1().border_color(t.input).bg(t.background).overflow_hidden()
         .when(list.length > 0, (el) => el.child(this.slashList(t, list, sel, cx)))
         .when(this.files.length > 0, (el) => el.child(this.tiles(t, cx)))
         .child(div().px(10).py(6).child(Textarea.new(this.box).w_full().text_size(13).text_color(t.foreground)))
@@ -826,7 +832,7 @@ export default class CoordinatorChat extends View {
           onClick: (_e, cx) => this.pickFiles(cx) }))
         .child(div().flex_1())
         .when(Boolean(pick?.agent), (el) => el.child(this.pickButton(t, cx)))
-        .when(can, (el) => el.child(button("collie-chat-send", "Send", { kind: "primary", onClick: (_e, cx) => this.enter(cx, false) }))));
+        .when(can, (el) => el.child(button("collie-chat-send", "", { kind: "primary", icon: "mods/collie-chat/send.svg", onClick: (_e, cx) => this.enter(cx, false) }))));
   }
 
   // The box's own keys: the "/" list's Up / Down / Tab / Escape, then Enter sending (Shift+Enter a new line).
