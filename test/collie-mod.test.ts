@@ -499,4 +499,9 @@ describe("chrome / tabs / settings / toasts 自包含（#8）", () => {
     for (const gone of ["spaces-chat", "pane-chat", "chat-call", "chat"]) expect(mods).not.toContain(gone);
     expect(ids).not.toContain("chat-call");
   });
+
+  test("service unit 的 PATH 包含 collie helper 目录", () => {
+    const source = file("bin/collie");
+    expect(source).toContain("{root}/.local/bin:{root}/.config/herdr-app/bin:");
+  });
 });

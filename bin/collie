@@ -533,7 +533,7 @@ def service_unit(root: Path, bun: str, main: Path) -> tuple[Path, str]:
   <key>EnvironmentVariables</key><dict>
     <key>HOME</key><string>{root}</string>
     <key>HERDR_INBOX_STATE</key><string>{state}</string>
-    <key>PATH</key><string>{Path(bun).parent}:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+    <key>PATH</key><string>{root}/.local/bin:{root}/.config/herdr-app/bin:{Path(bun).parent}:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
@@ -551,7 +551,7 @@ After=network-online.target
 ExecStart={bun} {main}
 Environment=HOME={root}
 Environment=HERDR_INBOX_STATE={state}
-Environment=PATH={Path(bun).parent}:/usr/local/bin:/usr/bin:/bin
+Environment=PATH={root}/.local/bin:{root}/.config/herdr-app/bin:{Path(bun).parent}:/usr/local/bin:/usr/bin:/bin
 Restart=always
 RestartSec=2
 
