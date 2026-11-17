@@ -15,12 +15,12 @@ AGENTS = {"claude": ["claude"], "codex": ["codex", "--no-daemon"]}
 
 # ---- the person's settings ------------------------------------------------------------------
 
-SETTINGS = os.environ.get("HERDR_TASK_SETTINGS") or os.path.join(HOME, ".herdr", "shepherdr.json")
+SETTINGS = os.environ.get("COLLIE_TASK_SETTINGS") or os.environ.get("HERDR_TASK_SETTINGS") or os.path.join(HOME, ".herdr", "shepherdr.json")
 # The role instructions are herdr-core templates (`hc templates` lists them): assistant.md (the
 # coordinator's), worker.md and reviewer.md. Workers and reviewers used ~/.herdr/instructions.
-TEMPLATES = os.environ.get("HERDR_TASK_TEMPLATES") or os.path.join(HOME, ".config", "herdr-core", "templates")
+TEMPLATES = os.environ.get("COLLIE_TASK_TEMPLATES") or os.environ.get("HERDR_TASK_TEMPLATES") or os.path.join(HOME, ".config", "herdr-core", "templates")
 OLD_INSTRUCTIONS = os.path.join(HOME, ".herdr", "instructions")
-ASSISTANT_TEMPLATES = ("assistant", "coordinator")  # "coordinator": Assistants started before the rename
+ASSISTANT_TEMPLATES = ("assistant", "coordinator", "collie-coordinator")  # "coordinator": Assistants started before the rename
 DEFAULTS = {"tasks": {"merge": "ask", "review_rounds": 0, "must_fix": "major", "max_running": MAX_RUNNING, "worktrees": True,
                       "start_notes": "", "finish_notes": "", "archive_after": 7, "proof": True, "base": "", "branch": ""},
             "automations": {"enabled": True}, "worker": {}, "reviewer": {}, "coordinator": {}, "backup": {},
