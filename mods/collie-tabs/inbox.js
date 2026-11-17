@@ -33,7 +33,6 @@
 // Edit lib/inbox.js, never a mod's copy, then run bin/sync-shared.
 
 import { LINE_MAX, REASONS, fit, reqReason, reportReason } from "./core/needs.js";
-import { SH } from "./core/paths.js";
 import { notifies, spaceOfTerminal } from "./notify.js";
 import { toast, toastWho as whoOf } from "./lib/ui.js";
 import { exec, appHome, home, focused, shared, setShared, watchFolder, readTextFile, writeTextFile, playSound, settings, run, layout } from "herdr";
@@ -231,7 +230,7 @@ function readTasks() {
 }
 
 async function readTasksNow() {
-  const r = await exec("sh", ["-c", SH + 'ls "$SHEP_TASKS/.remote" 2>/dev/null; true']).catch(() => null);
+  const r = await exec("sh", ["-c", 'ls "$1/.remote" 2>/dev/null; true', "x", taskStore()]).catch(() => null);
   const where = [null, ...(r?.stdout ?? "").split("\n").filter(Boolean)];
   const tasks = [], autos = [];
   for (const machine of where) {
