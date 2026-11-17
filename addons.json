@@ -15,7 +15,8 @@
   "needs": {},
   "helpers": [
     "collie-sync",
-    "collie-task"
+    "collie-task",
+    "collie-ticket"
   ],
   "templates": [
     "collie-coordinator.md",

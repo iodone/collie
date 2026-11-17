@@ -1,0 +1,98 @@
+#!/usr/bin/env bun
+/**
+ * collie-ticket: the only machine-state write path exposed to the coordinator.
+ *
+ * `create` posts to the running collie service, which builds a protocol-valid Decision
+ * (state=open, one spawn_task, run.kind) and dispatches the worker once. There is no
+ * second headless coordinator turn here, unlike collie-request.
+ */
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { request } from "node:http";
+
+const argv = process.argv.slice(2);
+const command = argv[0];
+const args = argv.slice(1);
+const value = (name: string) => {
+  const index = args.indexOf(name);
+  return index === -1 ? undefined : args[index + 1];
+};
+const stateDir = value("--state-dir") ?? join(homedir(), ".local", "state", "collie");
+
+const usage = [
+  "usage:",
+  "  collie-ticket create --space S --title T --brief FILE|- [--kind build|review] [--json] [--state-dir DIR]",
+  "  collie-ticket show --decision ID|--ticket REF [--json] [--state-dir DIR]",
+].join("\n");
+
+function fail(message: string, code = 1): never {
+  console.error(message);
+  process.exit(code);
+}
+
+function create(payload: Record<string, unknown>): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const req = request({
+      socketPath: join(stateDir, "service.sock"), path: "/ticket", method: "POST",
+      headers: { "content-type": "application/json" },
+    }, (res) => {
+      let body = "";
+      res.on("data", (chunk) => { body += chunk; });
+      res.on("end", () => {
+        if (res.statusCode === 200) {
+          try { resolve(JSON.parse(body)); } catch (error) { reject(error); }
+        } else {
+          let message = body;
+          try { message = JSON.parse(body).error ?? body; } catch {}
+          reject(new Error(message));
+        }
+      });
+    });
+    req.on("error", reject);
+    req.end(JSON.stringify(payload));
+  });
+}
+
+if (command === "create") {
+  const space = value("--space");
+  const title = value("--title");
+  const source = value("--brief");
+  const kind = value("--kind") ?? "build";
+  if (!space || !title || !source) fail(usage, 2);
+  if (kind !== "build" && kind !== "review") fail(`collie-ticket: --kind must be build or review`, 2);
+  let brief: string;
+  if (source === "-") {
+    brief = readFileSync(0, "utf8");
+  } else {
+    if (!existsSync(source)) fail(`collie-ticket: cannot read brief ${source}`);
+    brief = readFileSync(source, "utf8");
+  }
+  try {
+    const result = await create({ space, title, brief, kind });
+    console.log(JSON.stringify(result));
+  } catch (error) {
+    fail(`collie-ticket: ${error instanceof Error ? error.message : String(error)}`);
+  }
+} else if (command === "show") {
+  const decisionId = value("--decision");
+  const ticketRef = value("--ticket");
+  if (!decisionId && !ticketRef) fail(usage, 2);
+  const queuePath = join(stateDir, "queue.json");
+  if (!existsSync(queuePath)) fail(`collie-ticket: no queue at ${queuePath}`);
+  const queue = JSON.parse(readFileSync(queuePath, "utf8"));
+  const decision = (queue.decisions ?? []).find((item: any) =>
+    (decisionId && item.id === decisionId) || (ticketRef && item.run?.task_ref === ticketRef),
+  );
+  if (!decision) fail(`collie-ticket: no decision for ${decisionId ?? ticketRef}`);
+  console.log(JSON.stringify({
+    decision_id: decision.id,
+    state: decision.state,
+    space: decision.space,
+    ticket_ref: decision.run?.task_ref ?? null,
+    kind: decision.run?.kind ?? "build",
+    why: decision.why,
+  }));
+} else {
+  fail(usage, 2);
+}
