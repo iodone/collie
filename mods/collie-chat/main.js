@@ -111,7 +111,7 @@ export default class CoordinatorChat extends View {
     }
     this.origin = P.terminal ?? null;
     this.addr = this.origin;
-    this.readOnly = Boolean(P.terminal);
+    this.readOnly = Boolean(P.readOnly);
     this.role = P.role ?? null;
     this.slot = P.slot ?? null;
     // A restored/opened-elsewhere chat may have lost the shared slot record; rebuild it so the
@@ -801,7 +801,7 @@ export default class CoordinatorChat extends View {
         .child(h_flex().child(button(`sub-open-${h.address}`, WORDS.subOpen, {
           onClick: (_e, cx) => {
             cx.stop_propagation();
-            openOverlay({ mod: "collie-chat", kind: "dialog", width: 760, height: 0.85, props: { terminal: h.address, title: h.label } });
+            openOverlay({ mod: "collie-chat", kind: "dialog", width: 760, height: 0.85, props: { terminal: h.address, title: h.label, readOnly: true } });
           } }))));
   }
 
