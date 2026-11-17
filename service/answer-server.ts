@@ -2,7 +2,20 @@ import { createServer } from "node:http";
 import type { InboxService } from "./main.ts";
 
 export function startAnswerServer(service: InboxService, socketPath: string) {
+  const startedAt = Date.now();
   return createServer((request, response) => {
+    if (request.method === "GET" && request.url === "/health") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        ok: true,
+        service: "collie",
+        pid: process.pid,
+        uptime_ms: Date.now() - startedAt,
+        state_dir: service.stateDir,
+        decisions: service.ledger.decisions.length,
+      }));
+      return;
+    }
     if (request.method !== "POST" || !["/answer", "/request"].includes(request.url ?? "")) {
       response.writeHead(404).end();
       return;

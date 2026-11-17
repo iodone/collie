@@ -511,6 +511,38 @@ def remove_empty_parents(path: Path, stop: Path, preserve: Path) -> None:
         path = path.parent
 
 
+def service_status(args) -> int:
+    root = args.root.expanduser().resolve()
+    socket_path = target_path(root, STATE / "service.sock")
+    if not socket_path.exists():
+        print(f"collie service is not running (no socket at {socket_path})", file=sys.stderr)
+        return 1
+    import socket
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    client.settimeout(3)
+    try:
+        client.connect(str(socket_path))
+        client.sendall(b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        chunks = []
+        while True:
+            chunk = client.recv(65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    except OSError as exc:
+        print(f"collie service did not answer: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        client.close()
+    raw = b"".join(chunks)
+    head, _, body = raw.partition(b"\r\n\r\n")
+    if b" 200 " not in head.split(b"\r\n", 1)[0]:
+        print(f"collie service health failed: {head.decode(errors='replace')}", file=sys.stderr)
+        return 1
+    print(body.decode(errors="replace"))
+    return 0
+
+
 def uninstall(args) -> int:
     root = args.root.expanduser().resolve()
     validate_root(root)
@@ -578,6 +610,11 @@ def parser() -> argparse.ArgumentParser:
     command = sub.add_parser("doctor")
     command.add_argument("--root", type=Path, default=Path.home())
     command.set_defaults(function=doctor)
+    service = sub.add_parser("service")
+    service_sub = service.add_subparsers(dest="service_command", required=True)
+    status = service_sub.add_parser("status")
+    status.add_argument("--root", type=Path, default=Path.home())
+    status.set_defaults(function=service_status)
     command = sub.add_parser("uninstall")
     common(command)
     command.set_defaults(function=uninstall)

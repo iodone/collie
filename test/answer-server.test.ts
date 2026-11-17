@@ -50,3 +50,32 @@ describe("Inbox detail answer socket", () => {
     expect(service.ledger.decisions[0].occurrence.hops).toBe(0);
   });
 });
+
+function get(socketPath: string, path: string): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const req = request({ socketPath, path, method: "GET" }, (res) => {
+      let text = "";
+      res.on("data", (chunk) => { text += chunk; });
+      res.on("end", () => resolve({ status: res.statusCode, body: JSON.parse(text) }));
+    });
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+describe("Collie service health", () => {
+  test("GET /health reports the running service", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "collie-health-"));
+    paths.push(dir);
+    const service = new InboxService({ stateDir: dir, ruleset });
+    const socket = join(dir, "service.sock");
+    servers.push(startAnswerServer(service, socket));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const response = await get(socket, "/health");
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ ok: true, service: "collie", state_dir: dir });
+    expect(response.body.pid).toBeGreaterThan(0);
+    expect(response.body.uptime_ms).toBeGreaterThanOrEqual(0);
+  });
+});
