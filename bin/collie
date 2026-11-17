@@ -23,6 +23,8 @@ STATE = Path(".local/state/collie")
 RUNTIME = Path(".local/share/collie")
 HELPERS = Path(".local/bin")
 SOURCE = Path(__file__).resolve().parent.parent
+# Herdr ships these; collie's layout may name them but must not install or doctor them.
+HERDR_MODS = {"pane", "spaces", "workspace-chrome", "workspace-status"}
 
 
 class InstallError(Exception):
@@ -555,7 +557,7 @@ def doctor(args) -> int:
         read_json(addons_path)
         check(True, "add-on metadata is valid JSON")
         layout = read_json(app_root(root) / "layouts/collie.json")
-        for mod in sorted(layout_mods(layout)):
+        for mod in sorted(layout_mods(layout) - HERDR_MODS):
             check((app_root(root) / "mods" / mod).is_dir(), f"layout mod `{mod}` is installed")
     except InstallError as exc:
         check(False, str(exc))
