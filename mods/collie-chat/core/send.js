@@ -1,7 +1,8 @@
 // Sending the person's words to the Coordinator's agent: the reply tag line, then hc send. When the agent waits on
 // its own dialog in its terminal (a question, a permission), Esc closes it and the words go as a message ("Reply
 // instead…"). Claude Code holds a message typed mid-turn until its turn ends: its own "send now" (Ctrl+Enter) makes
-// it steer at once. Ported from shepherdr's core/send.js, without task mentions and reactions (#7 Slice 1).
+// it steer at once. Ported from shepherdr's core/send.js, without task mentions (#7 Slice 1); a reaction's tag line is
+// reactionLine() (#22).
 // io = { hc(args) -> Promise<{ code, stdout, stderr }>, sleep(ms), status() -> the agent's status now }.
 
 import { excerpt } from "./chat-log.js";
@@ -18,6 +19,10 @@ export function messageBody({ text, quote = null, tags = "" }) {
   const reply = quote ? `<hc reply-to="${excerpt(quote, 80)}"/>\n` : "";
   return reply + tags + text;
 }
+
+// The person's reaction on a message (or its removal): one tag line to the agent, naming the message by its first
+// words (core/chat-log.js reactionLines() reads it back the same way).
+export const reactionLine = (emoji, text, on = true) => `<hc from="person" ${on ? "reaction" : "reaction-removed"}="${emoji}" to="${excerpt(text)}"/>`;
 
 // The agent waits on its own dialog: Esc closes it, then the words go once it takes typing again.
 export async function replyInstead(io, addr, text) {

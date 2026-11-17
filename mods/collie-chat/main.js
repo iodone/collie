@@ -10,8 +10,11 @@
 // tab's and slot's labels kept). The box takes files (attach.js, #20: a drop, a paste, the desktop's picker) and sends
 // their paths with the message, copying them to another machine first; images show as thumbnails and open in the
 // viewer (viewer.js). Typing "/" lists the agent's commands (core/slash.js); "#" lists the spaces its machine reaches
-// (core/mentions.js). The rest of shepherdr's chat (threads, Tasks panel, voice, reactions, secrets, artifacts,
-// background jobs: #7 Slice 2+) is deliberately absent: this is the coordinator conversation only.
+// (core/mentions.js). #22 added the chat's cards and states: reactions (chips under a message, the emoji picker in
+// reactions.js), secrets an agent asks for by name (secret-card.js, core/secrets.js into Collie's own store), the
+// artifacts a publish made (a card that opens the collie-artifacts viewer), and what the agent left running in the
+// background (core/bg-jobs.js). Shepherdr's threads, Tasks panel and voice stay out: this is the Coordinator's
+// conversation only.
 
 import { View, div, image, svg } from "gpui-kit";
 import { h_flex, v_flex, TextareaState, Textarea, ScrollHandle, TextView } from "gpui-base";
@@ -19,9 +22,15 @@ import { appHome, exec, hc, home, openOverlay, props, readTextFile, run, setShar
 import { terminals, panes, spaces, inRender } from "./live.js";
 import { FIND, LOG, Conversation, records, summary, excerpt } from "./core/chat-log.js";
 import { WORDS, LOST, lostMessage, shellWord, sessionStarted, sessionFailed, notSent, dayOf, dayLabel, clock,
-  firstUser, firstKeys, literal, briefLabel, newsLine,
+  firstUser, firstKeys, literal, briefLabel, newsLine, published, artifactLine, resolveArtifacts, bgGroups,
+  subagentsOf, subagentWord, ago,
 } from "./core/chat-view.js";
-import { sendBody, refusal, messageBody } from "./core/send.js";
+import { sendBody, refusal, messageBody, reactionLine } from "./core/send.js";
+import { BgJobs } from "./core/bg-jobs.js";
+import * as secrets from "./core/secrets.js";
+import { SecretCards } from "./secret-card.js";
+import { frequent, used } from "./core/emoji.js";
+import { openViewer, artifactCli } from "./lib/artview.js";
 import { asPerson } from "./core/person.js";
 import { NAMES, argvFor, asPick, current as currentOf, fitPick, freshArgv, line, samePick, sessionOf } from "./core/agents.js";
 import { cleanCommand } from "./core/clean-env.js";
@@ -39,6 +48,7 @@ import { messageText, names, imagePaths } from "./core/attach.js";
 import * as slash from "./core/slash.js";
 import * as mentions from "./core/mentions.js";
 import { ImageViewer, VIEW } from "./viewer.js";
+import EmojiPicker from "./reactions.js";
 
 const PAGE = 200;
 const KEEP = 2000;
@@ -66,6 +76,11 @@ export default class CoordinatorChat extends View {
     // The image viewer is this mod too, in an overlay (openImages/openText): it draws none of the chat.
     if (P.viewer) {
       this.viewer = new ImageViewer(P.viewer, cx);
+      return;
+    }
+    // So is the emoji picker (reactions.js), opened by openReactions().
+    if (P.react) {
+      this.reactions = new EmojiPicker(P.react, cx);
       return;
     }
     this.origin = P.terminal ?? null;
@@ -132,6 +147,41 @@ export default class CoordinatorChat extends View {
       toTerminal: () => this.toTerminal(),
       chatAbout: () => this.box.focus?.(),
     });
+    // Secrets an agent asks for by name (secret-card.js): its terminal's collie.secret.ask.NAME labels, each a masked
+    // card here; the value lands in Collie's own vault (~/.local/share/collie/secrets/vault.json), never in the log.
+    const chat = this;
+    this.secretCards = new SecretCards({
+      readVault: () => chat.readVault(),
+      writeVault: (text) => chat.writeVault(text),
+      say: (line, cx) => chat.say(line, cx),
+      // This window's machine keeps them; an agent on another machine can't use them yet (no vault sync: #16).
+      get where() { return chat.machine ? `this computer, not ${chat.machine}` : "This computer"; },
+    });
+    this.secretCards.onEnd = (ask, how) => this.secretEnded(ask, how);
+    this.secretEnds = [];
+    // Reactions: the emoji picker's request (shared "collie-chat.reactreq"), your reactions just sent (shown until the
+    // log says the same), how often and how lately the person used each emoji, and where the react button was pressed.
+    this.reactReqAt = shared("collie-chat.reactreq")?.at ?? null;
+    this.myReacts = new Map();
+    this.uses = {};
+    this.reactAt = null;
+    this.usePath = `${appHome()}/data/chat-emoji-uses.json`;
+    if (!this.readOnly) cx.spawn(async (cx) => {
+      try { this.uses = JSON.parse(await readTextFile(this.usePath)) ?? {}; } catch {}
+      cx.notify();
+    });
+    // Artifacts a publish made (core/task-artifacts.js, lib/artview.js): the machine's registry, read when the
+    // conversation has a publish and again while one isn't listed yet.
+    this.arts = null;
+    this.artsAt = 0;
+    this.artsLoading = false;
+    // What the agent left running in the background (core/bg-jobs.js): its shells and watchers, live, each stoppable;
+    // the row opened over the box, the last lines it printed, and a Stop on its way.
+    this.bgJobs = new BgJobs();
+    this.jobOpen = null;
+    this.jobOut = new Map();
+    this.jobStopping = new Set();
+    this.groupOpen = {};
     // CLI start screens (screens.js): trust this folder, sign in, ... while this agent hasn't started its session.
     this.screens = new ScreenWatch();
     this.screenBusy = new Set();
@@ -155,6 +205,8 @@ export default class CoordinatorChat extends View {
     // The pane header's Terminal on a chat with no agent yet (mods/collie-pane-chat), and the model menu's picks.
     cx.timer.every(1000, (cx) => this.startRequest(cx));
     cx.timer.every(1000, (cx) => this.pickTicks(cx));
+    // The emoji picker's pick (shared "collie-chat.reactreq"), answered once.
+    cx.timer.every(500, (cx) => this.reactTicks(cx));
     // Before the first message: what the last chat saved in Collie's settings (the picker's choice), else
     // props.settings (the Coordinator's configured CLI), else the agents' own defaults. pickReady lets a first message
     // sent at once wait for it.
@@ -177,27 +229,34 @@ export default class CoordinatorChat extends View {
   render(cx) {
     if (this.picker) return this.picker.render(cx);
     if (this.viewer) return this.viewer.render(cx);
+    if (this.reactions) return this.reactions.render(cx);
     return inRender(() => this.draw(cx));
   }
 
   draw(cx) {
     const t = theme();
-    const rows = this.rows();
+    const rows = this.rows(cx);
     // The images the box and the rows show: each is linked for image() once, its size read with it.
     this.needViews([...this.files.filter((f) => f.image).map((f) => f.path), ...rows.flatMap((r) => r.paths ?? [])], cx);
     // Newest at the bottom: the last row is on screen while the person is at the bottom.
     if (this.pinned && rows.length) this.scroll.scroll_to_item(rows.length - 1);
+    // What the agent left running in the background, over the box (core/bg-jobs.js, #22).
+    const bg = this.readOnly ? null : this.background(t, cx);
     return div().id("collie-chat").flex().flex_col().size_full().min_h(0).bg(t.background)
       .child(this.list(t, rows, cx))
+      .when(Boolean(bg), (el) => el.child(bg))
       .child(this.composer(t, cx));
   }
 
   // ---- the conversation's rows -----------------------------------------------------------------
 
-  rows() {
+  rows(cx) {
     const out = [];
     const items = this.conv?.items ?? [];
     const first = firstUser(items);
+    // The artifacts this conversation's publishes made (lib/artview.js's registry): a card for the latest publish of
+    // one, a quiet line for its earlier ones, and a "Publishing…" line while the registry doesn't list it yet.
+    const arts = this.resolveArts(items);
     let day = null;
     items.forEach((x, i) => {
       const at = x.at ?? 0;
@@ -212,6 +271,10 @@ export default class CoordinatorChat extends View {
           : { kind: "user", id: x.id, at, text: x.text ?? "", from: x.from ?? null, images: x.images ?? 0, paths: x.paths ?? null });
       } else if (x.kind === "agent") {
         out.push({ kind: "agent", id: x.id, at, text: x.text ?? "" });
+      } else if (x.kind === "artifact") {
+        const r = arts.get(x.id);
+        if (r) out.push({ kind: "artifact", id: x.id, art: r.id, title: r.title, text: r.title, version: r.version, v: r.v, line: !r.latest });
+        else if (Date.now() - (x.at ?? 0) < 180000) out.push({ kind: "artifact", id: x.id, pending: true, text: "" });
       } else if (x.kind === "tools" && x.steps?.length) {
         out.push({ kind: "tools", id: x.id, at, text: summary(x.steps) });
       } else if (x.kind === "news") {
@@ -226,12 +289,18 @@ export default class CoordinatorChat extends View {
       who: this.cliName(), busy: this.screenBusy.has(scr.id), error: this.screenErr.get(scr.id),
       press: (i, cx) => this.pressScreen(scr, i, cx), toTerminal: () => this.toTerminal() }) });
     for (const a of this.asks) out.push({ kind: "card", id: `card:${a.id}`, strips: this.cards.strips(a, { who: this.cliName() }) });
+    // The secrets it asks for by name (its terminal's labels): a masked card each, then those answered a moment ago.
+    const secretList = this.addr && !this.readOnly ? this.secretCards.items(this.addr) : [];
+    // Prepared every render, an empty list too: a gone ask's box is let go.
+    if (this.addr && !this.readOnly) this.secretCards.prepare(secretList, cx);
+    for (const a of secretList) out.push({ kind: "card", id: `card:secret:${a.name}`, strips: this.secretCards.strips(a, { who: this.cliName() }) });
     for (const e of this.askEnds) out.push({ kind: "askend", id: `ae:${e.id}`, at: e.at, text: `${e.title} · ${e.how}` });
+    for (const e of this.secretEnds) out.push({ kind: "secretend", id: `se:${e.id}`, at: e.at, text: `Secret: ${e.name} · ${e.how}` });
     // Sent from here but not in the log yet: shown as sent (or why not).
     for (const p of this.pending) out.push({ kind: p.failed ? "failed" : "user", id: p.id, at: p.at, text: p.text,
       error: p.failed ?? null, pending: !p.delivered, files: p.files ?? null, paths: p.paths ?? null });
     for (const m of this.queue) out.push({ kind: "queued", id: m.id, at: 0,
-      text: [m.text, ...(m.files ?? []).map((f) => f.name)].filter(Boolean).join(" · ") });
+      text: m.label ?? [m.text, ...(m.files ?? []).map((f) => f.name)].filter(Boolean).join(" · ") });
     if (this.note) out.push({ kind: "note", id: "note", at: 0, text: this.note });
     if (this.phase === "ended") out.push({ kind: "note", id: "ended", at: 0, text: WORDS.ended });
     if (this.phase === "unsupported") out.push({ kind: "failed", id: "unsupported", at: 0, text: "This terminal doesn't run Claude Code or Codex." });
@@ -258,7 +327,9 @@ export default class CoordinatorChat extends View {
     if (r.kind === "tools") return this.quiet(t, r);
     if (r.kind === "news") return this.quiet(t, r, { small: true });
     if (r.kind === "askend") return this.quiet(t, r, { small: true });
+    if (r.kind === "secretend") return this.quiet(t, r, { small: true });
     if (r.kind === "card") return this.card(t, r);
+    if (r.kind === "artifact") return this.artifact(t, r);
     if (r.kind === "queued") return this.quiet(t, r, { text: `${WORDS.inQueue} · ${excerpt(r.text, 100)}` });
     if (r.kind === "note") return this.quiet(t, r, { small: true });
     if (r.kind === "failed") return this.quiet(t, r, { danger: true });
@@ -272,12 +343,60 @@ export default class CoordinatorChat extends View {
             .text_color(t.foreground).child(TextView.markdown(`chat-md-${r.id}`, literal(this.mentionsIn(r.text)) || " ").selectable(true))))
           .when(Boolean(r.paths?.length), (el) => el.child(this.thumbs(t, r.paths, r.id, cx, { faded: r.pending })))
           .when(Boolean(r.error), (el) => el.child(div().text_size(11).text_color(t.ansi1).child(notSent(r.error))))
-          .child(div().text_size(11).text_color(t.dim).child(r.pending ? "Sending…" : clock(r.at))));
+          .child(h_flex().gap(8).items_center()
+            .child(this.reactions_(t, r, cx))
+            .child(div().text_size(11).text_color(t.dim).child(r.pending ? "Sending…" : clock(r.at)))));
     }
     // The agent's own words.
     return div().id(r.id).w_full().flex().flex_col().gap(2).px(2).py(2)
       .child(div().text_size(13).text_color(t.foreground).child(TextView.markdown(`chat-md-${r.id}`, r.text || " ").selectable(true)))
-      .when(Boolean(r.at), (el) => el.child(div().text_size(11).text_color(t.dim).child(clock(r.at))));
+      .child(h_flex().gap(8).items_center()
+        .child(this.reactions_(t, r, cx))
+        .when(Boolean(r.at), (el) => el.child(div().text_size(11).text_color(t.dim).child(clock(r.at)))));
+  }
+
+  // A published artifact: its card (the latest publish of it; earlier ones a quiet line), or a quiet line while the
+  // registry doesn't list it yet. Either way its press opens it in the collie-artifacts viewer (lib/artview.js).
+  artifact(t, r) {
+    const icon = (n) => svg("mods/collie-artifacts/artifacts.svg").size(n).flex_none();
+    if (r.pending || r.line) {
+      return h_flex().id(r.id).w_full().py(2).gap(6).items_center().text_size(12).text_color(t.dim)
+        .when(Boolean(r.art) && !r.pending, (el) => el.rounded(RADIUS.control).px(4).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.muted))
+          .on_click((_e, cx) => { cx.stop_propagation(); this.openArtifact(r); }))
+        .child(icon(12))
+        .child(div().min_w(0).truncate().child(r.pending ? WORDS.publishing : published(r.title, r.v)));
+    }
+    return h_flex().id(r.id).w_full().max_w(420).gap(10).items_center().px(10).py(8).rounded(RADIUS.card).cursor_pointer()
+      .bg(t.surface).border_1().border_color(t.border).hover((s) => s.bg(t.hover))
+      .on_click((_e, cx) => { cx.stop_propagation(); this.openArtifact(r); })
+      .child(div().size(32).flex_none().flex().items_center().justify_center().rounded(RADIUS.control).bg(t.raised).text_color(t.muted).child(icon(16)))
+      .child(v_flex().flex_1().min_w(0).gap(1)
+        .child(div().font_medium().text_color(t.foreground).truncate().child(r.title))
+        .child(div().text_size(12).text_color(t.dim).child(artifactLine(r.version))))
+      .child(h_flex().h(28).px(10).flex_none().items_center().rounded(RADIUS.control).border_1().border_color(t.input).bg(t.background)
+        .text_size(TEXT.label).font_medium().text_color(t.foreground).child(WORDS.open));
+  }
+
+  // A message's reactions: one chip per emoji (yours filled, the count when several people or a repeat), and the react
+  // button that opens the emoji picker over it.
+  reactions_(t, r, cx) {
+    const pills = r.text || r.paths?.length ? this.pills(r.id) : [];
+    // A read-only chat (another agent's conversation) shows its reactions and takes none; a message still being sent
+    // has no log id yet.
+    const live = !this.readOnly && !r.pending && !r.error;
+    const chip = (p) => h_flex().id(`pill-${r.id}-${p.emoji}`).h(20).px(6).gap(4).flex_none().items_center().rounded(10)
+      .bg(p.you ? t.selected : t.raised).border_1().border_color(p.you ? t.accent : t.border)
+      .when(live, (el) => el.cursor_pointer().hover((s) => s.bg(t.hover))
+        .on_click((_e, cx) => { cx.stop_propagation(); this.toggleReaction(r.id, r.text ?? "", p.emoji, cx); }))
+      .child(div().text_size(12).child(p.emoji))
+      .when(p.count > 1, (el) => el.child(div().text_size(TEXT.id).text_color(t.muted).child(String(p.count))));
+    return h_flex().id(`react-row-${r.id}`).gap(2).items_center()
+      .children(pills.map(chip))
+      .when(live, (el) => el.child(div().id(`react-${r.id}`).size(20).flex_none().flex().items_center().justify_center().rounded(10)
+        .cursor_pointer().hover((s) => s.bg(t.hover))
+        .on_mouse_down("left", (e) => { this.reactAt = e.position; })
+        .on_click((_e, cx) => { cx.stop_propagation(); this.openReactions(r); })
+        .child(svg("mods/collie-chat/react/smile-plus.svg").size(13).flex_none().text_color(t.dim))));
   }
 
   // A card (an ask, a start screen): its strips, one row each, looking like one card (strips.js).
@@ -299,6 +418,282 @@ export default class CoordinatorChat extends View {
     return h_flex().id("collie-chat-working").w_full().gap(8).items_center().py(4)
       .child(div().flex_1().text_size(11).text_color(t.muted).child(`${words} · ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`))
       .child(button("collie-chat-stop", "Stop", { onClick: (_e, cx) => this.stop(cx) }));
+  }
+
+  // ---- reactions (#22) ---------------------------------------------------------------------------
+
+  // A message's reactions as pills: { emoji, you, agent, count }, the log's word with yours just sent.
+  pills(id) {
+    if (!id) return [];
+    const list = [...(this.conv?.reactions?.get(id) ?? [])];
+    const mine = this.myReacts.get(id);
+    if (mine) for (const [emoji, on] of mine) {
+      const i = list.findIndex((r) => r.by === "you" && r.emoji === emoji);
+      if (on && i < 0) list.push({ emoji, by: "you" });
+      if (!on && i >= 0) list.splice(i, 1);
+    }
+    const by = new Map();
+    for (const r of list) {
+      const p = by.get(r.emoji) ?? { emoji: r.emoji, you: false, agent: false, count: 0 };
+      p[r.by === "you" ? "you" : "agent"] = true;
+      p.count++;
+      by.set(r.emoji, p);
+    }
+    return [...by.values()];
+  }
+
+  // The emoji picker (reactions.js), anchored to the react button that was pressed: its left edge at the button's,
+  // above it when there is room, else below.
+  openReactions(row) {
+    const W = 360, H = 420;
+    const p = this.reactAt;
+    const at = p ? { x: Math.max(8, p.x - W + 28), y: Math.max(8, p.y - H - 8) } : "pointer";
+    const fr = frequent(this.uses, 18);
+    openOverlay({ mod: "collie-chat", kind: "popup", frame: "none", width: W, height: H, at,
+      props: { react: { pane: this.myPane(), target: row.id, text: row.text ?? "", height: H, width: W,
+        frequent: fr, mine: this.pills(row.id).filter((p) => p.you).map((p) => p.emoji) } } });
+  }
+
+  // The picker's answer, once each: only this chat's pane's, and only for 5 s (an older request is another chat's).
+  reactTicks(cx) {
+    if (this.readOnly) return;
+    const mine = this.myPane();
+    const rq = shared("collie-chat.reactreq");
+    if (!mine || !rq || rq.pane !== mine || rq.at === this.reactReqAt || !(Date.now() - rq.at < 5000)) return;
+    this.reactReqAt = rq.at;
+    cx.timer.after(0, (cx) => this.toggleReaction(rq.target, rq.text, rq.emoji, cx));
+  }
+
+  // How often the person used an emoji (data/chat-emoji-uses.json, core/emoji.js used()): the picker's frequent list.
+  useEmoji(emoji) {
+    this.uses = used(this.uses, emoji);
+    (async () => {
+      await exec("mkdir", ["-p", `${appHome()}/data`]).catch(() => null);
+      await writeTextFile(this.usePath, JSON.stringify(this.uses), null).catch(() => null);
+    })();
+  }
+
+  // The person's reaction on (or off) a message: one tag line to the agent, shown at once. While the agent waits on
+  // the person (its own dialog, a question), it waits in the queue instead.
+  toggleReaction(id, text, emoji, cx) {
+    const on = !this.pills(id).some((p) => p.emoji === emoji && p.you);
+    const mine = new Map(this.myReacts.get(id) ?? []);
+    mine.set(emoji, on);
+    this.myReacts.set(id, mine);
+    if (on) this.useEmoji(emoji);
+    const line = reactionLine(emoji, text, on);
+    const st = this.status();
+    if (st === "blocked" || this.asks.length) {
+      this.queue.push({ id: `r${Date.now()}`, text: line, files: [], quote: null, raw: true, label: on ? `${emoji} reaction` : `${emoji} reaction removed` });
+      this.saveSoon(cx);
+    } else if (this.addr) personHc(["send", this.addr, line]);
+    cx.notify();
+  }
+
+  // ---- secrets an agent asks for by name (#22) ---------------------------------------------------
+
+  // Collie's own vault on this machine (~/.local/share/collie/secrets/vault.json): read, and written 0600 in a 0700
+  // folder (core/secrets.js kept()). Never Shepherdr's ~/.herdr/vault.json.
+  vaultPath() {
+    return secrets.vaultFile({ home: home() });
+  }
+
+  async readVault() {
+    return await readTextFile(this.vaultPath()).catch(() => null);
+  }
+
+  async writeVault(text) {
+    const path = this.vaultPath();
+    const dir = path.slice(0, path.lastIndexOf("/"));
+    await exec("sh", ["-c", 'mkdir -p "$1" && chmod 700 "$1"', "x", dir]);
+    await writeTextFile(path, text, null);
+    await exec("chmod", ["600", path]);
+  }
+
+  // The words the agent hears (a kept or a declined secret): never the value. A blocked agent gets them queued.
+  say(line, cx) {
+    if (!this.addr) return;
+    if (this.status() === "blocked" || this.asks.length) {
+      this.queue.push({ id: `s${Date.now()}`, text: line, files: [], quote: null, raw: true, label: "Answer" });
+      this.saveSoon(cx);
+      cx.notify();
+      return;
+    }
+    personHc(["send", this.addr, line]);
+  }
+
+  // A secret card answered here: its quiet line, at the card's moment.
+  secretEnded(ask, how) {
+    this.secretEnds = [...this.secretEnds, { id: `${ask.address}:${ask.name}:${Date.now()}`, name: ask.name, how, at: Date.now() }].slice(-20);
+  }
+
+  // ---- artifacts a publish made (#22) ------------------------------------------------------------
+
+  // Which artifact each publish in the conversation made: the first version this agent published from a few seconds
+  // before the call to five minutes after, not already taken (core/chat-view.js resolveArtifacts()).
+  resolveArts(items) {
+    return resolveArtifacts(items, this.arts, String(this.addr ?? "").split("/").pop());
+  }
+
+  // Every artifact on the agent's machine (collie-artifact list --all, the same registry mods/collie-artifacts reads),
+  // read when the conversation has a publish, again every few seconds while one isn't listed yet.
+  loadArts(cx) {
+    if (this.artsLoading || this.readOnly || Date.now() - (this.artsAt ?? 0) < 3000) return;
+    if (!(this.conv?.items ?? []).some((x) => x.kind === "artifact")) return;
+    this.artsLoading = true;
+    cx.spawn(async (cx) => {
+      try {
+        const out = await artifactCli(this.machine, ["list", "--all"]);
+        this.arts = out?.artifacts ?? [];
+      } catch {}
+      this.artsAt = Date.now();
+      this.artsLoading = false;
+      cx.notify();
+    });
+  }
+
+  // An artifact in the collie-artifacts viewer (lib/artview.js): a modal over the chat, that version when an earlier
+  // publish's line was pressed, else the latest.
+  openArtifact(row) {
+    openViewer({ id: row.art, title: row.title, version: row.line && row.v ? row.v : row.version, latest: row.version,
+      machine: this.machine ?? null, modal: true });
+  }
+
+  // ---- what the agent left running in the background (#22) ---------------------------------------
+
+  // Its shells and watchers (core/bg-jobs.js): live while its agent is, none once it ended or this chat only reads.
+  jobs() {
+    if (!this.conv || this.phase !== "ready" || this.readOnly || !this.kind) return [];
+    return this.bgJobs.list(this.kind, this.conv);
+  }
+
+  // Runs a shell script on the agent's machine (core/bg-jobs.js: its first argument is $0).
+  runThere(script, args) {
+    return exec("sh", ["-c", script, ...args], { on: this.machine });
+  }
+
+  // A look at the agent's processes when one is due, and the open row's last lines again.
+  async lookJobs(cx) {
+    const pid = terminals().find((x) => x.address === this.addr)?.foreground?.pid;
+    if (!pid || !this.conv || this.phase !== "ready") return;
+    const jobs = this.bgJobs;
+    if (jobs.due(this.kind, this.conv) && await jobs.look((s, a) => this.runThere(s, a), this.kind, pid, this.conv)) cx.notify();
+    const open = this.jobs().find((j) => j.id === this.jobOpen);
+    if (this.jobOpen && !open) { this.jobOpen = null; cx.notify(); }
+    if (open?.path) {
+      const text = await jobs.output((s, a) => this.runThere(s, a), open);
+      if (text !== null && text !== this.jobOut.get(open.id)) { this.jobOut.set(open.id, text); cx.notify(); }
+    }
+  }
+
+  // Stop on an open row: its processes end; its CLI then tells the agent, as when it stops one itself.
+  stopJob(job, cx) {
+    const pid = terminals().find((x) => x.address === this.addr)?.foreground?.pid;
+    if (!pid || this.jobStopping.has(job.id)) return;
+    this.jobStopping.add(job.id);
+    const jobs = this.bgJobs;
+    cx.spawn(async (cx) => {
+      await jobs.stop((s, a) => this.runThere(s, a), this.kind, pid, job).catch(() => {});
+      this.jobStopping.delete(job.id);
+      if (this.jobOpen === job.id) this.jobOpen = null;
+      cx.notify();
+    });
+  }
+
+  // Above the box: the Coordinator's own subagents at work, then its background shells and watchers, at most one row of
+  // each kind (bgGroups()): one shows as its own row (an icon, its name, how long), two or more as one row ("3
+  // background processes") that opens in place to the list of them. A shell's or watcher's row opens to its command,
+  // what it printed last (Claude Code's), and Stop; a subagent's opens to "Open its chat" (this mod, read-only).
+  background(t, rcx) {
+    const now = Date.now();
+    const kids = this.phase === "ended" ? [] : subagentsOf(terminals(), this.addr, now).map((k) => ({ ...k, kind: "child", id: `c:${k.address}`, label: k.title }));
+    const shown = [...kids, ...this.jobs()];
+    if (!shown.length) return null;
+    const age = (at) => div().flex_none().text_size(TEXT.id).text_color(t.dim).child(ago(at, now));
+    const row = (h) => {
+      if (h.kind === "child") return this.subagentRow(t, h, age, rcx);
+      const on = this.jobOpen === h.id;
+      const head = h_flex().id(`job-${h.id}`).w_full().h(24).px(6).gap(8).items_center().rounded(RADIUS.control).cursor_pointer().text_size(TEXT.label)
+        .when(on, (el) => el.bg(t.hover))
+        .hover((s) => s.bg(t.hover))
+        .on_click((_e, cx) => {
+          cx.stop_propagation();
+          this.jobOpen = on ? null : h.id;
+          cx.notify();
+          if (!on) cx.spawn(async (cx) => this.lookJobs(cx));
+        })
+        .child(svg(h.kind === "monitor" ? "mods/collie-chat/eye.svg" : "mods/collie-chrome/terminal.svg").size(12).flex_none().text_color(t.working))
+        .child(div().flex_1().min_w(0).truncate().font_medium().text_color(t.foreground).child(h.label ?? ""))
+        .child(age(h.at))
+        .child(svg(on ? "mods/collie-chat/chevron-up.svg" : "mods/collie-chat/chevron-down.svg").size(12).flex_none().text_color(t.dim));
+      if (!on) return head;
+      const out = this.jobOut.get(h.id);
+      const lines = out === undefined ? null : out.split("\n").slice(-8).map((l) => (l.length > 200 ? l.slice(0, 199) + "…" : l));
+      const stopping = this.jobStopping.has(h.id);
+      return v_flex().w_full().child(head)
+        .child(v_flex().w_full().pl(26).pr(6).pt(4).pb(6).gap(6)
+          .child(div().w_full().text_size(TEXT.id).text_color(t.muted).child((h.cmd ?? "").length > 300 ? h.cmd.slice(0, 299) + "…" : h.cmd ?? ""))
+          .when(Boolean(h.path), (el) => el.child(v_flex().w_full().px(8).py(6).rounded(RADIUS.control).bg(t.surface).border_1().border_color(t.border)
+            .text_size(TEXT.id).text_color(t.dim)
+            .children(lines === null ? [div().child(WORDS.loading)] : lines.length && lines.some(Boolean) ? lines.map((l) => div().w_full().truncate().child(l || " ")) : [div().child(WORDS.noOutput)])))
+          .child(h_flex().child(stopping
+            ? h_flex().h(H.sm).px(10).items_center().text_size(TEXT.label).text_color(t.dim).child(WORDS.stopping)
+            : button(`job-stop-${h.id}`, WORDS.stop, { onClick: (_e, cx) => this.stopJob(h, cx) }))));
+    };
+    // two or more of a kind: one row, opening in place to each of them
+    const group = (g) => {
+      const on = Boolean(this.groupOpen[g.kind]);
+      const icon = g.kind === "proc" ? svg("mods/collie-chrome/terminal.svg").size(12).flex_none().text_color(t.working)
+        : g.status === "working" ? svg("mods/collie-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900)
+        : g.status === "needs" ? div().size(6).mx(3).flex_none().rounded(3).bg(t.ansi1)
+        : svg("mods/collie-chat/check.svg").size(12).flex_none().text_color(t.dim);
+      const head = h_flex().id(`bg-group-${g.kind}`).w_full().h(24).px(6).gap(8).items_center().rounded(RADIUS.control).cursor_pointer().text_size(TEXT.label)
+        .when(on, (el) => el.bg(t.hover))
+        .hover((s) => s.bg(t.hover))
+        .on_click((_e, cx) => { cx.stop_propagation(); this.groupOpen[g.kind] = !on; cx.notify(); })
+        .child(icon)
+        .child(div().flex_none().font_medium().text_color(t.foreground).child(g.words))
+        .when(g.kind === "sub", (el) => el.child(div().flex_none().text_color(g.status === "needs" ? t.ansi1 : t.dim).child(subagentWord(g.status))))
+        .child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(g.newest.label ?? ""))
+        .child(age(g.newest.ended ? now - (g.newest.ended - g.newest.at) : g.newest.at))
+        .child(svg(on ? "mods/collie-chat/chevron-up.svg" : "mods/collie-chat/chevron-down.svg").size(12).flex_none().text_color(t.dim));
+      if (!on) return head;
+      return v_flex().w_full().child(head).child(v_flex().w_full().pl(20).pt(2).children(g.items.map(row)));
+    };
+    return v_flex().id("collie-chat-bg").flex_none().w_full().px(14).pt(4)
+      .children(bgGroups(shown).map((g) => (g.words ? group(g) : row(g.items[0]))));
+  }
+
+  // One subagent over the box: its status (a spinner at work, red asking, a check once done), "Reviewer · Codex", its
+  // state in words and how long. It opens to what it does now and "Open its chat": its conversation in this mod, in a
+  // dialog, read-only.
+  subagentRow(t, h, age, rcx) {
+    const on = this.jobOpen === h.id && !h.ended;
+    const word = subagentWord(h.status);
+    const icon = h.status === "working" ? svg("mods/collie-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900)
+      : h.status === "needs" ? div().size(6).mx(3).flex_none().rounded(3).bg(t.ansi1)
+      : svg("mods/collie-chat/check.svg").size(12).flex_none().text_color(t.dim);
+    const head = h_flex().id(`sub-${h.address}`).w_full().h(24).px(6).gap(8).items_center().rounded(RADIUS.control).cursor_pointer().text_size(TEXT.label)
+      .when(on, (el) => el.bg(t.hover))
+      .hover((s) => s.bg(t.hover))
+      .on_click((_e, cx) => { cx.stop_propagation(); if (h.ended) return; this.jobOpen = on ? null : h.id; cx.notify(); })
+      .child(icon)
+      .child(div().min_w(0).truncate().font_medium().text_color(t.foreground).child(h.label))
+      .child(div().flex_none().text_color(h.status === "needs" ? t.ansi1 : t.dim).child(word))
+      .child(div().flex_1())
+      .child(age(h.ended ? Date.now() - (h.ended - h.at) : h.at))
+      .child(h.ended ? div().size(12).flex_none() : svg(on ? "mods/collie-chat/chevron-up.svg" : "mods/collie-chat/chevron-down.svg").size(12).flex_none().text_color(t.dim));
+    if (!on) return head;
+    const k = terminals().find((x) => x.address === h.address);
+    const now = typeof k?.status === "object" ? k.status?.msg : null;
+    return v_flex().w_full().child(head)
+      .child(v_flex().w_full().pl(26).pr(6).pt(4).pb(6).gap(6)
+        .when(Boolean(now), (el) => el.child(div().w_full().truncate().text_size(TEXT.id).text_color(t.dim).child(now)))
+        .child(h_flex().child(button(`sub-open-${h.address}`, WORDS.subOpen, {
+          onClick: (_e, cx) => {
+            cx.stop_propagation();
+            openOverlay({ mod: "collie-chat", kind: "dialog", width: 760, height: 0.85, props: { terminal: h.address, title: h.label } });
+          } }))));
   }
 
   // ---- the box ----------------------------------------------------------------------------------
@@ -636,8 +1031,23 @@ export default class CoordinatorChat extends View {
     // until it is answered (drainQueueNow).
     if (this.addr && openScreen(this.addr)) { this.queue.push(msg); cx.notify(); return; }
     // A card asks (a question, a permission, a plan): the words answer it, as typing in the CLI would.
-    if (this.asks.length && msg.text && !msg.files?.length) { this.cards.replyWith(this.asks[0], msg.text, cx); return; }
+    if (!msg.raw && this.asks.length && msg.text && !msg.files?.length) { this.cards.replyWith(this.asks[0], msg.text, cx); return; }
     if (this.phase !== "ready") { this.queue.push(msg); cx.notify(); return; }
+    // A reaction's or a secret's line goes as it is, and is never shown as a message of the person's or awaited in the
+    // log (no pending row): the log's own slot says what became of it.
+    if (msg.raw) {
+      cx.spawn(async (cx) => {
+        const r = await sendBody(this.io(cx), this.addr, this.kind, msg.text).catch((e) => ({ code: 1, stderr: String(e?.message ?? e) }));
+        if (r.code !== 0) {
+          // Not retried on its own (a reaction that never lands is not worth a loop): one quiet line says so.
+          this.note = notSent(refusal(r).message);
+          cx.timer.after(6000, (cx) => { this.note = null; cx.notify(); });
+          cx.notify();
+        }
+      });
+      return;
+    }
+    // The person's words get their reply tag.
     const body = messageBody({ text: msg.text });
     // A command with its own menu in the CLI: after sending, show it where it works (the terminal).
     const menu = msg.files?.length ? null : slash.opensMenu(this.kind, msg.text);
@@ -1285,8 +1695,15 @@ export default class CoordinatorChat extends View {
       this.start = this.records[0].off;
       this.rebuild();
     } else this.conv.feed(recs);
+    // Your reactions just sent stay shown as sent until the log says the same.
+    for (const [id, mine] of this.myReacts) {
+      const logged = this.conv.reactions.get(id) ?? [];
+      for (const [emoji, on] of mine) if (logged.some((r) => r.by === "you" && r.emoji === emoji) === on) mine.delete(emoji);
+      if (!mine.size) this.myReacts.delete(id);
+    }
     this.settlePending();
     this.pinned = true;
+    this.loadArts(cx);
     cx.notify();
   }
 
@@ -1312,6 +1729,9 @@ export default class CoordinatorChat extends View {
           if (sent?.code !== 0) this.firstSend = text;
         }
         if (this.queue.length) this.drainQueueNow(cx);
+        // What the agent left running in the background, and the open row's last lines (core/bg-jobs.js).
+        if (this.phase === "ready" && this.kind === "codex") await this.lookJobs(cx).catch(() => {});
+        else if (this.phase === "ready" && this.conv?.bg?.length) await this.lookJobs(cx).catch(() => {});
         if (this.error) { this.error = null; cx.notify(); }
       } catch (e) {
         this.error = String(e?.message ?? e);

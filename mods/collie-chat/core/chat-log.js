@@ -341,7 +341,7 @@ function cleanWords(t) {
   const hc = /^<hc\b([^>]*)>([\s\S]*?)<\/hc>$/.exec(t);
   if (hc) {
     const from = /\bfrom="([^"]*)"/.exec(hc[1])?.[1];
-    // An artifact's form (mods/artifacts) says which one: "Message from Coverage". Else the
+    // An artifact's form (mods/collie-artifacts) says which one: "Message from Coverage". Else the
     // whole from= ("t7 herd-12-fix"): the chat names the sender from it (main.js sender()).
     const title = from === "artifact" ? /\btitle="([^"]*)"/.exec(hc[1])?.[1] : null;
     return from ? { text: hc[2].trim(), from: title || from } : null;

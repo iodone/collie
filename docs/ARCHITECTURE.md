@@ -393,6 +393,7 @@ Inbox 不是第二个操作台。每行右侧只有一个 **回复** 按钮：
 | Coordinator 会话与恢复 | `vendor/herdr-task/herdr_task/revive.py` + `collie-task tick` | 原会话恢复、label、handover | 不复制 herdr 的 Assistant 交互 |
 | Task 头部与状态点 | shepherdr `mods/chat/panel.js`、`lib/dot.js`、`lib/ui.js` | 头部布局、segmented、task dot、光晕 | 不移植 Chat/Files/Changes/Browser |
 | 产物 | `mods/collie-artifacts/*`（`main.js` 列表 + `bar.js` viewer 工具栏）、`lib/artview.js`、`core/task-artifacts.js`、vendored `bin/collie-artifact` | 列表、viewer、版本、Mark up | 不需要 shepherdr 的 artifacts / task-artifacts mod |
+| Coordinator chat 的卡片与状态（#22） | shepherdr `mods/chat`（`cards.js`、`strips.js`、`secret-card.js`、`core/secrets.js`、`core/bg-jobs.js`、`core/chat-view.js`）与 `mods/chat-react` | reactions chips 与 emoji picker（`reactions.js`、`emoji-data.js`、本地 `react/` 资产）、secrets 掩码卡与 `~/.local/share/collie/secrets/vault.json`、artifact 卡（`lib/artview.js` 打开）、后台 jobs/subagents 行（可展开/停止） | threads、Tasks panel、voice；shep 的 `~/.herdr/vault.json` 与跨机 secrets 迁移 |
 | 安装器 | `~/.local/share/shepherdr/bin/shepherdr` | manifest、hash、备份、`.new`、doctor、key 合并 | 不装 herdr 的 web app / 语音 / 浏览器 |
 
 现有 Collie 已经按这个方式落过的拷贝：

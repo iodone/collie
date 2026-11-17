@@ -5,8 +5,8 @@
 #   (openSettings -> mods/shepherdr-settings); de-shepherdr it in lib/ui.js, not in a copy.
 inbox-queue.js: collie
 ticket-dot.js: collie
-artview.js: collie collie-artifacts
+artview.js: collie collie-artifacts collie-chat
 inbox-settings.js: collie-settings
 ui.js: collie collie-tabs collie-chrome collie-settings collie-artifacts collie-chat
-core/task-artifacts.js: collie collie-artifacts
+core/task-artifacts.js: collie collie-artifacts collie-chat
 core/spaces.js: collie collie-tabs collie-chat

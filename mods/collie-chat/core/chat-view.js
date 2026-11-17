@@ -1,6 +1,6 @@
 // The coordinator chat's rows as mods/collie-chat draws them: their words, a message's time, a launch brief's label,
 // whose words they are, and a task's news line. Ported from shepherdr's core/chat-view.js, keeping only what the
-// coordinator chat shows (no artifacts, images, subagents or reactions: #7 Slice 1; task news: Slice 2). Plain JS:
+// coordinator chat shows (task news: Slice 2; artifacts, subagents and the rows over the box: #22). Plain JS:
 // no herdr, node or DOM.
 
 // Task news Herdr sends an Assistant (herdr-task's news): each <herdr-news task="…" event="…"> line is its own slim
@@ -47,6 +47,17 @@ export const WORDS = {
   working: "Working",
   stopped: "Stopping…",
   sessionGone: "Earlier session was gone, starting a new one…",
+  // a published artifact's card and its earlier publishes (#22)
+  publishing: "Publishing…",
+  open: "Open",
+  // the background jobs' rows over the box (#22)
+  needsYou: "Needs you",
+  subDone: "Done",
+  subOpen: "Open its chat",
+  stopping: "Stopping…",
+  loading: "Loading…",
+  noOutput: "(no output)",
+  stop: "Stop",
 };
 
 // ---- a session that is gone ------------------------------------------------------------------
@@ -152,4 +163,118 @@ export function briefLabel(x, i, { start = null, template = null, first = 0 } = 
   if (/^<restart>/.test(x.text ?? "")) return "New session";
   if (template) return "New session";
   return null;
+}
+
+// ---- artifacts (#22) ---------------------------------------------------------------------------
+// The artifact a chat's publish made: herdr's records say which version, published by which terminal and when.
+// Modelled on shepherdr's core/chat-view.js resolveArtifacts(), reading Collie's own store instead.
+// An earlier publish of an artifact: its quiet line. The latest one is the card.
+export const published = (title, v) => `Published ${title} v${v}`;
+// The card's second line.
+export const artifactLine = (v) => `Artifact · v${v}`;
+
+// Which artifact each publish in the conversation made: the first version this agent published from a few seconds
+// before the call to five minutes after, not already taken. Map item id -> { id, title, version (its latest), v
+// (this publish's), latest }.
+export function resolveArtifacts(items, arts, me) {
+  const out = new Map();
+  const calls = (items ?? []).filter((x) => x.kind === "artifact");
+  if (!calls.length || !arts?.length) return out;
+  const vs = arts.flatMap((a) => (a.versions ?? []).filter((v) => v.publisher === me).map((v) => ({ a, v }))).sort((p, q) => p.v.at - q.v.at);
+  const used = new Set();
+  for (const x of calls) {
+    const at = x.at ?? 0;
+    const hit = vs.find(({ a, v }) => !used.has(`${a.id}:${v.v}`) && v.at >= at - 5000 && v.at <= at + 300000);
+    if (!hit) continue;
+    used.add(`${hit.a.id}:${hit.v.v}`);
+    out.set(x.id, { id: hit.a.id, title: hit.a.title, version: hit.a.version, v: hit.v.v });
+  }
+  const last = new Map();
+  for (const [k, r] of out) last.set(r.id, k);
+  for (const [k, r] of out) r.latest = last.get(r.id) === k;
+  return out;
+}
+
+// ---- subagents: an agent's own helper agents, in herdr (#22) ------------------------------------
+// What the Coordinator starts with `hc run` for itself: a reviewer, a second opinion. Each is an hc child of its
+// terminal, labelled herdr.role reviewer or helper. Shown over its parent's chat as a subagent row: its role and CLI,
+// working / needs / done, how long, opening to its own chat. One that ended stays a while.
+export const HELPER_ROLES = ["reviewer", "helper"];
+export const subagentWord = (status) => (status === "working" ? WORDS.working : status === "needs" ? WORDS.needsYou : WORDS.subDone);
+export const SUBAGENT_KEEP_MS = 60 * 60000;
+
+// ---- the rows over the box, grouped ------------------------------------------------------------
+// Several subagents or background shells stacked over the box eat a cramped phone's screen: each kind takes at most
+// one row. One of a kind shows as its own row; two or more as one group row ("3 background processes"), its newest's
+// title, how long that one has run and their shared state, opening in place to the list of them.
+const SUB_KINDS = ["agent", "headless", "child"];
+// shared by a group of subagents: one asking makes it ask, else one at work makes it work, else all are done
+const sharedStatus = (items) =>
+  items.some((j) => j.status === "needs") ? "needs" : items.some((j) => !j.status || j.status === "working") ? "working" : "done";
+export function bgGroups(items) {
+  const sub = (items ?? []).filter((j) => SUB_KINDS.includes(j.kind));
+  const proc = (items ?? []).filter((j) => !SUB_KINDS.includes(j.kind));
+  const group = (kind, list) => {
+    const newest = list.reduce((a, b) => ((b.at ?? 0) > (a.at ?? 0) ? b : a));
+    const n = list.length;
+    const words = n < 2 ? null : kind === "sub" ? `${n} subagents` : `${n} background processes`;
+    return { kind, items: list, newest, status: kind === "sub" ? sharedStatus(list) : "working", words };
+  };
+  return [...(sub.length ? [group("sub", sub)] : []), ...(proc.length ? [group("proc", proc)] : [])];
+}
+const roleOf = (k) => k?.labels?.["herdr.role"] ?? null;
+export const isHelper = (k) => HELPER_ROLES.includes(roleOf(k)) && !!k?.parent;
+
+// k's parent, as an address comparable with `addr`: another machine's terminal names its parent on that machine ("t5"
+// for "vm/t5").
+function parentAddr(k) {
+  const p = String(k?.parent ?? "");
+  if (!p) return null;
+  const m = String(k.address ?? "").includes("/") ? String(k.address).split("/")[0] : null;
+  return m && !p.includes("/") ? `${m}/${p}` : p;
+}
+
+const AGENTS = { codex: "Codex", claude: "Claude Code", "claude-code": "Claude Code", pi: "Pi" };
+// its CLI: its herdr.agent label, else what hc says runs in it, else its command's name
+export function subagentCli(k) {
+  const a = k?.labels?.["herdr.agent"] ?? k?.agent ?? null;
+  if (a) return String(a).replace(/^claude-code$/, "claude");
+  const argv = k?.foreground?.argv ?? k?.argv ?? [];
+  const prog = argv.map((x) => String(x).split("/").pop()).find((x) => /^(claude|codex|pi)$/.test(x));
+  return prog ?? null;
+}
+
+// "Reviewer · Codex"
+export function subagentTitle(s) {
+  const role = s.role === "reviewer" ? "Reviewer" : s.role && s.role !== "helper" ? s.role[0].toUpperCase() + s.role.slice(1) : "Helper";
+  return [role, AGENTS[s.cli] ?? (s.cli ? s.cli[0].toUpperCase() + s.cli.slice(1) : null)].filter(Boolean).join(" · ");
+}
+
+// how it is: "working", "needs" (it asks in its terminal) or "done" (its turn over, or it ended)
+export function subagentStatus(k) {
+  if (k?.state && k.state !== "live") return "done";
+  const st = typeof k?.status === "object" ? k.status?.state : k?.status;
+  return st === "working" ? "working" : st === "blocked" ? "needs" : "done";
+}
+
+// The subagents of the terminal at `addr`, oldest first: [{ address, role, cli, title, status, at, ended?, name }].
+// terms: every terminal hc knows (live and finished).
+export function subagentsOf(terms, addr, now = Date.now()) {
+  if (!addr) return [];
+  const out = [];
+  for (const k of terms) {
+    if (!k || !isHelper(k) || parentAddr(k) !== addr) continue;
+    const ended = k.state && k.state !== "live";
+    if (ended && now - (k.finished_ms ?? 0) > SUBAGENT_KEEP_MS) continue;
+    const s = { address: k.address, role: roleOf(k), cli: subagentCli(k), status: subagentStatus(k), at: k.created_ms ?? now, name: k.name ?? null, ...(ended ? { ended: k.finished_ms ?? now } : {}) };
+    out.push({ ...s, title: subagentTitle(s) });
+  }
+  return out.sort((a, b) => a.at - b.at);
+}
+
+// "5s", "3m", "2h": how long ago (or long) a row's thing has been going.
+export function ago(at, now = Date.now()) {
+  if (!at) return "";
+  const s = Math.max(0, Math.floor((now - at) / 1000));
+  return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : `${Math.floor(s / 3600)}h`;
 }
