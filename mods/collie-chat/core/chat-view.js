@@ -1,6 +1,40 @@
 // The coordinator chat's rows as mods/collie-chat draws them: their words, a message's time, a launch brief's label,
-// whose words they are. Ported from shepherdr's core/chat-view.js, keeping only what the coordinator chat shows (no
-// task news, artifacts, images, subagents or reactions: #7 Slice 1). Plain JS: no herdr, node or DOM.
+// whose words they are, and a task's news line. Ported from shepherdr's core/chat-view.js, keeping only what the
+// coordinator chat shows (no artifacts, images, subagents or reactions: #7 Slice 1; task news: Slice 2). Plain JS:
+// no herdr, node or DOM.
+
+// Task news Herdr sends an Assistant (herdr-task's news): each <herdr-news task="…" event="…"> line is its own slim
+// row in the coordinator chat. The log turns them into items ({ kind: "news", ref, event, text }); this is their
+// words: the task's ref, what happened, then the news' own words (never the title in brackets twice).
+const EVENT_MARK = { started: "started", "working-again": "started", "needs-you": "needs", failed: "needs", ready: "ready", done: "done" };
+const one = (s) => String(s ?? "").replace(/\s+/g, " ").trim();
+export function newsWords(e, x = null) {
+  const mark = EVENT_MARK[e.event] ?? "other";
+  const title = x?.title ?? "";
+  if (e.made) return { mark, what: e.event, text: e.event === "ready" ? one(x?.summary) || title : title };
+  let s = one(e.text);
+  if (s.startsWith(`${e.ref} `)) s = s.slice(e.ref.length + 1);
+  // Every line but ready's ends with the title in brackets.
+  let named = title;
+  if (e.event !== "ready") {
+    const m = title && s.endsWith(` (${one(title)})`) ? [null, one(title)] : / \(([^()]*)\)$/.exec(s);
+    if (m) { named = m[1]; s = s.slice(0, s.length - m[1].length - 3); }
+  }
+  const i = s.indexOf(": ");
+  const what = (i < 0 ? s : s.slice(0, i)).replace(/^is /, "") || e.event;
+  let text = i < 0 ? "" : s.slice(i + 2);
+  if (e.event === "ready") {
+    text = text.replace(/ · For AGENTS\.md: .*$/, "");
+    if (title && text.startsWith(one(title))) text = text.slice(one(title).length).replace(/^ · /, "") || one(title);
+  }
+  if (e.event === "done") text = named;
+  return { mark, what, text };
+}
+// The one line the chat shows for it: "HAT-4 needs you · waiting on your answer".
+export function newsLine(e, x = null) {
+  const n = newsWords(e, x);
+  return `${e.ref} ${n.what}${n.text ? ` · ${n.text}` : ""}`;
+}
 
 // Every fixed word the chat shows, once.
 export const WORDS = {

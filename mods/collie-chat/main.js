@@ -10,12 +10,11 @@
 
 import { View, div } from "gpui-kit";
 import { h_flex, TextareaState, Textarea, ScrollHandle, TextView } from "gpui-base";
-import { appHome, exec, hc, home, props, readTextFile, setShared, shared, theme } from "herdr";
+import { appHome, exec, hc, home, props, readTextFile, run, setShared, shared, theme, watchFolder, writeTextFile } from "herdr";
 import { terminals, panes, spaces, inRender } from "./live.js";
 import { FIND, LOG, Conversation, records, summary, excerpt } from "./core/chat-log.js";
-import {
-  WORDS, LOST, lostMessage, shellWord, sessionStarted, sessionFailed, notSent, dayOf, dayLabel, clock,
-  firstUser, firstKeys, literal, briefLabel,
+import { WORDS, LOST, lostMessage, shellWord, sessionStarted, sessionFailed, notSent, dayOf, dayLabel, clock,
+  firstUser, firstKeys, literal, briefLabel, newsLine,
 } from "./core/chat-view.js";
 import { sendBody, refusal, messageBody } from "./core/send.js";
 import { asPerson } from "./core/person.js";
@@ -23,6 +22,10 @@ import { argvFor, freshArgv } from "./core/agents.js";
 import { cleanCommand } from "./core/clean-env.js";
 import { parseTemplate } from "./core/template.js";
 import { chatLabel } from "./core/spaces.js";
+import { words as askWords, howAnswered } from "./core/asks.js";
+import { AskCards } from "./cards.js";
+import { strip } from "./strips.js";
+import { ScreenWatch, screenStrips, openCard as openScreen, starting } from "./screens.js";
 import { RADIUS, TEXT, button, toast } from "./lib/ui.js";
 
 const PAGE = 200;
@@ -31,6 +34,8 @@ const KINDS = { "claude-code": "claude", claude: "claude", codex: "codex" };
 const TEMPLATE = 'dir="$HOME/.config/herdr-core/templates"; ';
 const norm = (s) => String(s ?? "").replace(/\s+/g, " ").trim();
 const personHc = asPerson({ hc, exec });
+// A request's id is <terminal>.<time>.<hook pid>: its moment.
+const askAt = (id) => { const p = String(id).split("."), sec = Number(p[p.length - 2]); return Number.isFinite(sec) && sec > 1e9 ? sec * 1000 + 999 : Date.now(); };
 
 // Which CLI a terminal runs: "claude" | "codex" from its report or its program, else null.
 const cliOf = (k) => {
@@ -62,12 +67,31 @@ export default class CoordinatorChat extends View {
     this.firstSend = null;
     this.swapping = false;
     this.lostTried = new Set();
+    // Claude's PermissionRequest hook (ask-hook.sh) leaves requests in data/chat-asks/: { id, req, words }, oldest
+    // first; a closed one leaves a quiet line.
+    this.askDir = `${appHome()}/data/chat-asks`;
+    this.asks = [];
+    this.askEnds = [];
+    this.askWatch = null;
+    this.cards = new AskCards({
+      reply: (ask, text, cx) => this.reply(ask, text, cx),
+      toTerminal: () => this.toTerminal(),
+      chatAbout: () => this.box.focus?.(),
+    });
+    // CLI start screens (screens.js): trust this folder, sign in, ... while this agent hasn't started its session.
+    this.screens = new ScreenWatch();
+    this.screenBusy = new Set();
+    this.screenErr = new Map();
     this.pinned = true;
     this.scroll = ScrollHandle.new();
     this.box = TextareaState.new({ placeholder: "Message the Coordinator…" });
     this.box.set_rows(1);
     this.box.on("submit", (e, cx) => { if (!e?.shift) this.enter(cx, Boolean(e?.secondary)); });
     cx.timer.every(1000, (cx) => cx.notify());
+    // Asks: the hook's request folder while there is an agent; the flag says a chat shows it.
+    cx.spawn(async (cx) => this.watchAsks(cx));
+    // CLI start screens: read while the agent is still before its session.
+    cx.timer.every(2000, (cx) => cx.spawn(async () => this.screenTick(cx)));
     // A slot chat whose agent already runs (a reload, or Herdr started it): follow it (adoptSlot below).
     if (this.addr) cx.spawn(async (cx) => this.follow(cx));
     else if (this.slot) cx.timer.every(2000, (cx) => this.adoptSlot(cx));
@@ -110,10 +134,19 @@ export default class CoordinatorChat extends View {
         out.push({ kind: "agent", id: x.id, at, text: x.text ?? "" });
       } else if (x.kind === "tools" && x.steps?.length) {
         out.push({ kind: "tools", id: x.id, at, text: summary(x.steps) });
+      } else if (x.kind === "news") {
+        out.push({ kind: "news", id: x.id, at, ref: x.ref, event: x.event, text: newsLine(x) });
       } else if (x.kind === "ask") {
         out.push({ kind: "tools", id: x.id, at, text: `Asked you: ${excerpt(x.text, 120)}` });
       }
     });
+    // The cards waiting on the person: this agent's start screen, then its asks (asks.js).
+    const scr = this.addr && !this.readOnly ? openScreen(this.addr) : null;
+    if (scr) out.push({ kind: "card", id: `card:${scr.id}`, strips: screenStrips(scr, {
+      who: this.cliName(), busy: this.screenBusy.has(scr.id), error: this.screenErr.get(scr.id),
+      press: (i, cx) => this.pressScreen(scr, i, cx), toTerminal: () => this.toTerminal() }) });
+    for (const a of this.asks) out.push({ kind: "card", id: `card:${a.id}`, strips: this.cards.strips(a, { who: this.cliName() }) });
+    for (const e of this.askEnds) out.push({ kind: "askend", id: `ae:${e.id}`, at: e.at, text: `${e.title} · ${e.how}` });
     // Sent from here but not in the log yet: shown as sent (or why not).
     for (const p of this.pending) out.push({ kind: p.failed ? "failed" : "user", id: p.id, at: p.at, text: p.text, error: p.failed ?? null, pending: !p.delivered });
     for (const m of this.queue) out.push({ kind: "queued", id: m.id, at: 0, text: m.text });
@@ -140,6 +173,9 @@ export default class CoordinatorChat extends View {
     if (r.kind === "day") return this.quiet(t, r, { center: true, small: true });
     if (r.kind === "brief") return this.quiet(t, r);
     if (r.kind === "tools") return this.quiet(t, r);
+    if (r.kind === "news") return this.quiet(t, r, { small: true });
+    if (r.kind === "askend") return this.quiet(t, r, { small: true });
+    if (r.kind === "card") return this.card(t, r);
     if (r.kind === "queued") return this.quiet(t, r, { text: `${WORDS.inQueue} · ${excerpt(r.text, 100)}` });
     if (r.kind === "note") return this.quiet(t, r, { small: true });
     if (r.kind === "failed") return this.quiet(t, r, { danger: true });
@@ -155,6 +191,12 @@ export default class CoordinatorChat extends View {
     return div().id(r.id).w_full().flex().flex_col().gap(2).px(2).py(2)
       .child(div().text_size(13).text_color(t.foreground).child(TextView.markdown(`chat-md-${r.id}`, r.text || " ").selectable(true)))
       .when(Boolean(r.at), (el) => el.child(div().text_size(11).text_color(t.dim).child(clock(r.at))));
+  }
+
+  // A card (an ask, a start screen): its strips, one row each, looking like one card (strips.js).
+  card(t, r) {
+    return div().id(r.id).w_full().flex().flex_col().py(4)
+      .children(r.strips.map((s, i) => strip(t, s, i === 0, i === r.strips.length - 1)));
   }
 
   quiet(t, r, { center = false, small = false, danger = false, text = null } = {}) {
@@ -201,6 +243,11 @@ export default class CoordinatorChat extends View {
   send(msg, cx) {
     this.pinned = true;
     if (this.phase === "fresh") { this.startAgent(msg, cx); return; }
+    // The CLI shows its own start screen (a card here): typed words could pick one of its choices, so they wait
+    // until it is answered (drainQueueNow).
+    if (this.addr && openScreen(this.addr)) { this.queue.push(msg); cx.notify(); return; }
+    // A card asks (a question, a permission, a plan): the words answer it, as typing in the CLI would.
+    if (this.asks.length && msg.text) { this.cards.replyWith(this.asks[0], msg.text, cx); return; }
     if (this.phase !== "ready") { this.queue.push(msg); cx.notify(); return; }
     const body = messageBody({ text: msg.text });
     const p = { id: `pending-${msg.id}`, text: msg.text, at: Date.now(), sent: body, match: norm(msg.text).slice(0, 60) || null };
@@ -243,6 +290,113 @@ export default class CoordinatorChat extends View {
     if (this.status() !== "working") return;
     this.stopping = true;
     hc(["interrupt", this.addr]);
+    cx.notify();
+  }
+
+  // ---- what the agent asks (ask-hook.sh, data/chat-asks) --------------------------------------
+
+  cliName() {
+    const k = terminals().find((x) => x.address === this.addr);
+    const kind = KINDS[k?.status?.app] ?? KINDS[k?.foreground?.name] ?? this.kind;
+    return kind === "codex" ? "Codex" : "Claude";
+  }
+
+  // The hook's flag: this chat is showing. Touched every few seconds; stale after 15.
+  async flag() {
+    if (this.machine || !this.addr || this.readOnly || this.phase === "ended") return;
+    await exec("sh", ["-c", 'mkdir -p "$1/open" "$1/req" "$1/ans" "$1/end" && touch "$1/open/$2"', "x", this.askDir, this.addr]).catch(() => {});
+  }
+
+  async watchAsks(cx) {
+    await exec("sh", ["-c", 'mkdir -p "$1/open" "$1/req" "$1/ans" "$1/end"', "x", this.askDir]).catch(() => {});
+    for (;;) {
+      if (this.addr && !this.readOnly) {
+        await this.flag();
+        await this.readAsks(cx).catch(() => {});
+      }
+      // One watch at a time, as for the log.
+      this.askWatch ??= watchFolder(`${this.askDir}/req`).catch(() => null).finally(() => { this.askWatch = null; });
+      await Promise.race([this.askWatch, cx.sleep(4000)]);
+    }
+  }
+
+  async readAsks(cx) {
+    const addr = this.addr;
+    if (!addr) return;
+    // Each request is named <terminal>.<time>.<hook pid>: one whose hook was killed (Claude stopped it) is gone, so
+    // drop its file.
+    const r = await exec("sh", ["-c", 'cd "$1/req" 2>/dev/null || exit 0; for f in "$2".*.json; do [ -f "$f" ] || continue; p=${f%.json}; p=${p##*.}; if kill -0 "$p" 2>/dev/null; then echo "$f"; else rm -f "$f"; fi; done; true', "x", this.askDir, addr]);
+    if (addr !== this.addr) return;
+    const ids = r.stdout.split("\n").filter((f) => f.endsWith(".json")).map((f) => f.slice(0, -5));
+    const kept = this.asks.filter((a) => ids.includes(a.id));
+    // Gone without an answer from here: the hook says how (end/<id>: answered or declined in the terminal, the agent
+    // stopped), else Claude stopped waiting on it.
+    for (const a of this.asks.filter((a) => !ids.includes(a.id))) {
+      const how = (await readTextFile(`${this.askDir}/end/${a.id}`).catch(() => null))?.trim();
+      this.askEnded(a, how || "No longer waiting");
+    }
+    let added = false;
+    for (const id of ids) {
+      if (kept.some((a) => a.id === id)) continue;
+      const text = await readTextFile(`${this.askDir}/req/${id}.json`).catch(() => null);
+      let req = null;
+      try { req = JSON.parse(text ?? ""); } catch {}
+      // Unreadable here: it can only be allowed in the terminal.
+      const w = req ? askWords(req) : { kind: "permission", title: "Claude asks for something the chat can't read", detail: "", unread: true };
+      kept.push({ id, req, words: w });
+      added = true;
+    }
+    if (added || kept.length !== this.asks.length) {
+      this.asks = kept;
+      this.cards.keep(kept.map((a) => a.id));
+      cx.notify();
+    }
+  }
+
+  // An ask closed: its quiet line (a question's own row is already in the log).
+  askEnded(ask, how) {
+    if (ask.words?.kind === "questions" || this.askEnds.some((e) => e.id === ask.id)) return;
+    this.askEnds = [...this.askEnds, { id: ask.id, title: ask.words?.title ?? "Claude asks", how, at: askAt(ask.id) }].slice(-20);
+  }
+
+  // The card's answer goes to the waiting hook; it prints it as Claude's decision.
+  reply(ask, text, cx) {
+    this.asks = this.asks.filter((a) => a !== ask);
+    const how = howAnswered(ask, text, "in the chat");
+    if (how) this.askEnded(ask, how);
+    this.cards.drop(ask);
+    cx.notify();
+    cx.spawn(async () => {
+      if (how) await writeTextFile(`${this.askDir}/end/${ask.id}`, `${how}\n`, null).catch(() => {});
+      await writeTextFile(`${this.askDir}/ans/${ask.id}.json`, text, null).catch(() => {});
+    });
+  }
+
+  // The agent's terminal, for "Answer in terminal": a peek over the tab (the chat has no pane of its own for it).
+  toTerminal() {
+    if (this.addr) run("terminal.peek", { terminal: this.addr });
+  }
+
+  // ---- a CLI's own start screen (screens.js) ---------------------------------------------------
+
+  async screenTick(cx) {
+    if (!this.addr || this.readOnly) return;
+    const k = terminals().find((x) => x.address === this.addr);
+    if (!k || k.state !== "live") return;
+    if (!starting(k) && !openScreen(this.addr)) return;
+    await this.screens.tick(this.addr, k).catch(() => {});
+    cx.notify();
+  }
+
+  // A press on one of the screen's choices: only if the screen still shows what the card was drawn from.
+  async pressScreen(card, i, cx) {
+    if (this.screenBusy.has(card.id)) return;
+    this.screenBusy.add(card.id);
+    this.screenErr.delete(card.id);
+    cx.notify();
+    const why = await this.screens.press(card, i).catch((e) => String(e?.message ?? e));
+    this.screenBusy.delete(card.id);
+    if (why) this.screenErr.set(card.id, why);
     cx.notify();
   }
 
@@ -591,7 +745,7 @@ export default class CoordinatorChat extends View {
   drainQueueNow(cx) {
     if (!this.queue.length || this.phase !== "ready") return;
     const st = this.status();
-    if (st === "working" || st === "blocked" || this.pending.some((p) => !p.failed)) return;
+    if (st === "working" || st === "blocked" || (this.addr && openScreen(this.addr)) || this.asks.length || this.pending.some((p) => !p.failed)) return;
     const msg = this.queue.shift();
     if (msg) this.send(msg, cx);
     cx.notify();

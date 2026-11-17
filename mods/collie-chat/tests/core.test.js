@@ -6,7 +6,9 @@ import { readFileSync } from "node:fs";
 import { CHAT, SLOT, chatLabel, chatPane, machineOf, slotOf } from "../core/spaces.js";
 import { argvFor, freshArgv, sessionOf } from "../core/agents.js";
 import { parseTemplate } from "../core/template.js";
-import { briefLabel, clock, dayLabel, dayOf, firstKeys, firstUser, initialOf, literal, lostMessage, LOST, shellWord } from "../core/chat-view.js";
+import { briefLabel, clock, dayLabel, dayOf, firstKeys, firstUser, initialOf, literal, lostMessage, LOST, shellWord, newsWords, newsLine } from "../core/chat-view.js";
+import { words, allow, deny, answer, dismiss, howAnswered } from "../core/asks.js";
+import { Conversation } from "../core/chat-log.js";
 
 describe("core/spaces.js: the chat pane a slot's agent is parked behind", () => {
   test("herdr.chat holds the pane's own id; a machine's address reads the same", () => {
@@ -110,5 +112,57 @@ describe("core/chat-view.js: the rows' words", () => {
     expect(literal("<yours> & <b>")).toBe("\\<yours> & \\<b>");
     expect(shellWord("a b")).toBe("'a b'");
     expect(initialOf("coord-2")).toBe("C");
+  });
+});
+
+describe("core/asks.js: what Claude asks, and the hook's answers", () => {
+  test("a permission, a question and a plan each say what they are", () => {
+    const run = words({ tool_name: "Bash", cwd: "/repo", tool_input: { command: "npm test" } });
+    expect(run.kind).toBe("permission");
+    expect(run.title).toBe("Run: npm test");
+    expect(run.detail).toContain("npm test");
+    const plan = words({ tool_name: "ExitPlanMode", tool_input: { plan: "1. do it\n2. ship it" } });
+    expect(plan.kind).toBe("plan");
+    expect(plan.title).toBe("Plan to approve");
+    expect(plan.detail).toContain("ship it");
+    const ask = words({ tool_name: "AskUserQuestion", tool_input: { questions: [{ question: "Which?", header: "Pick", options: [{ label: "A (Recommended)" }, { label: "B", description: "the second" }] }] } });
+    expect(ask.kind).toBe("questions");
+    expect(ask.title).toBe("Which?");
+    expect(ask.questions[0].options[0]).toMatchObject({ name: "A", recommended: true });
+    expect(ask.questions[0].options[1].description).toBe("the second");
+  });
+
+  test("answers are the hook's own decision JSON", () => {
+    expect(JSON.parse(allow()).hookSpecificOutput.decision.behavior).toBe("allow");
+    expect(JSON.parse(deny("no")).hookSpecificOutput.decision).toEqual({ behavior: "deny", message: "no" });
+    const a = JSON.parse(answer({ tool_input: { questions: [{ question: "Which?" }] } }, "A"));
+    expect(a.hookSpecificOutput.decision.updatedInput.answers).toEqual({ "Which?": "A" });
+    expect(JSON.parse(dismiss("questions")).hookSpecificOutput.decision.behavior).toBe("deny");
+    expect(howAnswered({ words: { kind: "permission" } }, allow(), "in the chat")).toBe("Allowed in the chat");
+    expect(howAnswered({ words: { kind: "questions" } }, answer({ tool_input: { questions: [{ question: "Q" }] } }, "A"), "in the chat")).toBe("Answered in the chat");
+    expect(howAnswered({ words: { kind: "permission" } }, "", "in the chat")).toBe(null);
+  });
+});
+
+describe("core/chat-view.js: task news as a slim line", () => {
+  test("a Claude message's <herdr-news> line becomes a news item", () => {
+    const conv = new Conversation("claude");
+    const line = { type: "user", message: { content: '<herdr-news task="HAT-4" event="needs-you">HAT-4 needs you: which branch? (Fix the parser)</herdr-news>' } };
+    conv.feed([{ off: 0, kind: "L", data: JSON.stringify(line) }]);
+    const news = conv.items.find((x) => x.kind === "news");
+    expect(news).toMatchObject({ ref: "HAT-4", event: "needs-you" });
+    expect(newsLine(news)).toBe("HAT-4 needs you · which branch?");
+    expect(conv.items.some((x) => x.kind === "user" && x.text?.includes("herdr-news"))).toBe(false);
+  });
+
+  test("needs-you, ready and done keep the task's own words", () => {
+    const needs = { ref: "HAT-4", event: "needs-you", text: "HAT-4 needs you: which branch? (Fix the parser)" };
+    expect(newsWords(needs)).toMatchObject({ mark: "needs", what: "needs you", text: "which branch?" });
+    expect(newsLine(needs)).toBe("HAT-4 needs you · which branch?");
+    const ready = { ref: "HAT-4", event: "ready", text: "HAT-4 is ready: Fix the parser · For AGENTS.md: run tests" };
+    expect(newsWords(ready, { title: "Fix the parser" })).toMatchObject({ mark: "ready", what: "ready", text: "Fix the parser" });
+    expect(newsLine({ ref: "HAT-5", event: "done", text: "HAT-5 done: Ship it (Ship it)" }, { title: "Ship it" })).toBe("HAT-5 done · Ship it");
+    const started = { ref: "HAT-6", event: "started", text: "HAT-6 started: On it (Do the thing)" };
+    expect(newsWords(started)).toMatchObject({ mark: "started", what: "started", text: "On it" });
   });
 });

@@ -135,9 +135,9 @@ def own_command(path, text):
 
 
 def ask_hook():
-    """The chat's question-card hook (mods/chat/ask-hook.sh) where Herdr's app home has it, else None."""
+    """The chat's question-card hook (mods/collie-chat/ask-hook.sh) where Herdr's app home has it, else None."""
     app = os.environ.get("HERDR_APP_HOME") or os.path.join(os.path.expanduser("~"), ".config", "herdr-app")
-    p = os.path.join(app, "mods", "chat", "ask-hook.sh")
+    p = os.path.join(app, "mods", "collie-chat", "ask-hook.sh")
     return p if os.path.isfile(p) else None
 
 
