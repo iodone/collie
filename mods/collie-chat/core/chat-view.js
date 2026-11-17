@@ -38,8 +38,8 @@ export function newsLine(e, x = null) {
 
 // Every fixed word the chat shows, once.
 export const WORDS = {
-  emptyTitle: "What should the Coordinator do?",
-  emptyBody: "It turns what you ask for into tickets and keeps you posted.",
+  emptyTitle: "What should the Assistant do?",
+  emptyBody: "It plans the work, starts a task for each part and keeps you posted.",
   readOnly: "This agent's conversation.",
   ended: "This agent has ended.",
   // typed while it works: in its CLI's queue, taken at its next step (Claude Code's own queue)

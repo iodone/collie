@@ -223,7 +223,7 @@ export default class CoordinatorChat extends View {
     this.findBox = InputState.new({ placeholder: WORDS.find });
     this.findBox.on("change", (_e, cx) => { this.findIdx = 0; this.findJump = true; cx.notify(); });
     bindFindKeys(cx);
-    this.box = TextareaState.new({ placeholder: "Message the Coordinator…" });
+    this.box = TextareaState.new({ placeholder: "Message the Assistant" });
     this.box.set_rows(1);
     this.box.on("submit", (e, cx) => { if (!e?.shift) this.enter(cx, Boolean(e?.secondary)); });
     this.box.on("change", (_e, cx) => this.boxChanged(cx));
