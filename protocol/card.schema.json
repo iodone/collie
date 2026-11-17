@@ -10,7 +10,7 @@
       "properties": {
         "state": {
           "const": "waiting",
-          "description": "冻结为 waiting。把 state 改成 routed/done 的同一个对象就不再是卡片——这是『队列』与『工作计数』的分界线。"
+          "description": "冻结为 waiting。把 state 改成 open/settled 的同一个对象就不再是卡片——这是『队列』与『工作计数』的分界线。"
         },
         "card": {
           "type": "object",

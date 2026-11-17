@@ -19,7 +19,9 @@ export interface CoordinateOptions {
   spaceNote?: string;
   running?: Json[];
   rolePromptRef?: string;
+  policy?: string;
   stream?: "job_turn" | "chat_turn";
+  onDecision?: (decision: Json) => void;
 }
 
 const baseDecision = (dispatch: Dispatch, at: string, caseRef: string | null): Json => ({
@@ -29,7 +31,7 @@ const baseDecision = (dispatch: Dispatch, at: string, caseRef: string | null): J
   space_candidates: dispatch.event.space_candidates ?? [dispatch.space],
   event_ref: dispatch.event.id,
   case_ref: caseRef,
-  state: "routed",
+  state: "open",
   decided_by: "coordinator",
   decided_at: at,
   occurrence: {
@@ -55,7 +57,7 @@ function budgetDecision(dispatch: Dispatch, at: string, reason: string): Json {
     ...baseDecision(dispatch, at, null),
     state: "waiting",
     why: reason,
-    decided_by: "rule_table",
+    decided_by: "system",
     actions: [{
       kind: "ask", risk_tags: [],
       ask: { kind: "question", question: "本小时判断预算已用完，要现在处理这条事件吗？", options: ["accept", "later", "drop"] },
@@ -91,7 +93,7 @@ export async function coordinate(dispatch: Dispatch, options: CoordinateOptions)
     id: ledgerId("ca"), created_at: at, stream, wake: stream === "job_turn", visibility: stream === "job_turn" ? "ledger_only" : "chat",
     space: {
       primary: dispatch.space, candidates,
-      resolution: candidates.length === 1 ? "single" : dispatch.rule?.to.space ? "rule_table" : "remembered",
+      resolution: candidates.length === 1 ? "single" : "remembered",
     },
     event: {
       ref: dispatch.event.id, key: dispatch.event.key, type: dispatch.event.type, hops: dispatch.event.hops,
@@ -102,6 +104,7 @@ export async function coordinate(dispatch: Dispatch, options: CoordinateOptions)
     snapshot: {
       bytes: 0, truncated: false, space_note: options.spaceNote ?? `${dispatch.space} · coordinator`,
       queue, running: options.running ?? [], recent, rules_version: ruleset.version,
+      policy: (options.policy ?? "").slice(0, 2000),
       budget: {
         scope: "global", limit: budget.limit, used: budget.used + (stream === "job_turn" ? 1 : 0), remaining: budget.remaining - (stream === "job_turn" ? 1 : 0),
         window_start: budget.window_start, reset_at: budget.reset_at,
@@ -120,8 +123,9 @@ export async function coordinate(dispatch: Dispatch, options: CoordinateOptions)
       if (job.snapshot.recent.length) job.snapshot.recent.pop();
       else if (job.snapshot.queue.length) job.snapshot.queue.pop();
       else if (job.snapshot.running.length) job.snapshot.running.pop();
+      else if (job.snapshot.policy) job.snapshot.policy = job.snapshot.policy.slice(0, Math.max(0, job.snapshot.policy.length - 200));
       else job.snapshot.space_note = job.snapshot.space_note.slice(0, Math.max(0, job.snapshot.space_note.length - 100));
-      if (!job.snapshot.space_note) break;
+      if (!job.snapshot.space_note && !job.snapshot.policy) break;
     }
   }
   job.snapshot.bytes = Buffer.byteLength(JSON.stringify(job.snapshot));
@@ -129,11 +133,20 @@ export async function coordinate(dispatch: Dispatch, options: CoordinateOptions)
   assertValid(job, "urn:collie:case:v1");
   ledger.append("case", job);
 
+  const thinking = {
+    ...baseDecision(dispatch, at, job.id),
+    state: "open",
+    why: "Coordinator 正在分析输入并生成 Decision",
+    actions: [],
+  };
+  ledger.append("decision", thinking);
+  options.onDecision?.(thinking);
+
   const output = await decide(structuredClone(job));
   const round = ledger.decisions.filter((decision) => decision.occurrence.object_key === dispatch.event.merge.object_key).length + 1;
   const candidate = {
     ...baseDecision(dispatch, at, job.id), ...output,
-    id: ledgerId("dc"), case_ref: job.id, decided_by: "coordinator", decided_at: at,
+    id: thinking.id, case_ref: job.id, decided_by: "coordinator", decided_at: at,
     occurrence: { ...baseDecision(dispatch, at, job.id).occurrence, round },
     run: { ...baseDecision(dispatch, at, job.id).run, ...output.run },
     human_boundary: { form: output.state === "waiting" ? "card" : "none", chat_injection: false },
@@ -141,6 +154,9 @@ export async function coordinate(dispatch: Dispatch, options: CoordinateOptions)
   if (!candidate.why || candidate.why.length > 140) throw new Error("coordinator decision requires why ≤ 140 chars");
   if (!Array.isArray(candidate.actions)) throw new Error("coordinator decision requires actions");
   const guarded = applyGuard(candidate, ruleset, { authoritative: { hops: dispatch.event.hops } }).decision;
+  if (guarded.state === "settled" && !guarded.settled) {
+    guarded.settled = { at, by: "coordinator", outcome: "dropped" };
+  }
   assertValid(guarded, "urn:collie:decision:v1");
   return ledger.append("decision", guarded);
 }

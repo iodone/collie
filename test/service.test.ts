@@ -10,16 +10,6 @@ const paths: string[] = [];
 const scratch = () => { const path = mkdtempSync(join(tmpdir(), "collie-service-")); paths.push(path); return path; };
 afterEach(() => { while (paths.length) rmSync(paths.pop()!, { recursive: true, force: true }); });
 
-function directRules() {
-  const rules = structuredClone(baseRules);
-  const direct = structuredClone(rules.rules[1]);
-  direct.id = "mr-direct";
-  direct.when = { sources: ["gitlab"], types: ["merge_request.updated"], object_kinds: ["mr"] };
-  direct.to = { kind: "herdr_task", space: "collie", cwd: { path: "/repo/collie", kind: "git" } };
-  rules.rules = [direct];
-  return rules;
-}
-
 function fakeAgent() {
   const calls: string[][] = [];
   return { calls, run: async (args: string[]) => {
@@ -36,10 +26,16 @@ function fakeAgent() {
 }
 
 describe("M6 后台双循环", () => {
-  test("没有窗口：事件直派到 ready，Ledger 有回执，queue 只有 Accept 卡", async () => {
+  test("没有窗口：事件经 coordinator 派到 ready，Ledger 有回执，queue 只有 Accept 卡", async () => {
     const dir = scratch();
     const agent = fakeAgent();
-    const service = new InboxService({ stateDir: dir, ruleset: directRules(), agent: { run: agent.run } });
+    const service = new InboxService({
+      stateDir: dir, ruleset: baseRules, agent: { run: agent.run },
+      workspaces: { "collie": { folder: "/repo/collie", cli: "codex" } },
+      decide: () => ({ state: "open", why: "MR 更新需要 worker", actions: [{ kind: "spawn_task", risk_tags: [], spawn: {
+        title: event.title, brief_ref: "/tmp/brief.md", base: "current", review: true, merge: false, access: "edit", tells: "needed",
+      } }] }),
+    });
     const decisions = await service.process(event);
 
     expect(agent.calls.map((call) => call[0])).toEqual(["add", "start", "show"]);
@@ -58,7 +54,7 @@ describe("M6 后台双循环", () => {
     const answered = await service.answerCard(decisions[0].id, {
       option: "accept", at: "2026-11-13T11:00:00Z", by: "human",
     }, "machine/t88", async () => {
-      ledgerWasUpdatedBeforeResume = service.ledger.decisions.find((item) => item.id === decisions[0].id).state === "routed";
+      ledgerWasUpdatedBeforeResume = service.ledger.decisions.find((item) => item.id === decisions[0].id).state === "open";
       return {};
     });
     expect(ledgerWasUpdatedBeforeResume).toBe(true);
@@ -77,7 +73,7 @@ describe("M6 后台双循环", () => {
     const service = new InboxService({
       stateDir: dir, ruleset: structuredClone(baseRules), agent: { run: agent.run },
       workspaces: { "collie": { folder: "/repo/collie", cli: "codex" } },
-      decide: () => ({ state: "routed", why: "MR 更新需要 worker", actions: [{ kind: "spawn_task", risk_tags: [], spawn: {
+      decide: () => ({ state: "open", why: "MR 更新需要 worker", actions: [{ kind: "spawn_task", risk_tags: [], spawn: {
         title: event.title, brief_ref: "/tmp/brief.md", base: "current", review: true, merge: false, access: "edit", tells: "needed",
       } }] }),
     });
@@ -95,7 +91,7 @@ describe("M6 后台双循环", () => {
     const service = new InboxService({
       stateDir: dir, ruleset: structuredClone(baseRules),
       delivery: { gitlab: async (args) => { external.push(args); return {}; } },
-      decide: () => ({ state: "routed", why: "评审通过后评论 MR", actions: [{ kind: "emit_command", risk_tags: ["outbound_message"], egress: {
+      decide: () => ({ state: "open", why: "评审通过后评论 MR", actions: [{ kind: "emit_command", risk_tags: ["outbound_message"], egress: {
         target: "gitlab", op: "comment", payload_ref: payload,
       } }] }),
     });
@@ -107,7 +103,7 @@ describe("M6 后台双循环", () => {
     }, "machine/t88", async () => ({}));
     const done = await service.deliver(waiting[0].id);
     expect(external[0]).toContain("note");
-    expect(done.state).toBe("done");
+    expect(done.state).toBe("settled");
     expect(done.settled.outcome).toBe("commented");
     expect(answered.decision.occurrence.hops).toBe(0);
   });
@@ -128,7 +124,7 @@ describe("M6 后台双循环", () => {
   test("hops 熔断只出 alert 卡，不触碰 herdr-task", async () => {
     const dir = scratch();
     const agent = fakeAgent();
-    const service = new InboxService({ stateDir: dir, ruleset: directRules(), agent: { run: agent.run } });
+    const service = new InboxService({ stateDir: dir, ruleset: baseRules, agent: { run: agent.run } });
     const decisions = await service.process({ ...event, hops: 9 });
     expect(decisions[0].card.kind).toBe("alert");
     expect(decisions[0].occurrence.hops).toBe(9);

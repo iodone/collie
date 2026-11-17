@@ -42,7 +42,7 @@ describe("Inbox detail answer socket", () => {
       answer: { option: "drop", at: "2026-11-13T11:00:00Z", by: "human" },
     });
     expect(response.status).toBe(200);
-    expect(response.body.decision.state).toBe("closed");
+    expect(response.body.decision.state).toBe("settled");
     expect(response.body.decision.settled.outcome).toBe("dropped");
     expect(response.body.decision.card.answer.by).toBe("human");
     expect(response.body.resumed).toBe(false);

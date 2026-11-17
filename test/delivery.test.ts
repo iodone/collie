@@ -107,7 +107,7 @@ describe("plugins/delivery", () => {
     }
   });
 
-  test("三个 delivery 都拒绝 routed 但不是 human accept 的决定", async () => {
+  test("三个 delivery 都拒绝非 human accept 的决定", async () => {
     const cases = [
       { target: "gitlab", op: "comment", data: { repo: "example/herdr", id: 93, body: "no" }, deliver: deliverGitlab },
       { target: "github", op: "merge", data: { repo: "iodone/herdr", id: 42 }, deliver: deliverGithub },
@@ -116,7 +116,7 @@ describe("plugins/delivery", () => {
     for (const item of cases) {
       const ref = await payloadRef(item.data);
       const decision = waitingEmit(item.target, item.op, ref);
-      decision.state = "routed";
+      decision.state = "open";
       const fake = mockRunner();
       await expect(item.deliver(decision, { run: fake.run })).rejects.toThrow("human accept");
       expect(fake.calls).toEqual([]);
@@ -154,7 +154,7 @@ describe("plugins/channel/herdr", () => {
       annotations: [{ file: "plugins/delivery/gitlab.ts", line: 10, note: "保留 head sha 校验" }],
     };
     const result = await answerHerdrCard(fixture, answer, "t23", { run: fake.run });
-    expect(result.decision.state).toBe("routed");
+    expect(result.decision.state).toBe("open");
     expect(JSON.parse(fake.calls[0][2]).answer.annotations).toEqual(answer.annotations);
   });
 

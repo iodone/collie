@@ -372,10 +372,10 @@ function forgetUnblocked(all) {
 
 // ---- going there --------------------------------------------------------------------------
 
-// Shows what needs the person: the Tasks panel on its Active tab (shared "tasks.show").
+// Shows what needs the person: Collie's Inbox, on its list.
 export function showInbox() {
-  setShared("tasks.show", { tab: "active", at: Date.now() });
-  run("layout.select", { stack: "panel-body", child: "tasks" });
+  run("layout.select", { stack: "panel-body", child: "collie" });
+  run("layout.select", { stack: "collie", child: "collie-list" });
   run("layout.show", { id: "panel" });
 }
 

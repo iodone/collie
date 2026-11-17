@@ -10,6 +10,7 @@ export default class InboxRail extends View {
       .hover((s) => s.bg(t.hover).text_color(t.foreground))
       .on_click(() => {
         run("layout.select", { stack: "panel-body", child: "collie" });
+        run("layout.select", { stack: "collie", child: "collie-list" });
         run("layout.show", { id: "panel" });
       })
       .child(div().flex_1().child("Inbox"))

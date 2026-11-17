@@ -3,12 +3,10 @@ import { checkEventAcceptable } from "../protocol/invariants.mjs";
 type Json = Record<string, any>;
 
 export interface Dispatch {
-  kind: "herdr_task" | "coordinator" | "record_only";
+  kind: "coordinator" | "record_only";
   laneKey: string;
   space: string | null;
-  ruleId: string | null;
   event: Json;
-  rule?: Json;
   cardRequired?: boolean;
 }
 
@@ -26,14 +24,7 @@ const objectKey = (event: Json): string => {
   return `${event.object.kind}:${event.object.id}`;
 };
 
-const matches = (rule: Json, event: Json): boolean =>
-  rule.enabled === true &&
-  rule.when.sources.includes(event.source) &&
-  rule.when.types.includes(event.type) &&
-  (!rule.when.object_kinds || rule.when.object_kinds.includes(event.object.kind));
-
-function spaceFor(rule: Json | null, event: Json): string {
-  if (rule?.to.space) return rule.to.space;
+function spaceFor(event: Json): string {
   const candidates = event.space_candidates ?? [];
   if (candidates.length !== 1) {
     throw new Error(`event ${event.id} has unresolved spaces: ${candidates.join(", ") || "none"}`);
@@ -41,13 +32,13 @@ function spaceFor(rule: Json | null, event: Json): string {
   return candidates[0];
 }
 
+/**
+ * Sources connect in; Ingress verifies, dedupes and merges. It never decides:
+ * every event goes to the space's coordinator. There is no rule table.
+ */
 export class Ingress {
   readonly #events = new Map<string, Json>();
   readonly #lanes = new Map<string, Lane>();
-
-  constructor(readonly ruleset: Json) {
-    if (!Array.isArray(ruleset.rules)) throw new Error("ruleset.rules must be an array");
-  }
 
   ingest(input: Json): { status: "accepted" | "merged" | "recorded" | "duplicate"; event: Json; dispatches: Dispatch[] } {
     const acceptable = checkEventAcceptable(input);
@@ -61,65 +52,37 @@ export class Ingress {
       return { status: "duplicate", event: previous, dispatches: [] };
     }
 
-    const matchedRules = this.ruleset.rules.filter((rule: Json) => matches(rule, input));
-    const targets: Array<Json | null> = matchedRules.length ? matchedRules : [null];
-    const dispatches: Dispatch[] = [];
-    let representative: Json | null = null;
-    let merged = false;
+    const kind = objectKey(input);
+    const laneKey = `coordinator:${kind}`;
+    const old = this.#lanes.get(laneKey);
+    const occurrences = (old?.event.merge.occurrences ?? 0) + 1;
+    const event: Json = {
+      ...input,
+      merge: {
+        lane_key: laneKey,
+        object_key: kind,
+        first_seen_at: old?.event.merge.first_seen_at ?? input.received_at,
+        occurrences,
+      },
+    };
+    this.#events.set(dedupeKey, event);
 
-    for (const rule of targets) {
-      const kind = objectKey(input);
-      const laneKey = `${rule?.id ?? "coordinator"}:${kind}`;
-      const old = this.#lanes.get(laneKey);
-      const occurrences = (old?.event.merge.occurrences ?? 0) + 1;
-      const event: Json = {
-        ...input,
-        merge: {
-          lane_key: laneKey,
-          object_key: kind,
-          first_seen_at: old?.event.merge.first_seen_at ?? input.received_at,
-          occurrences,
-        },
-      };
-      representative = event;
-
-      if (acceptable.record_only) {
-        const dispatch: Dispatch = {
-          kind: "record_only", laneKey, space: spaceFor(rule, input), ruleId: rule?.id ?? null,
-          event, cardRequired: true,
-        };
-        this.#lanes.set(laneKey, { event, open: old?.open ?? false, dispatch });
-        dispatches.push(dispatch);
-        continue;
-      }
-      if (rule?.paused.paused === true || rule?.to.kind === "drop") {
-        this.#lanes.set(laneKey, { event, open: old?.open ?? false, dispatch: old?.dispatch ?? null });
-        continue;
-      }
-      if (old?.open) {
-        this.#lanes.set(laneKey, { ...old, event });
-        merged = true;
-        continue;
-      }
-
+    if (acceptable.record_only) {
       const dispatch: Dispatch = {
-        kind: rule?.to.kind ?? "coordinator",
-        laneKey,
-        space: spaceFor(rule, input),
-        ruleId: rule?.id ?? null,
-        event,
-        ...(rule ? { rule } : {}),
+        kind: "record_only", laneKey, space: spaceFor(input), event, cardRequired: true,
       };
-      this.#lanes.set(laneKey, { event, open: true, dispatch });
-      dispatches.push(dispatch);
+      this.#lanes.set(laneKey, { event, open: old?.open ?? false, dispatch });
+      return { status: "recorded", event, dispatches: [dispatch] };
     }
 
-    this.#events.set(dedupeKey, representative!);
-    return {
-      status: dispatches.length ? "accepted" : merged ? "merged" : "recorded",
-      event: representative!,
-      dispatches,
-    };
+    if (old?.open) {
+      this.#lanes.set(laneKey, { ...old, event });
+      return { status: "merged", event, dispatches: [] };
+    }
+
+    const dispatch: Dispatch = { kind: "coordinator", laneKey, space: spaceFor(input), event };
+    this.#lanes.set(laneKey, { event, open: true, dispatch });
+    return { status: "accepted", event, dispatches: [dispatch] };
   }
 
   snapshot(): Json {

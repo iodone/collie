@@ -4,7 +4,6 @@ import { homedir } from "node:os";
 import { Ingress, type Dispatch } from "../kernel/ingress.ts";
 import { Ledger, ledgerId } from "../kernel/ledger.ts";
 import { coordinate } from "../kernel/coordinator.ts";
-import { decisionFromRule } from "../kernel/route-learning.ts";
 import { renderBrief } from "../kernel/brief.ts";
 import { runHerdrTask, type HerdrAgentOptions } from "../plugins/agent/herdr.ts";
 import { answerHerdrCard, type ChannelRunner } from "../plugins/channel/herdr.ts";
@@ -13,7 +12,6 @@ import { deliverGithub } from "../plugins/delivery/github.ts";
 import { deliverIm } from "../plugins/delivery/im.ts";
 import type { DeliveryRunner } from "../plugins/delivery/common.ts";
 import { startAnswerServer } from "./answer-server.ts";
-import { applyGuard } from "../protocol/invariants.mjs";
 import { coordinatorConfig, runCoordinator, type CoordinatorRunner } from "../plugins/agent/coordinator.ts";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
@@ -46,7 +44,7 @@ export class InboxService {
     this.stateDir = resolve(options.stateDir);
     mkdirSync(this.stateDir, { recursive: true });
     this.ledger = Ledger.open(join(this.stateDir, "ledger.json"));
-    this.ingress = new Ingress(options.ruleset);
+    this.ingress = new Ingress();
     const snapshotPath = join(this.stateDir, "ingress.json");
     if (existsSync(snapshotPath)) this.ingress.restore(JSON.parse(readFileSync(snapshotPath, "utf8")));
   }
@@ -77,6 +75,13 @@ export class InboxService {
     return decisions;
   }
 
+  #policy(space: string): string {
+    for (const path of [join(this.stateDir, "policy", `${space}.md`), join(this.stateDir, "policy.md")]) {
+      try { return readFileSync(path, "utf8").slice(0, 2000); } catch {}
+    }
+    return "";
+  }
+
   #coordinatorSettings(): Json {
     if (this.#options.coordinator?.settingsPath && existsSync(this.#options.coordinator.settingsPath)) {
       return JSON.parse(readFileSync(this.#options.coordinator.settingsPath, "utf8"));
@@ -89,17 +94,28 @@ export class InboxService {
       ...this.#options.agent,
       onSpawn: async (task) => {
         const latest = this.ledger.decisions.find((item) => item.id === decision.id) ?? decision;
-        this.ledger.append("decision", { ...latest, state: "acting", run: { ...latest.run, task_ref: task.key ?? task.id } });
+        this.ledger.append("decision", { ...latest, state: "open", run: { ...latest.run, task_ref: task.key ?? task.id } });
         this.#projectQueue();
         await this.#options.agent?.onSpawn?.(task);
       },
     };
   }
 
-  async #executeSpawn(decision: Json): Promise<Json> {
+  async #executeSpawn(decision: Json, dispatch: Dispatch): Promise<Json> {
     const spawns = decision.actions.filter((action: Json) => action.kind === "spawn_task");
-    if (decision.state !== "routed" || !spawns.length) return decision;
+    if (decision.state !== "open" || !spawns.length) return decision;
     if (spawns.length !== 1) throw new Error("M1 executes exactly one spawn_task per decision");
+    // The kernel renders the trusted brief; the coordinator only points at data.
+    const brief = renderBrief(dispatch, join(this.stateDir, "briefs"));
+    const executed = {
+      ...decision,
+      actions: decision.actions.map((action: Json) => action.kind === "spawn_task"
+        ? { ...action, spawn: { ...action.spawn, brief_ref: brief } }
+        : action),
+    };
+    this.ledger.append("decision", executed);
+    this.#projectQueue();
+    decision = executed;
     const workspace = this.#options.workspaces?.[decision.space];
     if (!workspace) throw new Error(`no worker workspace configured for space ${decision.space}`);
     const rule = {
@@ -110,7 +126,7 @@ export class InboxService {
     return this.acceptReceipt(decision.id, receipt);
   }
 
-  async request(space: string, goal: string): Promise<Json> {
+  async request(space: string, goal: string, ticketRefs: string[] = []): Promise<Json> {
     if (!/^[a-z0-9][a-z0-9_-]{1,63}$/.test(space)) throw new Error("invalid space");
     if (typeof goal !== "string" || !goal.trim() || goal.length > 4000) throw new Error("goal must be 1–4000 chars");
     const at = (this.#options.now ?? (() => new Date()))().toISOString();
@@ -118,18 +134,22 @@ export class InboxService {
     const directory = join(this.stateDir, "requests");
     mkdirSync(directory, { recursive: true });
     const dataRef = join(directory, `${id}.md`);
-    writeFileSync(dataRef, goal, { mode: 0o600 });
+    const requestBody = JSON.stringify({ goal, ticket_refs: ticketRefs });
+    writeFileSync(dataRef, requestBody, { mode: 0o600 });
     const event = {
       id, source: "im", key: `human:${id}`, type: "human.requested",
       object: { kind: "none", id }, title: goal.split(/\r?\n/)[0].slice(0, 80).replace(/^[-\s]+/, "Request "),
-      data_ref: dataRef, data_digest: `sha256:${createHash("sha256").update(goal).digest("hex")}`,
+      data_ref: dataRef, data_digest: `sha256:${createHash("sha256").update(requestBody).digest("hex")}`,
       hops: 0, received_at: at,
       merge: { lane_key: `coordinator:none:${id}`, object_key: `none:${id}`, first_seen_at: at, occurrences: 1 },
       space_candidates: [space],
     };
-    this.ledger.append("event", event);
-    const decision = await coordinate({ kind: "coordinator", laneKey: event.merge.lane_key, space, ruleId: null, event }, {
+    const dispatch: Dispatch = { kind: "coordinator", laneKey: event.merge.lane_key, space, event };
+    const decision = await coordinate(dispatch, {
       ledger: this.ledger, ruleset: this.#options.ruleset, stream: "chat_turn",
+      policy: this.#policy(space),
+      onDecision: () => this.#projectQueue(),
+      spaceNote: ticketRefs.length ? `引用 Ticket：${ticketRefs.join("、")}` : `${space} · coordinator`,
       decide: this.#options.decide ?? (async (job: Json) => {
         if (!this.#options.coordinator) throw new Error(`space ${space} has no coordinator configured`);
         const config = coordinatorConfig(this.#coordinatorSettings(), space);
@@ -140,7 +160,7 @@ export class InboxService {
       ...(this.#options.rolePromptRef ? { rolePromptRef: this.#options.rolePromptRef } : {}),
     });
     this.#projectQueue();
-    return this.#executeSpawn(decision);
+    return this.#executeSpawn(decision, dispatch);
   }
 
   async #dispatch(dispatch: Dispatch): Promise<Json> {
@@ -161,22 +181,16 @@ export class InboxService {
       });
       const decision = await coordinate(dispatch, {
         ledger: this.ledger, ruleset: this.#options.ruleset, decide,
+        policy: this.#policy(dispatch.space ?? ""),
+        onDecision: () => this.#projectQueue(),
         ...(this.#options.now ? { now: this.#options.now } : {}),
         ...(this.#options.rolePromptRef ? { rolePromptRef: this.#options.rolePromptRef } : {}),
       });
       this.ingress.bindDecision(dispatch.laneKey, decision.id);
       this.#projectIngress();
-      return this.#executeSpawn(decision);
+      return this.#executeSpawn(decision, dispatch);
     }
-    const brief = renderBrief(dispatch, join(this.stateDir, "briefs"));
-    const candidate = decisionFromRule(dispatch, brief, (this.#options.now ?? (() => new Date()))().toISOString());
-    const decision = applyGuard(candidate, this.#options.ruleset, { authoritative: { hops: dispatch.event.hops } }).decision;
-    this.ledger.append("decision", decision);
-    this.ingress.bindDecision(dispatch.laneKey, decision.id);
-    this.#projectIngress();
-    if (decision.state === "waiting") return decision;
-    const receipt = await runHerdrTask(decision, dispatch.rule, this.#agentOptions(decision));
-    return this.acceptReceipt(decision.id, receipt);
+    throw new Error(`unsupported dispatch kind: ${(dispatch as Json).kind}`);
   }
 
   #recordOnly(dispatch: Dispatch): Json {
@@ -185,7 +199,7 @@ export class InboxService {
     const decision = {
       id: ledgerId("dc"), key: `${event.source}:${event.key}`, space: dispatch.space,
       space_candidates: event.space_candidates ?? [dispatch.space], event_ref: event.id, case_ref: null,
-      state: "waiting", why: `hops ${event.hops} 超过上限，只记录不再派发`, decided_by: "rule_table", decided_at: at,
+      state: "waiting", why: `hops ${event.hops} 超过上限，只记录不再派发`, decided_by: "system", decided_at: at,
       occurrence: { object_key: event.merge.object_key, kind: event.object.kind, round: 1, hops: event.hops },
       actions: [{ kind: "ask", risk_tags: [], ask: { kind: "alert", question: "委派跳数已熔断，请检查这条链", options: ["drop"] } }],
       risk: { tags: [], forced_waiting: false }, run: { claimed_until: null, unknown_policy: "normal", task_ref: null, coordinator_ref: null },
@@ -203,7 +217,7 @@ export class InboxService {
       ...(run ? { run } : {}),
       beforeResume: (answered) => {
         this.ledger.append("decision", answered);
-        if (answered.state === "closed") {
+        if (answered.state === "settled") {
           const laneKey = this.ingress.laneForDecision(decisionId);
           if (laneKey) this.ingress.completeLane(laneKey);
           this.#projectIngress();
@@ -225,7 +239,7 @@ export class InboxService {
     const at = (this.#options.now ?? (() => new Date()))().toISOString();
     const outcome = { merge: "merged", comment: "commented", close: "dropped", notify: "commented" }[actions[0].egress.op];
     const next = {
-      ...decision, state: "done",
+      ...decision, state: "settled",
       human_boundary: { form: "none", chat_injection: false },
       settled: { at, by: "coordinator", outcome },
     };
@@ -248,7 +262,7 @@ export class InboxService {
     const waiting = !receipt.risk.auto_accept;
     const next = {
       ...decision,
-      state: waiting ? "waiting" : "done",
+      state: waiting ? "waiting" : "settled",
       receipt_ref: receipt.id,
       human_boundary: { form: waiting ? "card" : "none", chat_injection: false },
       card: waiting ? {

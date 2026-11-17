@@ -2,10 +2,12 @@
   "id": "dc_01h9z3k7m2n4p6q9",
   "key": "gitlab:mr!93@head_sha",
   "space": "collie",
-  "space_candidates": ["collie"],
+  "space_candidates": [
+    "collie"
+  ],
   "event_ref": "ev_01h9z3k7m2n4p6q8",
   "case_ref": "ca_01h9z3k7m2n4p6q8",
-  "state": "routed",
+  "state": "open",
   "why": "改动集中在 protocol/，派一个 worker 补不变量单测，reviewer 只读复核",
   "decided_by": "coordinator",
   "decided_at": "2026-11-13T10:00:05Z",

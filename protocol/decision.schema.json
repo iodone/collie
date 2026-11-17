@@ -54,8 +54,8 @@
       "description": "触发这次判断的 Case id（一个 job turn）。路由表直派（没过 coordinator）时为 null——这正是区分『高频模式』与『真的想了想』的字段。"
     },
     "state": {
-      "enum": ["new", "thinking", "waiting", "routed", "acting", "done", "failed", "closed"],
-      "description": "DESIGN §3.3 状态机：new→thinking→(routed|waiting)；routed→acting→(done|failed)；failed→routed（带退避）；waiting→routed 或 closed。waiting 即界面上队列的一行（= Card）。"
+      "enum": ["open", "waiting", "settled"],
+      "description": "三态：open（系统持有：判断、待执行、执行中、重试）、waiting（人持有：Card）、settled（终态，必须有 settled）。判断中、待执行、执行中、重试都是 open 的 phase，不是独立状态。"
     },
     "why": {
       "type": "string",
@@ -64,8 +64,8 @@
       "description": "一行理由，≤140 字。DESIGN §3.2 要求每条动作都带 why；M3 验收就是『决定带 why』。它是 Ledger 记忆的实体，不是日志装饰。"
     },
     "decided_by": {
-      "enum": ["rule_table", "coordinator", "human"],
-      "description": "谁做的判断。rule_table = 路由表缓存命中（不烧模型）；human = 人直接在卡片或 chat 里改判。用于算『同类事件第二次不叫 coordinator 的比例』（M7）。"
+      "enum": ["system", "coordinator", "human"],
+      "description": "谁做的判断。system = 预算/跳数等内核规则；human = 人直接在卡片或 chat 里改判。用于算『同类事件第二次不叫 coordinator 的比例』（M7）。"
     },
     "decided_at": {
       "type": "string",
@@ -119,7 +119,7 @@
         },
         "forced_waiting": {
           "type": "boolean",
-          "description": "true 表示这次决定被护栏钉在 waiting，coordinator 与规则都无法改为 routed。"
+          "description": "true 表示这次决定被护栏钉在 waiting，coordinator 与规则都无法改为 open。"
         }
       },
       "allOf": [
@@ -138,6 +138,11 @@
       "required": ["claimed_until", "unknown_policy", "task_ref", "coordinator_ref"],
       "description": "运行态。**照抄 agent-autoloop 会坏的第 1 处**落在这里：一轮不是一次 agent turn，run 保持 claimed 直到 task ready；这期间 unknown 是正常态（unknown_policy 冻结为 normal），判断依据是任务状态有没有前进，见 Receipt.progress 与 invariants.judgeProgress。",
       "properties": {
+        "kind": {
+          "enum": ["build", "review"],
+          "default": "build",
+          "description": "任务类型。build = 写代码；review = 审（review 事件派出的只读任务）。未写按 build。它是审阅工作的判据：review 任务的 agent 一启动就按审阅工作运行。"
+        },
         "claimed_until": {
           "type": ["string", "null"],
           "format": "date-time",
@@ -145,7 +150,7 @@
         },
         "unknown_policy": {
           "const": "normal",
-          "description": "冻结为 normal：长任务期间没收到回执不是失败信号，不得据此判 failed。"
+          "description": "冻结为 normal：长任务期间没收到回执不是失败信号，不得据此结案或出失败卡。"
         },
         "task_ref": {
           "type": ["string", "null"],
@@ -216,7 +221,7 @@
     "card": {
       "description": "人面投影的三态与回答。state=waiting 时必须非 null——Card 不是新对象，就是这个字段。字段定义只此一处（$defs/card），card.schema.json 不重复定义。",
       "anyOf": [
-        { "type": "null", "description": "还没出卡（或已不需要卡）：routed/acting/thinking 等状态的正常取值。" },
+        { "type": "null", "description": "还没出卡（或已不需要卡）：open 的正常取值。" },
         { "$ref": "#/$defs/card" }
       ]
     },
@@ -228,12 +233,12 @@
       "type": ["object", "null"],
       "additionalProperties": false,
       "required": ["draft_ref", "summary"],
-      "description": "propose_rule 的产物：一条待沉淀的规则草稿指针。[开放问题 #4] 是否也走卡片尚未拍板。",
+      "description": "propose_policy 的产物：一份待沉淀的 policy 草稿指针。",
       "properties": {
         "draft_ref": {
           "type": "string",
           "pattern": "^/[^\\s]+$",
-          "description": "规则草稿文件的绝对路径（JSON，形状见 rule.schema.json）。"
+          "description": "policy 草稿文件的绝对路径（Markdown）。"
         },
         "summary": {
           "type": "string",
@@ -266,7 +271,7 @@
       "type": ["object", "null"],
       "additionalProperties": false,
       "required": ["at", "by", "outcome"],
-      "description": "『处理完了』。只有它能让 state 进入 done/closed；判断依据是 outcome，不是 ack。",
+      "description": "『处理完了』。只有它能让 state 进入 settled；判断依据是 outcome，不是 ack。",
       "properties": {
         "at": {
           "type": "string",
@@ -296,17 +301,10 @@
       }
     },
     {
-      "if": { "required": ["state"], "properties": { "state": { "enum": ["done", "closed"] } } },
+      "if": { "required": ["state"], "properties": { "state": { "const": "settled" } } },
       "then": {
         "required": ["settled"],
         "properties": { "settled": { "type": "object" } }
-      }
-    },
-    {
-      "if": { "required": ["state"], "properties": { "state": { "const": "failed" } } },
-      "then": {
-        "required": ["card"],
-        "properties": { "card": { "type": "object" } }
       }
     },
     {
@@ -316,7 +314,7 @@
       },
       "then": {
         "required": ["state"],
-        "properties": { "state": { "enum": ["done", "closed"] } }
+        "properties": { "state": { "const": "settled" } }
       }
     }
   ],
@@ -325,10 +323,10 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["kind", "risk_tags"],
-      "description": "一条动作。DESIGN §3.2 的五种输出（spawn / priority / hold / ask / propose_rule）+ 出站命令 + noop。为什么用单一对象加条件必填而不是五个 oneOf：action 种类会长（domain 词汇），单对象让『加一种』只动一处。",
+      "description": "一条动作。DESIGN §3.2 的五种输出（spawn / priority / hold / ask / propose_policy）+ 出站命令 + noop。为什么用单一对象加条件必填而不是五个 oneOf：action 种类会长（domain 词汇），单对象让『加一种』只动一处。",
       "properties": {
         "kind": {
-          "enum": ["spawn_task", "emit_command", "ask", "hold", "priority", "propose_rule", "noop"],
+          "enum": ["spawn_task", "emit_command", "ask", "hold", "priority", "propose_policy", "noop"],
           "description": "动作种类。spawn_task = 委派（= herdr-task add + start，不是新协议）；emit_command = 出站（评论/合并/关单/IM）；ask = 出卡问人；noop = 判断结果是『不动』。"
         },
         "risk_tags": {
@@ -497,7 +495,7 @@
           "type": "object",
           "additionalProperties": false,
           "required": ["draft_ref", "summary"],
-          "description": "kind=propose_rule 时必填。沉淀成路由表的提议，不直接生效。",
+          "description": "kind=propose_policy 时必填。沉淀成 policy 的提议，不直接生效。",
           "properties": {
             "draft_ref": {
               "type": "string",
@@ -535,7 +533,7 @@
           "then": { "required": ["priority"] }
         },
         {
-          "if": { "required": ["kind"], "properties": { "kind": { "const": "propose_rule" } } },
+          "if": { "required": ["kind"], "properties": { "kind": { "const": "propose_policy" } } },
           "then": { "required": ["rule"] }
         }
       ]
@@ -544,11 +542,11 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["kind", "question", "options", "state", "created_at", "acked_at", "answer"],
-      "description": "Decision 的人面投影。三态 open→decided→done / open→closed（DESIGN §4.2）；decided 只说明人表过态，不等于执行过。",
+      "description": "Decision 的人面投影。三态 open→decided→closed；decided 只说明人表过态，不等于执行过。",
       "properties": {
         "kind": {
           "enum": ["approval", "accept", "question", "alert"],
-          "description": "approval 只能由 guard 产生；accept 是 ready 后的人工验收；alert 承载 failed。"
+          "description": "approval 只能由 guard 产生；accept 是 ready 后的人工验收；alert 承载失败。"
         },
         "question": {
           "type": "string",
@@ -582,7 +580,7 @@
           "type": ["object", "null"],
           "additionalProperties": false,
           "required": ["option", "at", "by"],
-          "description": "人的回答。null = 还没答。回答会推进 decision.state（waiting→routed/closed），但**不推进 hops**。",
+          "description": "人的回答。null = 还没答。回答会推进 decision.state（waiting→open/settled），但**不推进 hops**。",
           "properties": {
             "option": {
               "enum": ["accept", "rework", "drop", "later"],
