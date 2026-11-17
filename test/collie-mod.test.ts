@@ -240,8 +240,8 @@ test("ticket 详情复用 shepherdr 的任务视图，只留 Terminal 与 Artifa
   expect(source.match(/taskDot\(stage === "needs" \? need : stage, \{ pct, halo: stage === "needs" && need === "needs" \}\)/g)).toHaveLength(2);
   expect(source).toContain("STAGE_WORD[stage] ?? stage");
   const dot = readFileSync(new URL("../lib/ticket-dot.js", import.meta.url), "utf8");
-  expect(dot).toContain("mods/tasks/pie/");
-  expect(dot).toContain("mods/tasks/tick.svg");
+  expect(dot).toContain("mods/collie/task/pie/");
+  expect(dot).toContain("mods/collie/task/tick.svg");
   const copied = readFileSync(new URL("../mods/collie/lib/ticket-dot.js", import.meta.url), "utf8");
   expect(copied).toBe(dot);
   expect(source).toContain("label: STAGE_WORD.needs");
