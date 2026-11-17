@@ -19,12 +19,13 @@
 ## 前置依赖
 
 - Python 3.10+；
-- herdr / shepherdr，且 `herdr-task` 在 `PATH`；
-- shepherdr 3.1.x 提供的 `herdr-task` 执行层，以及 `chat` add-on；
+- herdr-app / herdr-core（hc）在 `PATH`；
 - `bun`、`git` 在 `PATH`；
+- 至少一个已登录的 CLI agent（Claude Code / Codex）；
+- collie 自带 vendored `collie-task` / `collie-artifact`，不要求安装 shepherdr 的 `tasks` / `chat` / `artifacts` add-on；
 - Inbox 使用独立 layout；Ticket 详情的 Terminal 用 herdr 的 terminal block，Artifacts 用 collie 自有的 `collie-artifacts`（列表与 viewer 工具栏同一个 mod）。
 
-版本优先从 `.config/shepherdr/installed.json` 或 herdr-app 的 `data/shepherdr/installed.json` 读取；没有这些文件时依次尝试 add-on 元数据和 `herdr-task --version`。缺依赖时安装会在写入前停止。
+安装器在写入前检查 bundled `collie-task`、`bun`、`git`；不再读取 shepherdr 的 `installed.json` 或 `herdr-task --version`。
 
 ## 安装
 

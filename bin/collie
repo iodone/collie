@@ -113,6 +113,10 @@ def source_files(source: Path, root: Path) -> dict[str, Path]:
         helper = source / "bin" / name
         if helper.is_file():
             files[(HELPERS / name).as_posix()] = helper
+    artifact = source / "mods/collie-artifacts/bin/collie-artifact"
+    if artifact.is_file():
+        files[(APP / "bin" / "collie-artifact").as_posix()] = artifact
+        files[(HELPERS / "collie-artifact").as_posix()] = artifact
     addon = source / "addons.json"
     if not addon.is_file():
         raise InstallError(f"missing {addon}")
@@ -166,66 +170,6 @@ class Backups:
             shutil.copy2(source, destination)
 
 
-def version_tuple(value: str) -> tuple[int, ...]:
-    match = re.search(r"\d+(?:\.\d+)*", value)
-    if not match:
-        raise InstallError(f"cannot parse version from {value!r}")
-    return tuple(int(part) for part in match.group().split("."))
-
-
-def version_matches(actual: str, requirement: str) -> bool:
-    left = version_tuple(actual)
-    for clause in requirement.split():
-        match = re.fullmatch(r"(>=|<=|==|>|<)?(\d+(?:\.\d+)*)", clause)
-        if not match:
-            raise InstallError(f"unsupported version requirement {requirement!r}")
-        operator = match.group(1) or "=="
-        right = version_tuple(match.group(2))
-        width = max(len(left), len(right))
-        a = left + (0,) * (width - len(left))
-        b = right + (0,) * (width - len(right))
-        if not {
-            ">=": a >= b,
-            "<=": a <= b,
-            ">": a > b,
-            "<": a < b,
-            "==": a == b,
-        }[operator]:
-            return False
-    return True
-
-
-def shepherdr_version(root: Path) -> str | None:
-    candidates = [
-        root / ".config/shepherdr/installed.json",
-        app_root(root) / "data/shepherdr/installed.json",
-        app_root(root) / "lib/addons.json",
-    ]
-    for path in candidates:
-        target_path(root, path.relative_to(root))
-        if not path.is_file():
-            continue
-        try:
-            data = read_json(path)
-        except InstallError:
-            continue
-        value = data.get("version") or data.get("shepherdr_version")
-        if isinstance(value, str):
-            return value
-    command = shutil.which("herdr-task")
-    if command:
-        try:
-            result = subprocess.run(
-                [command, "--version"], capture_output=True, text=True, timeout=5, check=False
-            )
-            match = re.search(r"\d+(?:\.\d+)+", result.stdout + result.stderr)
-            if match:
-                return match.group()
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-    return None
-
-
 def dependency_errors(root: Path, source: Path) -> list[str]:
     errors = []
     for command in ("bun", "git"):
@@ -245,14 +189,6 @@ def dependency_errors(root: Path, source: Path) -> list[str]:
     for mod, requirement in needs.items():
         if not (app_root(root) / "mods" / mod).is_dir():
             errors.append(f"missing shepherdr mod `{mod}` at {app_root(root) / 'mods' / mod}")
-    version = shepherdr_version(root)
-    requirements = {value for value in needs.values() if value}
-    if requirements and not version:
-        errors.append("cannot determine shepherdr version; expected installed.json or `herdr-task --version`")
-    elif version:
-        for requirement in requirements:
-            if not version_matches(version, requirement):
-                errors.append(f"shepherdr {version} does not satisfy {requirement}")
     return errors
 
 
@@ -528,7 +464,7 @@ def doctor(args) -> int:
     for error in dependency_failures:
         check(False, error)
     if not dependency_failures:
-        check(True, "bundled collie-task, bun, git and shepherdr dependencies")
+        check(True, "bundled collie-task, bun and git")
     source = Path(manifest.get("source", ""))
     check(source.is_dir(), f"source checkout exists: {source}")
     check((root / STATE).is_dir(), f"state directory exists: {root / STATE}")

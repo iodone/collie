@@ -20,7 +20,8 @@
   "helpers": [
     "collie-sync",
     "collie-task",
-    "collie-ticket"
+    "collie-ticket",
+    "collie-artifact"
   ],
   "templates": [
     "collie-coordinator.md",
