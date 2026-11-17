@@ -1,5 +1,5 @@
-// Ported chat copy (not collie-sync managed): a task's artifacts (SHEP-60): every artifact its agent (and its helpers) made or updated, for the Artifacts tab of
-// its view, in the web app (service/compat.ts) and the window (mods/task-artifacts, mods/collie-chat/panel.js) alike.
+// Ported chat copy (not collie-sync managed): a task's artifacts (SHEP-60): every artifact its agent (and its helpers) made or updated, for the
+// Inbox's ticket (its Artifacts view), in the web app (service/compat.ts) and the window alike.
 // Found from collie-artifact's own records: an artifact names its task (collie-artifact publish keeps it, from the
 // publishing terminal's herdr.task label), else one of its versions was published by one of the task's own agent
 // terminals while that agent ran; an older one with neither is found by its id in the task's chat log ("Published <id>

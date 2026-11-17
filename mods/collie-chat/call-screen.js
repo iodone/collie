@@ -1,20 +1,19 @@
 // A voice call's screen in the Herdr window (SHEP-51, core/screen.js): the voice agent's fallback for what its
 // Shepherdr tools can't do, as the web page's (web/plugins/voice/screen.ts) but with what a mod can reach. A mod can't
 // read another mod's drawing, so the window's screen is its frame, read from Herdr: the spaces, the shown space's tabs,
-// the side panel's tabs (Files, Changes, Tasks, Artifacts) and an open task's tabs, the call's own chat (scrolled
+// the side panel's tabs (Files, Inbox) and an open ticket's views, the call's own chat (scrolled
 // here), and a few of the window's commands (Settings, Keybinds, Jump, next and previous tab or space). Each is a
 // numbered thing the voice agent can click. Not reachable from here (said in the answer): what is drawn inside a
 // mod (a list's rows, a dialog's buttons, Settings' pages), closing another mod's overlay, typing into another mod's
 // box, and keys.
 // A ref stays with its thing for the whole call (reset at its start).
 
-import { run, layout, shared } from "herdr";
+import { run, layout } from "herdr";
 import { spaces, panes } from "./live.js";
 import { screenText, screenParams, risky } from "./core/screen.js";
-import { backToTasks, requestWorkerTerminal, STACK as TASKS, LIST as TASK_LIST, THREAD, BODY, CHAT, TERM, FILES, CHANGES, PR, BROWSER } from "./panel.js";
-
-const PANELS = [["files", "Files"], ["changes", "Changes"], [TASKS, "Tasks"], ["artifacts", "Artifacts"]];
-const THREAD_TABS = [[CHAT, "Chat"], [TERM, "Terminal"], [FILES, "Files"], [CHANGES, "Changes"], [PR, "Pull request"], [BROWSER, "Browser"]];
+// The side panel's tabs (the layout's own panel-body children), and an open ticket's views, by id.
+const PANEL_NAMES = { files: "Files", changes: "Changes", collie: "Inbox", artifacts: "Artifacts" };
+const TICKET_NAMES = { "collie-ticket-artifacts": "Artifacts" };
 const COMMANDS = [
   ["app.settings", "Settings", null], ["mod.open", "Keybinds", { name: "keybinds" }], ["mod.open", "Jump to a space, task or artifact", { name: "jump" }],
   ["tab.next", "Next tab", null], ["tab.prev", "Previous tab", null], ["space.next", "Next space", null], ["space.prev", "Previous space", null],
@@ -60,19 +59,18 @@ export class CallScreen {
     const panel = find(tree, "panel"), body = find(tree, "panel-body");
     const open = !!panel && !panel.hidden;
     nodes.push({ ref: "", role: "heading", name: `Side panel${open ? "" : " (hidden)"}`, level: 2 });
-    for (const [id, name] of PANELS) {
-      if (!find(tree, id)) continue;
-      add(`panel:${id}`, { role: "tab", name, selected: open && body?.active === id, depth: 1 }, () => { run("layout.select", { stack: "panel-body", child: id }); run("layout.show", { id: "panel" }); });
+    for (const child of body?.children ?? []) {
+      const name = PANEL_NAMES[child.id];
+      if (!name) continue;
+      add(`panel:${child.id}`, { role: "tab", name, selected: open && body?.active === child.id, depth: 1 }, () => { run("layout.select", { stack: "panel-body", child: child.id }); run("layout.show", { id: "panel" }); });
     }
     add("panel:toggle", { role: "button", name: open ? "Hide the side panel" : "Show the side panel", depth: 1 }, () => run(open ? "layout.hide" : "layout.show", { id: "panel" }));
-    if (open && body?.active === TASKS && find(tree, TASKS)?.active === THREAD) {
-      add("thread:back", { role: "button", name: "Back to the task list", depth: 1 }, () => backToTasks());
-      const shownTab = find(tree, BODY)?.active;
-      for (const [id, name] of THREAD_TABS) add(`thread:${id}`, { role: "tab", name: `Task's ${name}`, selected: shownTab === id, depth: 1 }, () => {
-        const term = shared("tasks.thread")?.terminal;
-        if (id === TERM && term) requestWorkerTerminal(term);
-        run("layout.select", { stack: BODY, child: id });
-      });
+    if (open && body?.active === "collie" && find(tree, "collie")?.active === "collie-ticket") {
+      add("ticket:back", { role: "button", name: "Back to the inbox", depth: 1 }, () => run("layout.select", { stack: "collie", child: "collie-list" }));
+      const shown = find(tree, "collie-ticket-body")?.active;
+      for (const child of find(tree, "collie-ticket-body")?.children ?? [])
+        add(`ticket:${child.id}`, { role: "tab", name: `Ticket's ${TICKET_NAMES[child.id] ?? child.id}`, selected: shown === child.id, depth: 1 },
+          () => run("layout.select", { stack: "collie-ticket-body", child: child.id }));
     }
     if (open && body?.active === "artifacts" && find(tree, "artifacts")?.active === "artifacts-view")
       add("artifact:back", { role: "button", name: "Back to the artifacts list", depth: 1 }, () => run("layout.select", { stack: "artifacts", child: "artifacts-list" }));
@@ -80,7 +78,7 @@ export class CallScreen {
     add("chat:scroll", { role: "scroll", name: "the call's chat", depth: 1, scroll: this.chat?.scrollWords?.() ?? "" }, null);
     nodes.push({ ref: "", role: "heading", name: "Commands", level: 2 });
     for (const [cmd, name, args] of COMMANDS) add(`cmd:${name}`, { role: "button", name, depth: 1 }, () => (args ? run(cmd, args) : run(cmd)));
-    const shows = [shown ? `the ${shown.name ?? shown.id} space` : "", open ? `its ${PANELS.find(([id]) => id === body?.active)?.[1] ?? "side"} panel` : ""].filter(Boolean).join(", ");
+    const shows = [shown ? `the ${shown.name ?? shown.id} space` : "", open ? `its ${PANEL_NAMES[body?.active] ?? "side"} panel` : ""].filter(Boolean).join(", ");
     return { head: { app: "the Herdr window", shows }, nodes };
   }
 
@@ -97,11 +95,14 @@ export class CallScreen {
     if (q.error) return no(q.error);
     if (q.do === "look") return { ok: true, screen: this.text(q.find) };
     if (q.do === "back" || q.do === "close") {
-      // the panel's own Back first (a task's or artifact's), then (close) the panel itself; an overlay (Settings, a
+      // the panel's own Back first (a ticket's or artifact's), then (close) the panel itself; an overlay (Settings, a
       // dialog) is another mod's, which a call can't close
       const tree = layout();
       const body = find(tree, "panel-body"), panel = find(tree, "panel");
-      if (panel && !panel.hidden && body?.active === TASKS && find(tree, TASKS)?.active === THREAD) { backToTasks(); return after("Back to the task list"); }
+      if (panel && !panel.hidden && body?.active === "collie" && find(tree, "collie")?.active === "collie-ticket") {
+        run("layout.select", { stack: "collie", child: "collie-list" });
+        return after("Back to the inbox");
+      }
       if (panel && !panel.hidden && body?.active === "artifacts" && find(tree, "artifacts")?.active === "artifacts-view") { run("layout.select", { stack: "artifacts", child: "artifacts-list" }); return after("Back to the artifacts list"); }
       if (q.do === "close" && panel && !panel.hidden) { run("layout.hide", { id: "panel" }); return after("Hid the side panel"); }
       return no("nothing is open to close or go back from that the window lets a call reach");

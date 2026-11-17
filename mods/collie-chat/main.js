@@ -55,7 +55,6 @@ import { Dictation, BUN_PATH, warmAudio } from "./dictate.js";
 
 // Writing down after Done this long says it's taking longer than usual (SHEP-63).
 const DICT_SLOW = 5000;
-import { PanelHost, inner, openTaskThread, backToTasks, requestWorkerTerminal, THREAD, STACK as TASKS_STACK, BODY as THREAD_BODY, CHAT as THREAD_CHAT, TERM as THREAD_TERM, FILES as THREAD_FILES, CHANGES as THREAD_CHANGES, PR as THREAD_PR, BROWSER as THREAD_BROWSER } from "./panel.js";
 import { markRead, onScreen, unread } from "./unread.js";
 import { notifies } from "./notify.js";
 import { ScreenWatch, screenStrips, openCard, cardsOf, starting, cliOf } from "./screens.js";
@@ -159,15 +158,20 @@ const taskRef = (x) => (x?.ref ? String(x.ref) : `#${x?.id}`);
 const SECTION_DOT = { needs: "need", need: "need", working: "work", work: "work", merging: "merging", ready: "ready", queued: "queued", scheduled: "scheduled", todo: "todo", done: "done" };
 // Task chips under a message: this wide, this far apart.
 const TASK = 170, TASK_GAP = 6;
-// A Ready task's news line: its Review (opens the Accept card), this wide, at the line's right end.
-const ACCEPT = 64;
 // The picker's Frequently used before there is any history.
 const FREQUENT = ["👍", "👎", "❓", "✅", "👀", "🎉", "❤️", "🔥", "🙏"];
 const safe = (s) => String(s).replace(/[^\w.-]/g, "_");
-// Threads (openThread()): shared "collie-chat.threads" = { [pane]: { terminal, task, title } }, only
+// Threads (a thread's dialog): shared "collie-chat.threads" = { [pane]: { terminal, task, title } }, only
 // panes still there; and the one showing a worker.
 const threads = () => Object.fromEntries(Object.entries(shared("collie-chat.threads") ?? {}).filter(([p]) => panes().some((x) => x.pane === p && x.mod === "collie-chat")));
 const threadOf = (terminal) => Object.entries(threads()).find(([, v]) => v?.terminal === terminal)?.[0] ?? null;
+// A task, its worker, or the task list: Collie's Inbox (its queue and ticket view), never a
+// Tasks panel: the panel's chat drill-in went with Shepherdr.
+const openInbox = () => {
+  run("layout.select", { stack: "panel-body", child: "collie" });
+  run("layout.select", { stack: "collie", child: "collie-list" });
+  run("layout.show", { id: "panel" });
+};
 // How a card's answer went, for its quiet line ("Allowed in the chat"); null for no decision
 // (the terminal asks instead).
 
@@ -205,7 +209,7 @@ let bound = false;
 function voiceOpened(nav) {
   if (nav.kind === "task") return `${nav.ref ?? String(nav.task ?? "").split(":").pop()}${nav.title ? ` \u00b7 ${nav.title}` : ""}`;
   if (nav.kind === "artifact") return nav.title ?? "An artifact";
-  if (nav.kind === "tasks" || nav.kind === "needs") return nav.kind === "needs" ? "What needs you" : "The Tasks list";
+  if (nav.kind === "tasks" || nav.kind === "needs") return nav.kind === "needs" ? "What needs you" : "The Inbox";
   if (nav.kind === "settings") return `Settings${nav.section ? ` \u203a ${nav.section}` : ""}`;
   if (nav.kind === "panel") return `${nav.panel[0].toUpperCase()}${nav.panel.slice(1)}`;
   return nav.kind === "space" || nav.kind === "chat" ? "A space" : "";
@@ -213,46 +217,22 @@ function voiceOpened(nav) {
 
 export default class Chat extends View {
   init(_props, cx) {
-    // The Tasks panel's drill-in view (props { panel: true }): its header (props { head: true })
-    // and its body, a nested Chat for the task's worker, made with its own props ({ inner: true,
-    // thread: true, terminal, ... }).
-    if (props()?.panel === true && !_props?.inner) {
-      this.host = new PanelHost(Chat, props()?.head === true);
-      // pane.go (mod.json "focusable") can land on the header too: it hands the keyboard on to the chat below it (the
-      // body's nested Chat takes "focus" in its own loop). At most 5 s per wait, as the loop below.
-      if (this.host.head) cx.spawn(async (cx) => {
-        let cmd = null;
-        for (;;) {
-          cmd ??= nextCommand();
-          const c = await Promise.race([cmd, cx.sleep(5000)]);
-          if (c === undefined) continue;
-          cmd = null;
-          if (c === "focus") run("pane.go", { direction: "down" });
-        }
-      });
-      return;
-    }
-    this.inner = _props?.inner === true;
-    if (this.inner) inner.chat = this;
-    const P = this.inner ? _props : props();
+    const P = props();
     this.origin = P?.terminal ?? null;
     this.addr = this.origin;
     // No agent yet (a Coordinator tab): it may have started one already (this slot's label).
     this.role = P?.role ?? null;
     this.slot = P?.slot ?? null;
-    // A thread: a task worker's chat, in the Tasks panel ({ terminal, thread: true, task,
-    // title }). The same conversation, box and cards, but only a view: it never claims the
-    // worker's herdr.chat, never gives it a pane, and leaving it leaves the worker running.
+    // A thread: another agent's chat in a dialog ({ terminal, thread: true, title }), opened from
+    // a subagent's row. The same conversation, box and cards, but only a view: it never claims
+    // the worker's herdr.chat, never gives it a pane, and leaving it leaves the worker running.
     this.thread = P?.thread === true;
-    // A task whose agent ended (the Tasks list's click): its conversation from that agent's own
-    // log, kept by collie-task ({ path, kind }), and the task ({ machine, folder, slug, id }) for
-    // its Resume.
+    // A task whose agent ended: its conversation from that agent's own log, kept by collie-task
+    // ({ path, kind }), and the task ({ machine, folder, slug, id }) for its Resume.
     this.endedLog = this.thread ? P?.log ?? null : null;
     this.taskKey = this.thread ? P?.key ?? null : null;
     // Its task's id (HERD-12), for the box's "Message HERD-12".
     this.taskRef = P?.task ?? null;
-    // Tells the Tasks panel threads can be asked for (shared "collie-chat.threadreq").
-    if (shared("collie-chat.threads.v") !== 1) setShared("collie-chat.threads.v", 1);
     if (!this.addr && this.role && this.slot) this.addr = this.slotAgent();
     this.machine = this.addr?.includes("/") ? this.addr.split("/")[0] : null;
     this.phase = "finding";
@@ -377,8 +357,8 @@ export default class Chat extends View {
     // by id, the requests being read, those answered here (until the hook lets them go).
     this.workerCards = new AskCards({
       reply: (ask, text, cx) => this.replyWorker(ask, text, cx),
-      toTerminal: (ask) => { openTaskThread(ask.terminal, ask.ref, ask.title); requestWorkerTerminal(ask.terminal); },
-      chatAbout: (ask) => openTaskThread(ask.terminal, ask.ref, ask.title),
+      toTerminal: () => openInbox(),
+      chatAbout: () => openInbox(),
     }, cx.focus_handle());
     // Codex's own questions (request_user_input, no hook): the same question card, its answer
     // pressed on Codex's screen (codexCard(), answerCodex()).
@@ -397,8 +377,6 @@ export default class Chat extends View {
     this.cardW = new Map();
     this.readingAsks = new Set();
     this.answeredAsks = new Set();
-    // Ready tasks being accepted from their live rows (by ref).
-    this.accepting = new Set();
     // CLI start screens (screens.js): this agent's, and in an Assistant's chat its workers'.
     // A press on its way, and why one didn't go, by card.
     this.screens = new ScreenWatch((card) => this.screenAlert(card));
@@ -436,7 +414,7 @@ export default class Chat extends View {
       if (this.status() === "working" || rows.some((r) => Date.now() - (r.at ?? 0) < 61000) || (rows.length && ticks % 30 === 0)) cx.notify();
     });
     // An Assistant's chat keeps its tasks current for their news lines (newsLines()): collie-task's own
-    // statuses, the same as the Tasks panel's and the news it sends.
+    // statuses, the same as the Inbox's and the news it sends.
     cx.timer.every(8000, (cx) => {
       if (!this.assistant() || this.tasksLoading) return;
       this.tasksLoading = true;
@@ -504,18 +482,13 @@ export default class Chat extends View {
         cmd = null;
         // From the shell: data/chat-sendreq.json = { pane, text, files? }, then `herdr-app do
         // chat.send` (with fill: true, the words go into the box instead; with thread:
-        // { terminal, task, title }, that worker's thread opens beside this chat).
+        // { terminal, task, title }, the Inbox opens there instead).
         if (c === "send") {
           const f = `${appHome()}/data/chat-sendreq.json`;
           let req = null;
           try { req = JSON.parse(await fs.readFile(f, "utf8")); } catch {}
-          // The Tasks panel's chat has no pane: it answers to its layout block's id, and
-          // { peek: true } opens its worker's terminal.
-          const me = this.inner ? THREAD : this.myPane();
-          if (req?.pane && req.pane === me && req.peek) {
-            await fs.unlink(f).catch(() => {});
-            this.toTerminal();
-          } else if (req?.pane && req.pane === me && req.secret) {
+          const me = this.myPane();
+          if (req?.pane && req.pane === me && req.secret) {
             // { secret: true }: the keyboard goes to the first secret card's masked box.
             await fs.unlink(f).catch(() => {});
             // Taken in render, once the card's box is there (secret-card.js focus()).
@@ -523,7 +496,7 @@ export default class Chat extends View {
             cx.notify();
           } else if (req?.pane && req.pane === me && req.thread?.terminal) {
             await fs.unlink(f).catch(() => {});
-            this.openThread(req.thread);
+            openInbox();
           } else if (req?.pane && req.pane === me && req.fill) {
             await fs.unlink(f).catch(() => {});
             const v = String(req.text ?? "");
@@ -542,7 +515,7 @@ export default class Chat extends View {
           }
           continue;
         }
-        // pane.go landed on this copy (mod.json "focusable"): the Tasks panel's chat takes the keyboard into its box;
+        // pane.go landed on this copy (mod.json "focusable"): the keyboard goes into its box;
         // a pane copy already does on focus (draw()), so again is harmless.
         if (c === "focus") { this.box.focus(); cx.notify(); continue; }
         if (focused()?.pane !== this.myPane()) continue;
@@ -576,7 +549,6 @@ export default class Chat extends View {
   // asks are released (Codex waits on the hook), so it asks in its terminal instead. Claude's stay
   // on the web's cards: its terminal shows its own prompt meanwhile. A call or a recording ends with it.
   async close(cx) {
-    if (this.host) return this.host.close(cx);
     this.box.release();
     this.findBox.release();
     this.scroll.release();
@@ -729,7 +701,7 @@ export default class Chat extends View {
   // worker asks (a permission, questions, a plan), its own card shows in the Assistant's chat
   // too, answerable there. The card sits in the timeline just under the task's needs-you line
   // (timelineCards()), headed by its task. One card per task (its oldest ask).
-  // The Tasks panel's engine (inbox.js, run by the tab bar) keeps the hook asking for every
+  // The Inbox's engine (inbox.js, run by the tab bar) keeps the hook asking for every
   // worker not on screen and lists the waiting requests: shared "inbox.asks" = [{ id, terminal }].
   // The answer goes as the worker's own chat sends it (answerAsk()); every copy then closes
   // with a quiet line saying how. Typing in the box still goes to the Assistant only.
@@ -855,34 +827,24 @@ export default class Chat extends View {
     if (own) out.push({ id: `card:${own.id}`, at: own.opened, strips: screenStrips(own, { who: this.cli(),
       busy: this.screenBusy.has(own.id), error: this.screenErr.get(own.id),
       press: (i, cx) => this.pressScreen(own, i, cx), toTerminal: () => this.toTerminal() }) });
-    // A worker's: headed by its task, with its chat a quiet link at the right.
-    const open = (id, ref, title, terminal) => [linkCtl(`wask-open-${id}`, "Open chat", () => openTaskThread(terminal, ref, title))];
+    // A worker's: headed by its task, with the Inbox (its ticket) a quiet link at the right.
+    const open = (id) => [linkCtl(`wask-open-${id}`, "Open chat", () => openInbox())];
     for (const a of this.wasks ?? []) {
       if (a.secret) {
         if (!a.secret.kept) out.push({ id: `card:${a.id}`, at: this.afterNews(a.ref, this.seenAt(`s:${a.secret.address}|${a.secret.name}`)),
-          strips: this.secretCards.strips(a.secret, { who: a.ref, links: open(a.id, a.ref, a.title, a.terminal) }) });
+          strips: this.secretCards.strips(a.secret, { who: a.ref, links: open(a.id) }) });
       } else out.push({ id: `card:${a.id}`, at: this.afterNews(a.ref, askAt(a.id)), owner: this.workerCards, ask: a,
-        strips: this.workerCards.strips(a, { who: a.ref, links: open(a.id, a.ref, a.title, a.terminal), terminal: false, chatHint: "Or write to it in its own chat." }) });
+        strips: this.workerCards.strips(a, { who: a.ref, links: open(a.id), terminal: false, chatHint: "Or write to it in its own chat." }) });
     }
     for (const [addr, x] of this.workerTasks()) {
       // Its secret asks' moments, noted even while a question of its hides them (seenAt()).
       for (const s of this.secretCards.items(addr)) if (!s.kept) this.seenAt(`s:${s.address}|${s.name}`);
       const card = openCard(addr);
-      if (card) out.push({ id: `card:${card.id}`, at: this.afterNews(x.ref, card.opened), strips: screenStrips(card, { who: x.ref, links: open(card.id, x.ref, x.title, addr),
+      if (card) out.push({ id: `card:${card.id}`, at: this.afterNews(x.ref, card.opened), strips: screenStrips(card, { who: x.ref, links: open(card.id),
         busy: this.screenBusy.has(card.id), error: this.screenErr.get(card.id), press: (i, cx) => this.pressScreen(card, i, cx) }) });
     }
     return out;
   }
-
-  // Accept on a Ready task's news line: the Tasks panel's command (collie-task accept: merges
-  // first when there's something to merge, else done).
-  acceptTask(x, _cx) {
-    // Accept shows what you approve first: the Accept card (mods/accept-card) runs collie-task
-    // accept from its own Accept; this row reads the change on its timer.
-    openOverlay({ mod: "accept-card", kind: "dialog", modal: true, width: 640, height: 640,
-      props: { ref: x.ref, folder: x.folder, machine: this.machine ?? null, title: x.title } });
-  }
-
 
   // The agent's status. Parked behind this chat it isn't in agents(); the core's word then.
   status() {
@@ -1071,7 +1033,7 @@ export default class Chat extends View {
     // again, or the header, the agents list and the sweep take it for an agent without a chat.
     // Only to the pane this chat last knew as its own, while that is still a chat pane.
     const pane = this.lastPane ?? (this.slot && this.slotRec()?.pane) ?? null;
-    if (!this.thread && !this.inner && !this.swapping && !t.labels?.["herdr.chat"] && pane && !panes().some((p) => p.terminal === this.addr)
+    if (!this.thread && !this.swapping && !t.labels?.["herdr.chat"] && pane && !panes().some((p) => p.terminal === this.addr)
       && panes().some((p) => p.pane === pane && p.mod === "collie-chat")) await hc(["label", this.addr, `herdr.chat=${pane}`]);
     const kind = KINDS[t.status?.app] ?? KINDS[t.foreground?.name];
     // Back at its shell because the session it resumed is gone: a new agent starts there.
@@ -1938,7 +1900,7 @@ export default class Chat extends View {
     // A space's tasks make hundreds of lines: the last render's, unless what they're made of
     // changed (HERD-94: a render past Herdr's 50 ms is stopped).
     const sig = [space, this.spaceTasks, items, items.length, items[items.length - 1]?.id, this.start,
-      (this.wasks ?? []).map((a) => a.ref).join(","), [...this.accepting].join(",")];
+      (this.wasks ?? []).map((a) => a.ref).join(",")];
     if (this.newsMemo?.sig.every((v, i) => v === sig[i])) return this.newsMemo.out;
     const tasks = new Map();
     for (const x of this.spaceTasks ?? []) if ((x.space ?? x.queue?.space) === space && x.ref && !tasks.has(x.ref)) tasks.set(x.ref, x);
@@ -1951,8 +1913,8 @@ export default class Chat extends View {
       all.push({ id: `tn:${ref}:${event}:${at}`, at, ref, event, text: "", made: true });
     }
     all.sort((a, b) => a.at - b.at);
-    const last = new Map(), lastReady = new Map();
-    for (const e of all) { last.set(e.ref, e); if (e.event === "ready") lastReady.set(e.ref, e); }
+    const last = new Map();
+    for (const e of all) last.set(e.ref, e);
     this.needsAt = new Map();
     for (const e of all) if ((e.event === "needs-you" || e.event === "failed") && Number.isFinite(e.at)) this.needsAt.set(e.ref, [...(this.needsAt.get(e.ref) ?? []), e.at]);
     const order = [], ordered = new Set();
@@ -1962,10 +1924,8 @@ export default class Chat extends View {
       const asks = (this.wasks ?? []).some((a) => a.ref === e.ref);
       // Needs you, still: its words in red, and its card open just under it.
       const live = last.get(e.ref) === e && (e.event === "needs-you" || e.event === "failed") && (x?.status === "needs" || asks);
-      // Accept on the newest ready line while the task is still Ready.
-      const accept = lastReady.get(e.ref) === e && x?.status === "ready" && !asks;
       const row = { kind: "tasknews", id: e.id, ref: e.ref, task: x ?? null, taskId: x?.id ?? null, folder: x?.folder ?? null, title: x?.title ?? "",
-        ...newsWords(e, x), live, asks: live && asks, accept, busy: accept && this.accepting.has(e.ref) };
+        ...newsWords(e, x), live, asks: live && asks };
       if (e.made) extra.push({ at: e.at, row }); else inline.set(e.id, row);
     }
     this.taskOrder = order;
@@ -1975,22 +1935,10 @@ export default class Chat extends View {
 
   // A news line's words: core/chat-view.js newsWords(), as the web app's chat has them.
 
-  // A task chip: its worker's chat in the Tasks panel, else the task list there.
+  // A task chip, or a news line: Collie's Inbox (its ticket view), where its task and worker are.
   // k: the task itself, when known (ids repeat across folders).
-  openTask(id, k = null) {
-    const x = k ?? this.tasks?.find((t) => String(t.id) === String(id));
-    const live = x?.live ?? [];
-    const worker = (live.find((a) => a.role === "worker") ?? (live.some((a) => a.role) ? null : live[0]))?.address;
-    if (worker) { this.openThread({ terminal: worker, task: taskRef(x), title: x.title }); return; }
-    run("layout.select", { stack: "panel-body", child: "tasks" });
-    backToTasks();
-    run("layout.show", { id: "panel" });
-  }
-
-  // A worker's thread ({ terminal, task, title }): its chat inside the Tasks panel (drill in,
-  // panel.js), never a pane beside this chat.
-  openThread(req) {
-    openTaskThread(req.terminal, req.task, req.title);
+  openTask(_id, _k = null) {
+    openInbox();
   }
 
   // A pane, wherever it is: its space and tab shown, then the pane focused.
@@ -2021,8 +1969,12 @@ export default class Chat extends View {
   // Back to the terminal: the header's switch (pane-chat) puts the agent's terminal back in
   // this pane's spot. It acts on the focused pane, so focus this one first.
   toTerminal() {
-    // A thread's worker has no pane: the Tasks panel's header switches to its terminal there.
-    if (this.thread) { if (!this.ended) requestWorkerTerminal(this.addr); return; }
+    // A thread (another agent's chat in a dialog) has no pane of its own: its agent's, if it has one.
+    if (this.thread) {
+      const p = panes().find((x) => x.terminal === this.addr)?.pane;
+      if (p && !this.ended) this.revealPane(p);
+      return;
+    }
     const mine = this.myPane();
     if (!mine) return;
     run("pane.focus", { pane: mine });
@@ -2031,7 +1983,6 @@ export default class Chat extends View {
 
   // The agent ended: its pane would have closed, so this one does.
   closeSelf() {
-    if (this.inner) { backToTasks(); return; }
     const mine = this.myPane() ?? this.lastPane;
     if (mine) run("pane.close", { pane: mine });
   }
@@ -2371,18 +2322,17 @@ export default class Chat extends View {
     }
   }
 
-  // What the window shows now, for the voice agent's "here", "this task" (voice.ts reads where.json): the space
-  // selected, and the task open in the Tasks panel with its tab. Written only when it changes.
+  // What the window shows now, for the voice agent's "here", "this ticket" (voice.ts reads where.json): the space
+  // selected, and the ticket open in the Inbox. Written only when it changes.
   callWhere() {
     const find = (node, id) => { if (!node || typeof node !== "object") return null; if (node.id === id) return node; for (const c of node.children ?? []) { const hit = find(c, id); if (hit) return hit; } return null; };
     const s = spaces().find((x) => x.active);
     const place = s ? (s.machine && !String(s.id).includes("/") ? `${s.machine}/${s.id}` : String(s.id)) : null;
     const tree = layout();
-    const panel = find(tree, "panel"), thread = shared("tasks.thread");
-    const open = panel && !panel.hidden && find(tree, "panel-body")?.active === TASKS_STACK && find(tree, TASKS_STACK)?.active === THREAD && thread?.task;
-    const m = open && String(thread.terminal ?? "").includes("/") ? String(thread.terminal).split("/")[0] : null;
-    const TAB = { [THREAD_CHAT]: "chat", [THREAD_TERM]: "terminal", [THREAD_FILES]: "files", [THREAD_CHANGES]: "changes", [THREAD_PR]: "pr", [THREAD_BROWSER]: "browser" };
-    const w = JSON.stringify({ place, task: open ? (m ? `${m}:${thread.task}` : String(thread.task)) : null, tab: open ? TAB[find(tree, THREAD_BODY)?.active] ?? "chat" : null });
+    const panel = find(tree, "panel");
+    const open = panel && !panel.hidden && find(tree, "panel-body")?.active === "collie" && find(tree, "collie")?.active === "collie-ticket";
+    const task = open ? shared("tasks.thread")?.task ?? null : null;
+    const w = JSON.stringify({ place, task: task == null ? null : String(task), tab: null });
     if (w === this.callWhereWas) return;
     this.callWhereWas = w;
     fs.writeFile(`${this.callDir}/where.json`, w).catch(() => {});
@@ -2444,37 +2394,19 @@ export default class Chat extends View {
       return { ok: true };
     }
     if (nav.kind === "chat") {
-      // the call's own chat: its pane; another chat: its space, or its task's chat in the Tasks panel
+      // the call's own chat: its pane; another chat: its space, or the Inbox for a task's worker
       if (nav.addr === this.addr) { const mine = this.myPane() ?? this.lastPane; if (!mine) return no("its pane isn't open"); this.revealPane(mine); return { ok: true }; }
-      if (/\/worker$/.test(nav.chat ?? "") && nav.addr) { openTaskThread(nav.addr, nav.chat.slice(0, -7).split(":").pop(), null); return { ok: true }; }
+      if (/\/worker$/.test(nav.chat ?? "") && nav.addr) { openInbox(); return { ok: true }; }
       if (String(nav.chat ?? "").startsWith("p:")) { const sp = spaceOf(nav.chat.slice(2).replace(":", "/")); if (!sp) return no("this window doesn't have that space"); run("space.select", { id: sp.id }); return { ok: true }; }
       return no("that chat isn't running");
     }
     if (nav.kind === "task") {
-      if (nav.tab === "review" && nav.ref && nav.folder) {
-        openOverlay({ mod: "accept-card", kind: "dialog", modal: true, width: 640, height: 640, props: { ref: nav.ref, folder: nav.folder, machine: nav.machine ?? null, title: nav.title } });
-        return { ok: true };
-      }
-      if (!nav.addr) {
-        // no agent running: the Tasks panel, searched for it
-        setShared("tasks.searchreq", { q: `${nav.ref ?? nav.task} ${nav.title ?? ""}`.trim(), at: Date.now() });
-        run("layout.select", { stack: "panel-body", child: TASKS_STACK }); backToTasks(); run("layout.show", { id: "panel" });
-        return { ok: true };
-      }
-      openTaskThread(nav.addr, nav.ref ?? String(nav.task).split(":").pop(), nav.title ?? null);
-      const child = { terminal: THREAD_TERM, files: THREAD_FILES, changes: THREAD_CHANGES, pr: THREAD_PR, browser: THREAD_BROWSER }[nav.tab];
-      if (child) { if (nav.tab === "terminal") requestWorkerTerminal(nav.addr); run("layout.select", { stack: THREAD_BODY, child }); }
+      // Its ticket, and its worker's chat, are in the Inbox now (the Tasks panel is gone).
+      openInbox();
       return { ok: true };
     }
     if (nav.kind === "tasks" || nav.kind === "needs") {
-      run("layout.select", { stack: "panel-body", child: TASKS_STACK });
-      backToTasks();
-      run("layout.show", { id: "panel" });
-      // the filter row's chip and the search field, as the Tasks list's own keys set them (mods/tasks)
-      const FILTER = { need: "needs", work: "working", ready: "ready", merging: "merging", queued: "queued", scheduled: "scheduled", todo: "todo", done: "done", automations: "automations" };
-      const at = Date.now();
-      setShared("tasks.filterreq", { key: nav.kind === "needs" ? "needs" : FILTER[nav.filter] ?? "all", at });
-      if (nav.kind === "tasks" && nav.search) setShared("tasks.searchreq", { q: String(nav.search), at });
+      openInbox();
       return { ok: true };
     }
     if (nav.kind === "artifact") { openViewer({ id: nav.artifact, title: nav.title, version: nav.v, latest: nav.v, machine: nav.machine ?? null }); return { ok: true }; }
@@ -2610,7 +2542,7 @@ export default class Chat extends View {
   }
 
   // Who the picker's Restart is for (chat-models' props.pane, back in shared "collie-chat.restartreq"):
-  // this chat's pane, or in a task's chat (the Tasks panel; no pane of its own) its worker.
+  // this chat's pane, or in a thread (no pane of its own) its agent.
   pickKey() {
     return this.thread ? (this.addr ? `thread:${this.addr}` : null) : this.myPane();
   }
@@ -2642,7 +2574,7 @@ export default class Chat extends View {
   // A task's chat: collie-task switch starts its worker again on the pick, in the same session
   // when the CLI stays the same (else with a handover), and ends the old one. Only collie-task
   // starts it, so it never gets a pane, a tab or herdr.chat (the parked sweep would end it);
-  // the Tasks panel's view then follows the new worker, as after Resume.
+  // and the Inbox's ticket follows the new worker, as after Resume.
   switchTask(pick, cx) {
     if (this.restarting || !this.addr) return;
     this.restarting = true;
@@ -2674,9 +2606,8 @@ export default class Chat extends View {
     });
   }
 
-  // Buttons as the tasks panel draws them: primary is the view's one main action.
   // A finished or stopped task's Resume: collie-task resume starts its agent again on its session
-  // (a handoff when that's gone); the Tasks panel's view then follows the new agent.
+  // (a handoff when that's gone); the Inbox's ticket then follows the new agent.
   resumeTask(cx) {
     const k = this.taskKey;
     if (!k || this.resuming) return;
@@ -3001,7 +2932,7 @@ export default class Chat extends View {
     const found = q && String(x.text ?? x.code ?? "").toLowerCase().includes(q.toLowerCase()) ? `|f:${q}` : "";
     const open = (x.kind === "tools" || x.kind === "brief") && this.opened.has(x.id);
     const shown = open && x.steps ? x.steps.filter((s) => this.results.get(s.id) != null).length : 0;
-    return `${x.id}|${x.kind}${x.closed ? `.${x.closed}` : ""}|${open ? `o${x.steps?.length ?? 1}.${shown}` : ""}|${x.text?.length ?? x.code?.length ?? 0}|${x.from ? 1 : 0}${x.failed ? 1 : 0}${x.late ? 1 : 0}${x.waiting ? 1 : 0}${x.images ? 1 : 0}${x.files?.length ?? 0}|${x.paths?.length ?? 0}${x.paths?.every((p) => this.views[p]) ? "v" : ""}|${(x.pills ?? []).map((p) => p.emoji + (p.you ? 1 : 0) + (p.agent ? 1 : 0)).join("")}|${x.bar ? "b" : ""}${x.kind === "artifact" ? `|a${x.version ?? ""}${x.line ? "l" : ""}${x.pending ? "p" : ""}` : ""}${x.kind === "tasknews" ? `|${x.accept ? "a" : ""}` : ""}${x.kind === "cardstrip" ? `|cs${x.sig}${x.first ? "F" : ""}${x.last ? "L" : ""}` : ""}|${x.clip ? `c${x.clip}` : ""}${x.open ? "o" : ""}${x.kind === "day" ? x.text : ""}|${x.top0 ? "T" : ""}${x.bot0 ? "B" : ""}${x.h ?? ""}${found}`;
+    return `${x.id}|${x.kind}${x.closed ? `.${x.closed}` : ""}|${open ? `o${x.steps?.length ?? 1}.${shown}` : ""}|${x.text?.length ?? x.code?.length ?? 0}|${x.from ? 1 : 0}${x.failed ? 1 : 0}${x.late ? 1 : 0}${x.waiting ? 1 : 0}${x.images ? 1 : 0}${x.files?.length ?? 0}|${x.paths?.length ?? 0}${x.paths?.every((p) => this.views[p]) ? "v" : ""}|${(x.pills ?? []).map((p) => p.emoji + (p.you ? 1 : 0) + (p.agent ? 1 : 0)).join("")}|${x.bar ? "b" : ""}${x.kind === "artifact" ? `|a${x.version ?? ""}${x.line ? "l" : ""}${x.pending ? "p" : ""}` : ""}${x.kind === "cardstrip" ? `|cs${x.sig}${x.first ? "F" : ""}${x.last ? "L" : ""}` : ""}|${x.clip ? `c${x.clip}` : ""}${x.open ? "o" : ""}${x.kind === "day" ? x.text : ""}|${x.top0 ? "T" : ""}${x.bot0 ? "B" : ""}${x.h ?? ""}${found}`;
   }
 
   // A row's height before it is measured: bands and gaps are as tall as spaced() made them.
@@ -3027,7 +2958,7 @@ export default class Chat extends View {
       case "agent": return 30 + (x.clip ?? lines(x.text, w * 0.8 - 24) * 21);
       case "tools": return this.opened.has(x.id) ? 26 + x.steps.length * 19 : 20;
       case "artifact": return x.pending || x.line ? 20 : 62;
-      case "tasknews": return x.accept ? 26 : 20;
+      case "tasknews": return 20;
       case "cardstrip": {
         const s = x.s, edge = (x.first ? 10 : s.gap ?? 8) + (x.last ? 10 : 0);
         const h = s.kind === "title" || s.kind === "text" ? 18 * lines(s.text, w)
@@ -3232,9 +3163,7 @@ export default class Chat extends View {
       }
       case "tasknews": {
         // A task's news line (newsLines()): its mark, the id, what happened, then its words, dim;
-        // a needs-you line still waiting in red. The whole line opens the task (clickRow()); a
-        // Ready one's Accept sits at its right end, found by where the press was (rows take no
-        // handlers).
+        // a needs-you line still waiting in red. The whole line opens it in the Inbox (clickRow()).
         const tick = (c) => div().size(12).flex_none().rounded(6).bg(c).child(svg("mods/collie/task/tick.svg").size(12).flex_none().text_color("#ffffff"));
         const dot = (c) => div().size(8).flex_none().rounded(4).bg(c);
         const mark = x.mark === "ready" ? tick(green()) : x.mark === "done" ? tick(t.dim)
@@ -3245,11 +3174,7 @@ export default class Chat extends View {
           .child(div().flex_none().font_medium().text_color(t.muted).child(x.ref))
           .child(div().flex_none().text_color(x.live ? red() : t.muted).child(x.what))
           .when(Boolean(x.text), (el) => el.child(div().flex_none().child("·")).child(div().flex_1().min_w(0).truncate().child(x.text)))
-          .when(!x.text, (el) => el.child(div().flex_1()))
-          // The Tasks panel's own Accept (ui.js: primary, 20 in a row's line); its press comes
-          // through clickRow().
-          .when(Boolean(x.accept), (el) => el.child(this.acceptButton(x.busy)
-            .when(!x.busy, (el) => el.cursor_pointer().hover((s) => s.opacity(0.88))))), 12, 0);
+          .when(!x.text, (el) => el.child(div().flex_1())), 12, 0);
       }
       case "ask":
         // Red while its dialog is open; once it's gone (answered, or closed without an answer), calm.
@@ -3299,13 +3224,8 @@ export default class Chat extends View {
     else if (row.kind === "pending" && row.failed) { const p = this.pending.find((x) => x.id === row.id); if (p?.msg) this.retry(p, cx); }
     else if (row.kind === "artifact" && row.art) this.openArtifact(row);
     else if (row.kind === "tasknews") {
-      // Accept's place on a Ready line: the line's right end, its padding in (as row() draws it:
-      // col(…, 12, 0), then px 6).
-      const inner = Math.min(this.width, COLUMN + 24) - 24;
-      const off = (this.width + inner) / 2 - 6 - (this.press?.x ?? -1);
-      if (row.accept && off >= -2 && off <= (this.cardW.get("accept") ?? ACCEPT) + 2) this.acceptTask(row, cx);
       // Needs you with its card open just under it: the card takes the keys.
-      else if (row.asks) { const a = (this.wasks ?? []).find((w) => w.ref === row.ref && !w.secret); if (a) this.workerCards.pressed(a); }
+      if (row.asks) { const a = (this.wasks ?? []).find((w) => w.ref === row.ref && !w.secret); if (a) this.workerCards.pressed(a); }
       else this.openTask(row.taskId, row.task);
     }
     else if (row.kind === "cardstrip") {
@@ -3350,11 +3270,6 @@ export default class Chat extends View {
   }
 
   // ---- what sits under the conversation -----------------------------------------------------
-
-  // The Tasks panel's Accept (ui.js), drawn here without a handler: a news line is a list row.
-  acceptButton(busy) {
-    return button("accept-news", busy ? "Accepting…" : "Review", { kind: "primary", size: "xs", disabled: Boolean(busy) });
-  }
 
   statusLine(t, st) {
     // A card asks (in the timeline, where it appeared): nothing under the conversation repeats it.
@@ -3726,9 +3641,9 @@ export default class Chat extends View {
   }
 
   // Where this chat is and whether its box has the keyboard, for Ctrl+K's artifacts (artview.js
-  // chatArea()): its pane's, or "thread" for a task's chat in the Tasks panel. The area is noted
+  // chatArea()): its pane's, or "thread" for a thread's chat in a dialog. The area is noted
   // when the pointer's event bounds say it moved or resized (b), forgotten on a resize (null).
-  areaKey() { return this.inner || this.thread ? "thread" : this.myPane(); }
+  areaKey() { return this.thread ? "thread" : this.myPane(); }
 
   noteArea(b) {
     if (b && this.area && ["x", "y", "width", "height"].every((k) => Math.abs(this.area[k] - b[k]) < 1)) return;
@@ -4057,7 +3972,7 @@ export default class Chat extends View {
 
   myPane() {
     if (!this.addr && this.role) return this.slotPane();
-    // A thread's pane is the one its opener recorded for this worker (openThread()).
+    // A thread's pane is the one its opener recorded for this agent.
     if (this.thread) return threadOf(this.addr);
     const c = terminals().find((x) => x.address === this.addr)?.labels?.["herdr.chat"] ?? null;
     if (c && panes().some((p) => p.pane === c && p.mod === "collie-chat")) this.lastPane = c;
@@ -4071,7 +3986,6 @@ export default class Chat extends View {
   }
 
   draw(cx) {
-    if (this.host) return this.host.render(cx);
     // The pane getting focus (opened, clicked, gone to) puts the keyboard in the message box.
     const mine = this.myPane();
     const paneFocused = Boolean(mine && focused()?.pane === mine);
@@ -4082,8 +3996,8 @@ export default class Chat extends View {
     if (paneFocused && showsBox && (!this.wasFocused || !this.hadBox)) { cx.timer.after(0, () => this.box.focus()); cx.timer.after(600, () => this.box.focus()); }
     // The pane focused again (a command, a click on its header) can leave the box without the
     // keyboard: give it back, unless the person just pressed something inside the chat.
-    // Not while the keyboard is somewhere else in the window that isn't a pane (#633): a task's chat, the list or its
-    // search in the Tasks panel (shared "keyboard.holder", keyHolder()); Herdr still counts this pane as focused then.
+    // Not while the keyboard is somewhere else in the window that isn't a pane (#633): a thread's chat or the
+    // Inbox's list and its search (shared "keyboard.holder", keyHolder()); Herdr still counts this pane as focused then.
     else if (paneFocused && showsBox && !this.call && this.focused === false && Date.now() - (this.press?.at ?? 0) > 1500
       && !keysElsewhere(shared(KEY_HOLDER), this.areaKey())
       && Date.now() - (this.refocusAt ?? 0) > 1000) {
@@ -4132,7 +4046,7 @@ export default class Chat extends View {
       });
     }
     // The emoji row's pick (mods/collie-chat-react): shared "collie-chat.reactreq" = { pane, at, target, text, emoji }.
-    // A thread asked for (the Tasks panel, the Inbox): shared "collie-chat.threadreq" = { terminal,
+    // A thread asked for: shared "collie-chat.threadreq" = { terminal,
     // task, title, space, at }; the coordinator chat in that space opens it.
     const tq = shared("collie-chat.threadreq");
     if (tq && tq.at !== this.threadReqAt && Date.now() - tq.at < 5000 && this.role === "coordinator" && mine) {
@@ -4146,7 +4060,7 @@ export default class Chat extends View {
       if (parent === this.addr || (!parentChat && (!tq.space || tq.space === space))) {
         this.threadReqAt = tq.at;
         setShared("collie-chat.threadack", tq.at);
-        cx.timer.after(0, () => this.openThread(tq));
+        cx.timer.after(0, () => openInbox());
       }
     }
     const rq = shared("collie-chat.reactreq");
@@ -4187,7 +4101,7 @@ export default class Chat extends View {
     // A thread whose worker ended before its conversation was read: the same quiet words.
     if (this.phase === "ended" && this.thread) return root.child(this.notice(t, WORDS.taskEnded, null, [
       ...(this.taskKey ? [this.button("chat-resume", this.resuming ? WORDS.resuming : "Resume",null, "primary", t, (cx) => this.resumeTask(cx))] : []),
-      this.button("chat-close", this.inner ? "Back to tasks" : "Close", null, "secondary", t, () => this.closeSelf())]));
+      this.button("chat-close", "Close", null, "secondary", t, () => this.closeSelf())]));
     if (this.phase === "ended" && !this.swapping) return root.child(this.notice(t, WORDS.agentEnded, null, [
       this.button("chat-close", "Close chat", null, "secondary", t, () => this.closeSelf())]));
     const open = this.button("chat-open-terminal", WORDS.openTerminal,"mods/collie-chrome/terminal.svg", "primary", t, () => this.toTerminal());
@@ -4292,9 +4206,7 @@ export default class Chat extends View {
         .child(Scrollbar.vertical("chat-rows").absolute().inset_0())
         .child(this.measurer(rows, keys, t))
         // Cards' controls measured (strips.js hit()), and where question cards' keys come in.
-        .child(strips.measure(t, rows.filter((r) => r.kind === "cardstrip").map((r) => r.s), this.cardW, (cx) => cx.notify())
-          .child(div().id("mw-accept").flex_none().on_size_change((size, cx) => { if (this.cardW.get("accept") !== size.width) { this.cardW.set("accept", size.width); cx.notify(); } })
-            .child(this.acceptButton(false))))
+        .child(strips.measure(t, rows.filter((r) => r.kind === "cardstrip").map((r) => r.s), this.cardW, (cx) => cx.notify()))
         .child(this.cards.sink("own")).child(this.workerCards.sink("worker"))
         .when(!this.pinned, (el) => {
           // Scrolled up: a card waiting below what's shown is pointed to; else the newest.

@@ -91,6 +91,19 @@ describe("the ported tree is every file shepherdr's chat has, adapted, and it lo
     }
   });
 
+  // The chat's task links and cards are Collie's: the Inbox's queue and ticket (mods/collie,
+  // mods/collie-tabs), its own artifacts (mods/collie-artifacts). Shepherdr's Tasks panel and
+  // its Accept card are not ported: the shared cores in core/ (task data, read-only) are not UI.
+  test("no Tasks panel is left in the chat's views: no panel.js, no accept card, no mods/tasks", () => {
+    const ui = js.filter((f) => !f.includes("/core/"));
+    const banned = ["accept-card", "\"./panel.js\"", "mods/tasks", "mods/task-artifacts", "PanelHost", "openTaskThread", "backToTasks", "requestWorkerTerminal", "TASKS_STACK"];
+    for (const f of ui) {
+      const text = source(f);
+      for (const word of banned) expect([shown(f), word, text.includes(word)]).toEqual([shown(f), word, false]);
+    }
+    expect(existsSync(join(ROOT, "panel.js"))).toBe(false);
+  });
+
   test("every asset a mod draws is on disk", () => {
     const missing = [];
     for (const f of js) {
