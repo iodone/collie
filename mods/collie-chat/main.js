@@ -7,11 +7,14 @@
 // Or { terminal }: an agent's address ("t7", or "vps/t7" on another machine), read-only, to read a conversation.
 // The box's pick button (picker.js, #21) chooses the agent, model, reasoning effort, Fast and permissions before the
 // first message, or restarts the running agent on them (mods/collie-tabs/bin/restart.sh: same session or a handoff, the
-// tab's and slot's labels kept). The rest of shepherdr's chat (threads, Tasks panel, voice, reactions, secrets, images,
-// artifacts, background jobs: #7 Slice 2+) is deliberately absent: this is the coordinator conversation only.
+// tab's and slot's labels kept). The box takes files (attach.js, #20: a drop, a paste, the desktop's picker) and sends
+// their paths with the message, copying them to another machine first; images show as thumbnails and open in the
+// viewer (viewer.js). Typing "/" lists the agent's commands (core/slash.js); "#" lists the spaces its machine reaches
+// (core/mentions.js). The rest of shepherdr's chat (threads, Tasks panel, voice, reactions, secrets, artifacts,
+// background jobs: #7 Slice 2+) is deliberately absent: this is the coordinator conversation only.
 
-import { View, div, svg } from "gpui-kit";
-import { h_flex, TextareaState, Textarea, ScrollHandle, TextView } from "gpui-base";
+import { View, div, image, svg } from "gpui-kit";
+import { h_flex, v_flex, TextareaState, Textarea, ScrollHandle, TextView } from "gpui-base";
 import { appHome, exec, hc, home, openOverlay, props, readTextFile, run, setShared, shared, theme, watchFolder, writeTextFile } from "herdr";
 import { terminals, panes, spaces, inRender } from "./live.js";
 import { FIND, LOG, Conversation, records, summary, excerpt } from "./core/chat-log.js";
@@ -31,6 +34,11 @@ import { ScreenWatch, screenStrips, openCard as openScreen, starting } from "./s
 import { H, RADIUS, TEXT, button, plainError, toast } from "./lib/ui.js";
 import { chatPick, withChatPickText } from "./core/pick-settings.js";
 import { ModelPicker, PICK, loadChoices } from "./picker.js";
+import * as attach from "./attach.js";
+import { messageText, names, imagePaths } from "./core/attach.js";
+import * as slash from "./core/slash.js";
+import * as mentions from "./core/mentions.js";
+import { ImageViewer, VIEW } from "./viewer.js";
 
 const PAGE = 200;
 const KEEP = 2000;
@@ -53,6 +61,11 @@ export default class CoordinatorChat extends View {
     // The model menu is this mod too, in an overlay (openPicker): it draws none of the chat.
     if (P.picker) {
       this.picker = new ModelPicker(P.picker, cx);
+      return;
+    }
+    // The image viewer is this mod too, in an overlay (openImages/openText): it draws none of the chat.
+    if (P.viewer) {
+      this.viewer = new ImageViewer(P.viewer, cx);
       return;
     }
     this.origin = P.terminal ?? null;
@@ -89,6 +102,20 @@ export default class CoordinatorChat extends View {
     this.records = [];
     this.pending = [];
     this.queue = [];
+    // The box's files (attach.js: tiles above it, their paths in the message) and the images the chat shows
+    // (attach.viewable), the #spaces picked into it (core/mentions.js), and the "/" list's state.
+    this.files = [];
+    this.views = {};
+    this.viewAsked = new Set();
+    this.picked = [];
+    this.slashSel = 0;
+    this.slashOff = null;
+    this.cmds = [];
+    this.cmdsFor = null;
+    this.lastValue = "";
+    this.reach = null;
+    this.reachFor = undefined;
+    this.saveAt = 0;
     this.note = null;
     this.error = null;
     this.firstSend = null;
@@ -114,6 +141,16 @@ export default class CoordinatorChat extends View {
     this.box = TextareaState.new({ placeholder: "Message the Coordinator…" });
     this.box.set_rows(1);
     this.box.on("submit", (e, cx) => { if (!e?.shift) this.enter(cx, Boolean(e?.secondary)); });
+    this.box.on("change", (_e, cx) => this.boxChanged(cx));
+    // A paste with no text: the clipboard's image (or files copied in a file manager) becomes a tile.
+    this.box.on("paste_other", (_e, cx) => cx.spawn(async (cx) => {
+      const got = await attach.fromClipboard().catch(() => []);
+      if (got.length) { this.addFiles(got); this.saveSoon(cx); cx.notify(); }
+    }));
+    // What the last chat left unsent (its words, its files, its held messages): per slot, or per agent when opened by
+    // its address. Dropped pasted images older than a day go at the same time.
+    this.draftFile = `${appHome()}/data/chat-drafts/${String(this.slot ? `slot:${this.slot}` : this.addr ?? "none").replace(/[^\w.-]+/g, "_")}.json`;
+    if (this.addr || this.role) cx.spawn(async (cx) => { await this.loadDraft(cx); attach.prune(); });
     cx.timer.every(1000, (cx) => cx.notify());
     // The pane header's Terminal on a chat with no agent yet (mods/collie-pane-chat), and the model menu's picks.
     cx.timer.every(1000, (cx) => this.startRequest(cx));
@@ -139,12 +176,15 @@ export default class CoordinatorChat extends View {
   // One copy of Herdr's live lists for the whole render (live.js): past ~50 ms Herdr stops it.
   render(cx) {
     if (this.picker) return this.picker.render(cx);
+    if (this.viewer) return this.viewer.render(cx);
     return inRender(() => this.draw(cx));
   }
 
   draw(cx) {
     const t = theme();
     const rows = this.rows();
+    // The images the box and the rows show: each is linked for image() once, its size read with it.
+    this.needViews([...this.files.filter((f) => f.image).map((f) => f.path), ...rows.flatMap((r) => r.paths ?? [])], cx);
     // Newest at the bottom: the last row is on screen while the person is at the bottom.
     if (this.pinned && rows.length) this.scroll.scroll_to_item(rows.length - 1);
     return div().id("collie-chat").flex().flex_col().size_full().min_h(0).bg(t.background)
@@ -169,7 +209,7 @@ export default class CoordinatorChat extends View {
         const label = briefLabel(x, i, { start: this.start, template: this.template, first });
         out.push(label
           ? { kind: "brief", id: x.id, at, text: label }
-          : { kind: "user", id: x.id, at, text: x.text ?? "", from: x.from ?? null });
+          : { kind: "user", id: x.id, at, text: x.text ?? "", from: x.from ?? null, images: x.images ?? 0, paths: x.paths ?? null });
       } else if (x.kind === "agent") {
         out.push({ kind: "agent", id: x.id, at, text: x.text ?? "" });
       } else if (x.kind === "tools" && x.steps?.length) {
@@ -188,8 +228,10 @@ export default class CoordinatorChat extends View {
     for (const a of this.asks) out.push({ kind: "card", id: `card:${a.id}`, strips: this.cards.strips(a, { who: this.cliName() }) });
     for (const e of this.askEnds) out.push({ kind: "askend", id: `ae:${e.id}`, at: e.at, text: `${e.title} · ${e.how}` });
     // Sent from here but not in the log yet: shown as sent (or why not).
-    for (const p of this.pending) out.push({ kind: p.failed ? "failed" : "user", id: p.id, at: p.at, text: p.text, error: p.failed ?? null, pending: !p.delivered });
-    for (const m of this.queue) out.push({ kind: "queued", id: m.id, at: 0, text: m.text });
+    for (const p of this.pending) out.push({ kind: p.failed ? "failed" : "user", id: p.id, at: p.at, text: p.text,
+      error: p.failed ?? null, pending: !p.delivered, files: p.files ?? null, paths: p.paths ?? null });
+    for (const m of this.queue) out.push({ kind: "queued", id: m.id, at: 0,
+      text: [m.text, ...(m.files ?? []).map((f) => f.name)].filter(Boolean).join(" · ") });
     if (this.note) out.push({ kind: "note", id: "note", at: 0, text: this.note });
     if (this.phase === "ended") out.push({ kind: "note", id: "ended", at: 0, text: WORDS.ended });
     if (this.phase === "unsupported") out.push({ kind: "failed", id: "unsupported", at: 0, text: "This terminal doesn't run Claude Code or Codex." });
@@ -223,8 +265,12 @@ export default class CoordinatorChat extends View {
     if (r.kind === "user") {
       return h_flex().id(r.id).w_full().justify_end().child(
         div().max_w(560).flex().flex_col().gap(2).items_end()
-          .child(div().rounded(RADIUS.card).bg(t.raised).border_1().border_color(t.border).px(12).py(8).text_size(13)
-            .text_color(t.foreground).child(TextView.markdown(`chat-md-${r.id}`, literal(r.text) || " ").selectable(true)))
+          .when(Boolean(r.files?.length), (el) => el.child(h_flex().max_w(520).gap(4).items_center()
+            .child(svg("mods/collie-chat/file.svg").size(12).flex_none().text_color(t.dim))
+            .child(div().min_w(0).truncate().text_size(11).text_color(t.muted).child(r.files.join(", ")))))
+          .when(Boolean(String(r.text ?? "").trim()), (el) => el.child(div().rounded(RADIUS.card).bg(t.raised).border_1().border_color(t.border).px(12).py(8).text_size(13)
+            .text_color(t.foreground).child(TextView.markdown(`chat-md-${r.id}`, literal(this.mentionsIn(r.text)) || " ").selectable(true))))
+          .when(Boolean(r.paths?.length), (el) => el.child(this.thumbs(t, r.paths, r.id, cx, { faded: r.pending })))
           .when(Boolean(r.error), (el) => el.child(div().text_size(11).text_color(t.ansi1).child(notSent(r.error))))
           .child(div().text_size(11).text_color(t.dim).child(r.pending ? "Sending…" : clock(r.at))));
     }
@@ -261,20 +307,320 @@ export default class CoordinatorChat extends View {
     if (this.readOnly) return div().id("collie-chat-foot").px(24).py(8).text_size(11).text_color(t.dim).child(WORDS.readOnly);
     const can = this.phase !== "starting" && this.phase !== "ended";
     const pick = can ? this.pickShown() : null;
-    return h_flex().id("collie-chat-box").w_full().px(16).py(10).gap(8).items_end().border_t(1).border_color(t.border)
-      .child(div().flex_1().min_w(0).rounded(RADIUS.card).border_1().border_color(t.border).bg(t.raised).px(10).py(6)
-        .child(Textarea.new(this.box).w_full().text_size(13).text_color(t.foreground)))
-      .when(Boolean(pick?.agent), (el) => el.child(this.pickButton(t, cx)))
-      .when(can, (el) => el.child(button("collie-chat-send", "Send", { kind: "primary", onClick: (_e, cx) => this.enter(cx, false) })));
+    const list = can ? this.suggestions(cx) : [];
+    const sel = Math.min(this.slashSel, Math.max(0, list.length - 1));
+    return v_flex().id("collie-chat-box").w_full().px(16).py(10).gap(6).border_t(1).border_color(t.border)
+      .child(div().w_full().rounded(RADIUS.card).border_1().border_color(t.border).bg(t.raised).overflow_hidden()
+        .when(list.length > 0, (el) => el.child(this.slashList(t, list, sel, cx)))
+        .when(this.files.length > 0, (el) => el.child(this.tiles(t, cx)))
+        .child(div().px(10).py(6).child(Textarea.new(this.box).w_full().text_size(13).text_color(t.foreground)))
+        // A drop anywhere on the field takes its files, as a paste does.
+        .on_drop((e, cx) => this.dropFiles(e.paths ?? [], cx))
+        .on_key_down((e, cx) => this.boxKey(e, cx, list, sel)))
+      .child(h_flex().w_full().items_center().gap(8)
+        .child(button("collie-chat-attach", "", { kind: "plain", icon: "mods/collie-chat/plus.svg",
+          onClick: (_e, cx) => this.pickFiles(cx) }))
+        .child(div().flex_1())
+        .when(Boolean(pick?.agent), (el) => el.child(this.pickButton(t, cx)))
+        .when(can, (el) => el.child(button("collie-chat-send", "Send", { kind: "primary", onClick: (_e, cx) => this.enter(cx, false) }))));
+  }
+
+  // The box's own keys: the "/" list's Up / Down / Tab / Escape, then Enter sending (Shift+Enter a new line).
+  boxKey(e, cx, list, sel) {
+    const k = e.key, m = e.modifiers ?? {};
+    if (list.length) {
+      const n = list.length;
+      if (k === "down" || k === "up") { this.slashSel = (sel + (k === "down" ? 1 : n - 1)) % n; cx.stop_propagation(); cx.notify(); return; }
+      if (k === "tab") { cx.stop_propagation(); this.pick(list[sel], cx); return; }
+      if (k === "escape") { this.slashOff = this.box.value().replace(/\n+$/, ""); cx.stop_propagation(); cx.notify(); return; }
+    }
+    if (k !== "enter" || m.shift) return;
+    cx.stop_propagation();
+    this.enter(cx, Boolean(m.control || m.platform));
+  }
+
+  // What the "/" and "#" lists offer for the box, in their order: spaces (#) first, then the agent's commands (/).
+  suggestions(cx) {
+    const v = this.box.value().replace(/\n+$/, "");
+    // The spaces "#" lists are the agent's machine's: read from its reach map once per machine.
+    if (this.reachFor !== this.machine) {
+      this.reachFor = this.machine;
+      this.reach = null;
+      cx.spawn(async (cx) => this.loadReach(cx));
+    }
+    const kind = this.slashKind();
+    // The commands of the CLI behind the box: its own, plus the person's from its machine (core/slash.js).
+    if (kind && this.cmdsFor !== kind) {
+      this.cmdsFor = kind;
+      cx.spawn(async (cx) => this.loadCmds(kind, cx));
+    }
+    if (this.slashOff === v) return [];
+    const h = mentions.typing(v);
+    if (h !== null) {
+      const sp = mentions.match(this.reach?.spaces ?? [], h.toLowerCase())
+        .map((x) => ({ space: x, name: `#${x.name}`, about: x.route ? x.machine : "This machine", key: `space-${x.id}` }));
+      if (sp.length) return sp;
+    }
+    const w = slash.typing(v);
+    if (w === null || !this.cmds.length) return [];
+    return slash.match(this.cmds, w);
+  }
+
+  // Which CLI's commands: the running agent's, else the one the first message will start.
+  slashKind() {
+    return this.kind ?? (this.pick?.agent === "codex" ? "codex" : this.pick?.agent === "claude" ? "claude" : null);
+  }
+
+  async loadCmds(kind, cx) {
+    const on = this.machine ? { on: this.machine } : {};
+    const cwd = props()?.folder ?? this.slotRec()?.folder ?? "";
+    const mine = kind === "claude"
+      ? slash.scanned((await exec("sh", ["-c", slash.SCAN, "scan", cwd], on).catch(() => null))?.stdout)
+      : [];
+    if (this.slashKind() !== kind) return;
+    this.cmds = slash.commandList(kind, mine);
+    cx.notify();
+  }
+
+  // A pick from the "/" list: a space's short form in the box (its token goes in at send), or a command.
+  pick(c, cx) {
+    if (c.space) {
+      const next = mentions.pickInto(this.box.value(), c.space);
+      this.picked = [...this.picked.filter((x) => x.name !== c.space.name), c.space];
+      this.box.set_value(next);
+      this.slashOff = next.replace(/\n+$/, "");
+    } else {
+      this.box.set_value(`/${c.name} `);
+      this.slashOff = `/${c.name} `;
+    }
+    this.slashSel = 0;
+    this.box.focus();
+    this.saveSoon(cx);
+    cx.notify();
+  }
+
+  // The "/" list: the agent's commands, or the spaces "#" reaches, that match what is typed.
+  slashList(t, list, sel, cx) {
+    return v_flex().id("collie-chat-slash").w_full().p(4).gap(1).border_b(1).border_color(t.border)
+      .children(list.map((c, i) => h_flex().id(`slash-${c.key ?? c.name}`).h(26).flex_none().px(8).gap(10).items_center()
+        .rounded(RADIUS.control).cursor_pointer()
+        .when(i === sel, (el) => el.bg(t.selected))
+        .hover((s) => s.bg(t.hover))
+        .on_click((_e, cx) => { cx.stop_propagation(); this.pick(c, cx); })
+        .child(div().flex_none().text_size(TEXT.label).font_medium().text_color(t.foreground)
+          .child(c.space ? c.name : `/${c.name}`))
+        .child(div().flex_1().min_w(0).truncate().text_size(TEXT.id).text_color(t.dim).child(c.about))));
+  }
+
+  // Files waiting to go: small tiles above the box, each removable; an image shows itself, a file its name.
+  tiles(t, cx) {
+    const imgs = this.files.filter((x) => x.image).map((x) => x.path);
+    return h_flex().id("collie-chat-tiles").w_full().flex_wrap().gap(attach.THUMB_GAP).px(10).pt(8)
+      .children(this.files.map((f, i) => {
+        const tile = f.image
+          ? this.thumb(t, f.path).id(`collie-chat-file-${i}`).cursor_pointer()
+            .on_click((_e, cx) => { cx.stop_propagation(); this.openImages(imgs, imgs.indexOf(f.path)); })
+          : v_flex().id(`collie-chat-file-${i}`).size(attach.THUMB).flex_none().px(4).gap(3).items_center().justify_center()
+            .rounded(RADIUS.card).border_1().border_color(t.border).bg(t.background)
+            // A pasted text opens to read.
+            .when(Boolean(f.text), (el) => el.cursor_pointer().hover((s) => s.bg(t.hover))
+              .on_click((_e, cx) => { cx.stop_propagation(); this.openText(f); }))
+            .child(svg("mods/collie-chat/file.svg").size(16).flex_none().text_color(t.dim))
+            .child(div().w_full().text_center().truncate().text_size(10).text_color(t.muted).child(f.name));
+        return div().relative().flex_none().child(tile)
+          .child(div().id(`collie-chat-file-x-${i}`).absolute().top(-6).right(-6).size(18).flex().items_center().justify_center()
+            .rounded(9).cursor_pointer().bg(t.popover).border_1().border_color(t.border).text_color(t.muted)
+            .hover((s) => s.text_color(t.foreground))
+            .on_click((_e, cx) => {
+              cx.stop_propagation();
+              attach.drop(f);
+              this.files = this.files.filter((x) => x !== f);
+              this.saveSoon(cx);
+              cx.notify();
+            })
+            .child(svg("mods/collie-chat/x.svg").size(10)));
+      }));
+  }
+
+  // An image as a tile-sized square, cropped to fill it (attach.cover); a quiet square until its size is known.
+  thumb(t, path) {
+    const v = this.views[path];
+    const box = div().relative().size(attach.THUMB).flex_none().rounded(RADIUS.card).overflow_hidden().bg(t.raised);
+    const edge = div().absolute().inset_0().rounded(RADIUS.card).border_1().border_color(t.border);
+    if (!v) return box.child(edge);
+    const c = attach.cover(v.w, v.h, attach.THUMB);
+    return box.child(image(v.rel).absolute().left(c.left).top(c.top).w(c.w).h(c.h)).child(edge);
+  }
+
+  // Images under a sent message: each whole, its shape kept, fitted together in the row (attach.fitThumbs).
+  thumbs(t, paths, id, cx, { faded = false } = {}) {
+    const fit = attach.fitThumbs(paths.map((p) => this.views[p] ?? null), 520);
+    return h_flex().id(`thumbs-${id}`).gap(attach.THUMB_GAP).items_end().justify_end()
+      .when(faded, (el) => el.opacity(0.55))
+      .children(fit.boxes.map((b, i) => {
+        const v = this.views[paths[i]];
+        return div().relative().w(b.w).h(b.h).flex_none().rounded(RADIUS.card).overflow_hidden().bg(t.raised).cursor_pointer()
+          .on_click((_e, cx) => { cx.stop_propagation(); this.openImages(paths, i); })
+          .when(Boolean(v), (el) => el.child(image(v.rel).size_full()))
+          .child(div().absolute().inset_0().rounded(RADIUS.card).border_1().border_color(t.border));
+      }));
+  }
+
+  // The images the chat shows, linked where image() can load them, with their sizes. Asked once each.
+  needViews(paths, cx) {
+    const want = [...new Set(paths)].filter((p) => p && !this.views[p] && !this.viewAsked.has(p));
+    if (!want.length) return;
+    for (const p of want) this.viewAsked.add(p);
+    // Asked from render: start it right after.
+    cx.timer.after(0, (cx) => cx.spawn(async (cx) => {
+      Object.assign(this.views, await attach.viewable(want));
+      cx.notify();
+    }));
+  }
+
+  // The viewer (viewer.js) on these images, from the i-th.
+  openImages(paths, i) {
+    const all = paths.map((p) => (this.views[p] ? { ...this.views[p], name: attach.base(p), path: p } : null));
+    const images = all.filter(Boolean);
+    if (!images.length) return;
+    i = images.indexOf(all[i] ?? images[0]);
+    openOverlay({ mod: "collie-chat", kind: "popup", frame: "none", width: VIEW.width, height: VIEW.height, at: "pointer",
+      props: { viewer: { images, index: Math.max(0, Math.min(images.length - 1, i)) } } });
+  }
+
+  // A pasted text file in the viewer (viewer.js), over the chat.
+  openText(f) {
+    openOverlay({ mod: "collie-chat", kind: "popup", frame: "none", width: VIEW.width, height: VIEW.height, at: "pointer",
+      props: { viewer: { textPath: f.path, title: f.name } } });
+  }
+
+  // The desktop's own file picker (pick-files.py: macOS's panel, else xdg-desktop-portal): the chosen files join the
+  // message as tiles, as a drop or a paste makes them.
+  pickFiles(cx) {
+    cx.spawn(async (cx) => {
+      const r = await exec("sh", ["-c", 'P=/usr/bin/python3; [ -x "$P" ] || P=python3; exec "$P" -I "$1"',
+        "x", `${appHome()}/mods/collie-chat/pick-files.py`]).catch(() => null);
+      const list = (r?.stdout ?? "").split("\n").filter(Boolean);
+      if (r && r.code !== 0) toast({ title: "Couldn't open the file picker", level: "error" });
+      if (!list.length) { cx.notify(); return; }
+      this.addFiles(attach.paths(list));
+      this.saveSoon(cx);
+      this.box.focus();
+      cx.notify();
+    });
+  }
+
+  // Dropped or pasted paths join the box's files (the same path twice: once).
+  dropFiles(list, cx) {
+    this.addFiles(attach.paths(list));
+    this.saveSoon(cx);
+    this.box.focus();
+    cx.notify();
+  }
+
+  addFiles(list) {
+    for (const f of list) if (!this.files.some((x) => x.path === f.path)) this.files.push(f);
+    this.files = this.files.slice(0, 20);
+  }
+
+  // The box changed: a big paste (over 8 KB or 200 lines) becomes a text file to send; copied files pasted as text
+  // (file:// lines) become attachments; a new value closes the "/" list's selection reset.
+  boxChanged(cx) {
+    const was = this.lastValue ?? "", now = this.box.value();
+    this.lastValue = now;
+    if (now.length - was.length > 8192 || now.split("\n").length - was.split("\n").length > 200) {
+      let a = 0;
+      while (a < was.length && was[a] === now[a]) a++;
+      let b = 0;
+      while (b < was.length - a && was[was.length - 1 - b] === now[now.length - 1 - b]) b++;
+      const pasted = now.slice(a, now.length - b);
+      const rest = was.slice(0, a) + was.slice(was.length - b);
+      this.box.set_value(rest);
+      this.lastValue = rest;
+      cx.spawn(async (cx) => {
+        const f = await attach.textFile(pasted);
+        if (f) { this.addFiles([f]); this.saveSoon(cx); cx.notify(); }
+      });
+      return;
+    }
+    // Copied files pasted as text (file:// lines) become attachments.
+    const v = this.box.value();
+    if (/^file:\/\/\S/m.test(v)) {
+      const found = v.split("\n").filter((l) => /^file:\/\/\S+$/.test(l.trim())).map((l) => decodeURIComponent(l.trim().slice(7)));
+      this.addFiles(attach.paths(found));
+      const rest = v.split("\n").filter((l) => !/^file:\/\/\S+$/.test(l.trim())).join("\n");
+      this.box.set_value(rest);
+      this.lastValue = rest;
+    }
+    this.slashSel = 0;
+    this.saveSoon(cx);
+    cx.notify();
+  }
+
+  // ---- drafts -----------------------------------------------------------------------------------
+
+  // The box's words, its files and its held messages, as the last chat left them.
+  async loadDraft(cx) {
+    const text = await readTextFile(this.draftFile).catch(() => null);
+    let d = null;
+    try { d = JSON.parse(text ?? "null"); } catch {}
+    if (!d) return;
+    if (d.text && !this.box.value()) { this.box.set_value(d.text); this.lastValue = d.text; }
+    this.files = Array.isArray(d.files) ? d.files : [];
+    this.queue = Array.isArray(d.queue) ? d.queue : [];
+    cx.notify();
+  }
+
+  // Saved 400 ms after the last change, and only once (a burst of keystrokes writes one draft).
+  saveSoon(cx) {
+    this.saveAt = Date.now();
+    cx.timer.after(400, (cx) => { if (Date.now() - this.saveAt >= 380) cx.spawn(async () => this.saveDraft()); });
+  }
+
+  async saveDraft() {
+    const d = { text: this.box.value(), files: this.files, queue: this.queue };
+    const empty = !String(d.text ?? "").trim() && !d.files.length && !d.queue.length;
+    try {
+      if (empty) { await exec("rm", ["-f", this.draftFile]); return; }
+      await exec("mkdir", ["-p", `${appHome()}/data/chat-drafts`]);
+      await writeTextFile(this.draftFile, JSON.stringify(d), null);
+    } catch {}
+  }
+
+  // The spaces the agent's machine reaches, from its herdr-task reach map (what tell-assistant follows); none there
+  // yet: the spaces on its own machine (core/mentions.js local()).
+  async loadReach(cx) {
+    const r = await exec("sh", ["-c", mentions.REACH_FILE], { on: this.machine }).catch(() => null);
+    let graph = null;
+    try { graph = JSON.parse(r?.stdout || "null")?.graph ?? null; } catch {}
+    this.reach = { from: graph?.core?.name ?? this.machine,
+      spaces: graph ? mentions.reachable(graph) : mentions.local(spaces(), this.machine) };
+    cx.notify();
+  }
+
+  // A message's words with each #-mention in plain markdown: its name and machine, and "out of reach" when this
+  // agent can't reach that space (the window's chat draws no chips).
+  mentionsIn(text) {
+    if (!mentions.hasMention(text)) return text;
+    const ids = this.reach ? new Set(this.reach.spaces.map((x) => x.id)) : null;
+    const by = new Map((this.reach?.spaces ?? []).map((x) => [x.id, x.machine]));
+    return mentions.plain(text, ids, (m) => by.get(m.id));
   }
 
   // Enter: now (while the agent works, the CLI takes it mid-turn). Ctrl+Enter while it works: held here, sent once it
-  // is free.
+  // is free. The box's files go with the message (their paths, after the words); a picked #space becomes its token.
   enter(cx, hold) {
-    const text = this.box.value().trim();
-    if (!text) return;
+    const text = mentions.expand(this.box.value().trim(), this.picked);
+    const files = this.files;
+    if (!text && !files.length) return;
     this.box.set_value("");
-    const msg = { id: `m${Date.now()}`, text, at: Date.now() };
+    this.lastValue = "";
+    this.files = [];
+    this.picked = [];
+    this.slashOff = null;
+    this.slashSel = 0;
+    this.saveSoon(cx);
+    const msg = { id: `m${Date.now()}`, text, at: Date.now(), files };
     if (hold && this.status() === "working") {
       this.queue.push(msg);
       cx.notify();
@@ -290,25 +636,39 @@ export default class CoordinatorChat extends View {
     // until it is answered (drainQueueNow).
     if (this.addr && openScreen(this.addr)) { this.queue.push(msg); cx.notify(); return; }
     // A card asks (a question, a permission, a plan): the words answer it, as typing in the CLI would.
-    if (this.asks.length && msg.text) { this.cards.replyWith(this.asks[0], msg.text, cx); return; }
+    if (this.asks.length && msg.text && !msg.files?.length) { this.cards.replyWith(this.asks[0], msg.text, cx); return; }
     if (this.phase !== "ready") { this.queue.push(msg); cx.notify(); return; }
     const body = messageBody({ text: msg.text });
-    const p = { id: `pending-${msg.id}`, text: msg.text, at: Date.now(), sent: body, match: norm(msg.text).slice(0, 60) || null };
+    // A command with its own menu in the CLI: after sending, show it where it works (the terminal).
+    const menu = msg.files?.length ? null : slash.opensMenu(this.kind, msg.text);
+    const p = { id: `pending-${msg.id}`, text: msg.text, at: Date.now(), sent: body, match: norm(msg.text).slice(0, 60) || null,
+      files: names(msg.files), paths: imagePaths(msg.files) };
     this.pending.push(p);
+    if (menu) this.note = `/${menu} opens a menu in the terminal. Switching to it.`;
     cx.spawn(async (cx) => {
       let r;
       try {
-        r = await sendBody(this.io(cx), this.addr, this.kind, body);
+        // Here: the file's own path. On another machine: hc put lands a copy beside the agent, and that path goes.
+        const paths = await attach.deliver(msg.files, this.addr, this.machine);
+        p.sent = messageText(body, paths);
+        r = await sendBody(this.io(cx), this.addr, this.kind, p.sent);
       } catch (e) {
         r = { code: 1, stderr: String(e?.message ?? e) };
       }
-      if (r.code !== 0) p.failed = refusal(r).message;
-      else {
-        p.delivered = true;
-        for (let i = 0; i < 60 && this.pending.includes(p) && !p.failed; i++) {
-          await cx.sleep(i ? 5000 : 20000);
-          if (this.status() !== "working") { p.late = true; cx.notify(); break; }
-        }
+      if (r.code !== 0) { p.failed = refusal(r).message; cx.notify(); return; }
+      p.delivered = true;
+      cx.notify();
+      if (menu) {
+        await cx.sleep(900);
+        this.pending = this.pending.filter((x) => x !== p);
+        this.note = null;
+        this.toTerminal();
+        cx.notify();
+        return;
+      }
+      for (let i = 0; i < 60 && this.pending.includes(p) && !p.failed; i++) {
+        await cx.sleep(i ? 5000 : 20000);
+        if (this.status() !== "working") { p.late = true; cx.notify(); break; }
       }
       cx.notify();
     });
@@ -495,8 +855,11 @@ export default class CoordinatorChat extends View {
     const machine = space?.machine ?? null;
     const folder = props()?.folder ?? rec?.folder ?? space?.folder ?? null;
     const template = props()?.template ?? this.template;
-    const task = msg ? msg.text : "";
-    const p = msg ? { id: `pending-${msg.id}`, text: msg.text, at: msg.at, sent: task, match: norm(msg.text).slice(0, 60) || null } : { failed: null };
+    // Files here go as their paths; on another machine they follow once it runs (hc put needs its address).
+    const local = machine || !msg ? [] : (msg.files ?? []).map((f) => f.path);
+    const task = msg ? messageText(msg.text, local) : "";
+    const p = msg ? { id: `pending-${msg.id}`, text: msg.text, at: msg.at, sent: task, match: norm(msg.text).slice(0, 60) || null,
+      files: names(msg.files), paths: imagePaths(msg.files) } : { failed: null };
     if (msg) this.pending.push(p);
     this.phase = "starting";
     this.turnStarted = Date.now();
@@ -557,6 +920,14 @@ export default class CoordinatorChat extends View {
       this.machine = this.addr.includes("/") ? this.addr.split("/")[0] : null;
       this.phase = "finding";
       this.turnStarted = Date.now();
+      // On another machine: the files land there once the agent runs, then their paths go as a message of their own.
+      if (machine && msg?.files?.length) {
+        cx.spawn(async () => {
+          const paths = await attach.deliver(msg.files, this.addr, this.machine).catch(() => []);
+          if (paths.length) await personHc(["send", this.addr, paths.join("\n")]).catch(() => null);
+        });
+      }
+      // The spaces "#" lists are that machine's now (suggestions() reloads them).
       cx.spawn(async (cx) => this.follow(cx));
       cx.notify();
       // From the pane header's Terminal: show its terminal once it runs (the usual Chat → Terminal).
@@ -752,7 +1123,10 @@ export default class CoordinatorChat extends View {
   settlePending() {
     if (!this.conv || !this.pending.length) return;
     const users = this.conv.items.filter((x) => x.kind === "user");
-    const matches = (u, p) => (u.at ?? 0) >= p.at - 5000 && (norm(u.text) === norm(p.sent) || (p.match && norm(u.text).includes(p.match)));
+    // Its typed words (or the start of them) in the log; a message that was only files has no words there to match, so
+    // the log's first image after it says it arrived.
+    const matches = (u, p) => (u.at ?? 0) >= p.at - 5000
+      && (norm(u.text) === norm(p.sent) || (p.match && norm(u.text).includes(p.match)) || (!p.match && (u.images ?? 0) > 0));
     this.pending = this.pending.filter((p) => !users.some((u) => matches(u, p)));
   }
 
@@ -809,7 +1183,6 @@ export default class CoordinatorChat extends View {
     this.reset();
     this.phase = "finding";
   }
-
   // Did the agent at `addr` stop because the session it resumed is gone ("No conversation found")? Then a new one
   // starts by itself, with the handover and its template's words again. Looked at once per agent.
   async checkLost(addr, cx, t = null) {
