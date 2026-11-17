@@ -5,9 +5,7 @@ import { spacesWithChats as spaces, sweep } from "./parked.js";
 import { isCoordinatorTab, closeTab, watchNewSpaces, newSpace, openCoordinator, renameTab, renameSpace } from "./coordinator.js";
 import { startTick, tickOnChange } from "./tick.js";
 import { startInbox, countsByTab, readyByTab, showInbox, toAlert } from "./inbox.js";
-import { serveRemote } from "./secrets.js";
 import { countBadge, H, TEXT, RADIUS } from "./lib/ui.js";
-import { watchViews } from "./usage.js";
 // A tab's name (what runs in it while Herdr named it): core/menus.js, as the web app's tab bar names it.
 import { tabName } from "./core/menus.js";
 import { inRender } from "./live.js";
@@ -32,8 +30,6 @@ export default class Tabs extends View {
     startTick(cx);
     // What needs the person, for Tasks' "Needs you" and the red counts (inbox.js).
     startInbox(cx);
-    // Usage insights (lib/usage.js, the insights add-on): the space and tab shown, and the time on each.
-    watchViews(cx);
     // Ctrl+Shift+W comes here so a coordinator with live workers asks first, like its x.
     // At most 5 s per wait (one pending nextCommand), so a reload's old build ends at its next
     // cx use instead of staying in memory.
@@ -114,8 +110,6 @@ export default class Tabs extends View {
   }
 
   draw(cx) {
-    // Another machine's agent using a secret: answered from here (secrets.js, bin/herdr-secret serve).
-    serveRemote();
     tickOnChange(cx);
     watchNewSpaces(spaces());
     const t = theme();
