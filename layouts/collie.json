@@ -97,7 +97,7 @@
                 "pane": {
                   "header": {
                     "content": {
-                      "mod": "pane"
+                      "mod": "collie-pane-chat"
                     },
                     "reveal": "always",
                     "height": 30,

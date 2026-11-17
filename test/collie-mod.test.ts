@@ -416,6 +416,7 @@ describe("chrome / tabs / settings / toasts 自包含（#8）", () => {
     "mods/collie-chat/main.js",
     "mods/collie-chat/core/chat-view.js",
     "mods/collie-chat/core/spaces.js",
+    "mods/collie-pane-chat/main.js",
     "mods/collie-settings/main.js",
     "mods/collie-artifacts/main.js",
     "mods/collie-artifacts/bar.js",
@@ -450,8 +451,12 @@ describe("chrome / tabs / settings / toasts 自包含（#8）", () => {
     for (const path of files) {
       const source = file(path);
       for (const word of banned) expect([path, word, source.includes(word)]).toEqual([path, word, false]);
-      // The sidebar mod (#7) is only named where the layout mounts it.
-      for (const gone of ["spaces-chat", "pane-chat", "chat-call"]) expect([path, gone, source.includes(gone)]).toEqual([path, gone, false]);
+      // The sidebar and pane-header mods (#7, and Shepherdr's pane-chat) are only named where a layout mounts them;
+      // collie's own collie-pane-chat is not Shepherdr's pane-chat.
+      for (const gone of ["spaces-chat", "pane-chat", "chat-call"]) {
+        const word = new RegExp(`(^|[^\\w-])${gone.replace(/-/g, "\\-")}\\b`);
+        expect([path, gone, word.test(source)]).toEqual([path, gone, false]);
+      }
     }
   });
 
@@ -487,9 +492,11 @@ describe("chrome / tabs / settings / toasts 自包含（#8）", () => {
     expect(mods).toContain("workspace-status");
     expect(mods).not.toContain("workspace-status-chat");
     expect(ids).not.toContain("toasts");
-    // #6's artifacts and #7's chat are collie's own mods now; the sidebar and the pane header are herdr's shipped ones.
+    // #6's artifacts and #7's chat are collie's own mods now; the sidebar is herdr's shipped one and the pane header
+    // is collie's port of Shepherdr's pane-chat.
     expect(mods).toContain("spaces");
-    expect(mods).toContain("pane");
+    expect(mods).toContain("collie-pane-chat");
+    expect(mods).not.toContain("pane");
     expect(mods).toContain("collie-artifacts");
     expect(mods).not.toContain("task-artifacts");
     for (const gone of ["spaces-chat", "pane-chat", "chat-call", "chat"]) expect(mods).not.toContain(gone);

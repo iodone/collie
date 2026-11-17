@@ -58,6 +58,8 @@ export default class CoordinatorChat extends View {
     this.path = null;
     this.kind = null;
     this.start = null;
+    // The last pane header's start request this chat answered (shared "collie-chat.startreq").
+    this.startReqAt = shared("collie-chat.startreq")?.at ?? null;
     this.end = 0;
     this.records = [];
     this.pending = [];
@@ -88,6 +90,8 @@ export default class CoordinatorChat extends View {
     this.box.set_rows(1);
     this.box.on("submit", (e, cx) => { if (!e?.shift) this.enter(cx, Boolean(e?.secondary)); });
     cx.timer.every(1000, (cx) => cx.notify());
+    // The pane header's Terminal on a chat with no agent yet (mods/collie-pane-chat).
+    cx.timer.every(1000, (cx) => this.startRequest(cx));
     // Asks: the hook's request folder while there is an agent; the flag says a chat shows it.
     cx.spawn(async (cx) => this.watchAsks(cx));
     // CLI start screens: read while the agent is still before its session.
@@ -440,7 +444,7 @@ export default class CoordinatorChat extends View {
 
   // The first message starts the agent (its template), parked behind this chat, with the message as its task; then the
   // chat follows it as usual.
-  startAgent(msg, cx) {
+  startAgent(msg, cx, thenTerminal = false) {
     const pane = this.myPane();
     if (!pane) {
       toast({ title: "Couldn't start the Coordinator", body: "This chat hasn't found its pane. Try again in a moment.", level: "error" });
@@ -496,6 +500,8 @@ export default class CoordinatorChat extends View {
       if (out.address && out.first_message?.sent === false && words) this.firstSend = [words, task].filter(Boolean).join("\n\n");
       if ((r.code !== 0 && !late) || !out.address) {
         p.failed = (r.stderr || r.stdout || "It didn't start.").trim();
+        // No message (the pane header's Terminal): the person sees nothing under it, so say it as a toast.
+        if (!msg) toast({ title: "The Coordinator didn't start", body: p.failed, level: "error" });
         this.phase = "fresh";
         cx.notify();
         return;
@@ -512,7 +518,23 @@ export default class CoordinatorChat extends View {
       this.turnStarted = Date.now();
       cx.spawn(async (cx) => this.follow(cx));
       cx.notify();
+      // From the pane header's Terminal: show its terminal once it runs (the usual Chat → Terminal).
+      if (thenTerminal) {
+        for (let i = 0; i < 40 && terminals().find((k) => k.address === this.addr)?.state !== "live"; i++) await cx.sleep(250);
+        const mine = this.myPane();
+        if (mine) { run("pane.focus", { pane: mine }); run("collie-pane-chat.toggle"); }
+      }
     });
+  }
+
+  // The pane header's Terminal on a chat with no agent yet (mods/collie-pane-chat): start the agent, then show its
+  // terminal. Shared "collie-chat.startreq" = { pane, at }; only this chat's pane, once (5 s), and only when fresh.
+  startRequest(cx) {
+    const req = shared("collie-chat.startreq");
+    const mine = this.myPane();
+    if (!req || !mine || req.pane !== mine || req.at === this.startReqAt || !(Date.now() - req.at < 5000) || this.phase !== "fresh") return;
+    this.startReqAt = req.at;
+    cx.timer.after(0, (cx) => { this.startAgent(null, cx, true); });
   }
 
   // ---- following the log ------------------------------------------------------------------------
