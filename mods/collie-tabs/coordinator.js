@@ -197,14 +197,23 @@ export async function openCoordinator(space, show = true, settings = null) {
     settings = { agent: selected.cli, model: selected.model ?? "default", effort: selected.effort ?? "high" };
   }
   const slot = `coord-${space.id}-${Math.random().toString(36).slice(2, 10)}`;
+  settings = settings.agent
+    ? { ...settings, perm: settings.perm ?? (settings.agent === "claude" ? "plan" : "read-only") }
+    : null;
+  if (!settings) {
+    toast({ title: "Configure Inbox Coordinator first", body: "Open Collie settings and choose Codex or Claude.", level: "error" });
+    return;
+  }
   const was = focused();
   const running = runningAssistant(space);
   try {
-    await exec(`${appHome()}/bin/collie-supervisor`, ["ensure", "--space", space.id]);
-    const listing = await exec("herdr-app", ["ls"]);
-    const current = JSON.parse(listing.stdout || "{}").spaces?.find((item) => item.id === space.id);
-    const out = { tab: current?.tabs?.find((tab) => tab.name === "Coordinator")?.id };
-    const pane = null;
+    const out = await app("tab.new", {
+      space: space.id,
+      name: "Coordinator",
+      mod: "chat",
+      props: { role: "coordinator", template: "collie-coordinator", space: space.id, folder, slot, settings },
+    });
+    const pane = out.pane ?? panes().find((p) => p.tab === out.tab && p.mod === "chat")?.pane ?? null;
     setShared("coordinator.slots", { ...liveSlots(), [slot]: { space: space.id, tab: out.tab, pane, folder } });
     // The chat follows the agent its slot names (mods/chat adoptSlot).
     if (running && pane) await hc(["label", running.address, `herdr.chat=${chatLabel(pane)}`, `herdr.chat.slot=${slot}`, `herdr.chat.origin=slot:${slot}`,
@@ -396,14 +405,6 @@ const wasReady = new Set();
 // first ran, made while it was off, or made on a machine while it was away, are left alone.
 export function watchNewSpaces(spaces) {
   if (machines().find((m) => m.name == null)?.layout !== "ready") return;
-  const active = spaces.find((space) => space.active);
-  if (active) {
-    const checked = shared("coordinator.ensureAt") ?? {};
-    if ((checked[active.id] ?? 0) + 15000 < Date.now()) {
-      setShared("coordinator.ensureAt", { ...checked, [active.id]: Date.now() });
-      exec(`${appHome()}/bin/collie-supervisor`, ["ensure", "--space", active.id]).catch(() => {});
-    }
-  }
   // A menu that closes at once (the + menu, a space's Start Assistant) asks the tab bar to open a
   // coordinator tab for it.
   const req = shared("coordinator.openreq");
@@ -500,15 +501,11 @@ export const switchTask = (k, agentKey) =>
 // (a coordinator from the template again, so edited instructions apply).
 export const restartAgent = (k, argv) => script("restart", argv ? [k.address, JSON.stringify(argv)] : [k.address]);
 
-// Closes a tab. A coordinator with live workers asks first; a space's last tab closes the space,
-// so it asks as Close space does (our confirm, not Herdr's).
+// Closes a tab. A coordinator always asks first (stop/keep workers); a space's last tab closes
+// the space, so it asks as Close space does (our confirm, not Herdr's).
 export function closeTab(tabId) {
   const c = coordinatorIn(tabId);
   if (c) {
-    run("tab.settle", { id: tabId });
-    return;
-  }
-  if (c && workersOf(c).length) {
     openOverlay({ mod: "coordinator", kind: "dialog", width: 440, height: 336, props: { view: "close", tab: tabId } });
     return;
   }

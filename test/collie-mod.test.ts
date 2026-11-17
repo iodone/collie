@@ -143,21 +143,39 @@ describe("mods/collie pure queue projection", () => {
   });
 });
 
-test("layout 保留 shepherdr 原生页面，Inbox 只是新增页面", () => {
-  const layout = JSON.parse(readFileSync(new URL("../layouts/collie.json", import.meta.url), "utf8"));
-  let panel: any;
+type LayoutNode = {
+  id?: string;
+  content?: { mod?: string };
+  children?: LayoutNode[];
+};
+
+test("layout 只保留 collie 自有页面，不再挂 shep 的 Tasks/Assistant 页面", () => {
+  const layout: unknown = JSON.parse(
+    readFileSync(new URL("../layouts/collie.json", import.meta.url), "utf8"),
+  );
+  let panel: LayoutNode | undefined;
+  let ticketBody: LayoutNode | undefined;
   const ids: string[] = [];
-  const visit = (value: any): void => {
+  const mods: string[] = [];
+  const visit = (value: unknown): void => {
     if (Array.isArray(value)) return value.forEach(visit);
     if (!value || typeof value !== "object") return;
-    if (value.id) ids.push(value.id);
-    if (value.id === "panel-body") panel = value;
-    Object.values(value).forEach(visit);
+    // JSON.parse output is walked by this test only; the fields read below exist in the layout schema.
+    const node = value as LayoutNode;
+    if (node.id) ids.push(node.id);
+    if (typeof node.content?.mod === "string") mods.push(node.content.mod);
+    if (node.id === "panel-body") panel = node;
+    if (node.id === "collie-ticket-body") ticketBody = node;
+    Object.values(node).forEach(visit);
   };
   visit(layout);
-  expect(panel.children.map((child: any) => child.id)).toEqual([
-    "files", "changes", "tasks", "artifacts", "collie", "working",
+  expect(panel?.children?.map((child) => child.id)).toEqual(["collie", "working"]);
+  expect(ticketBody?.children?.map((child) => child.id)).toEqual([
+    "collie-ticket-artifacts",
   ]);
+  for (const banned of ["files", "changes", "tasks", "artifacts", "task-pr", "task-browser"]) {
+    expect(mods).not.toContain(banned);
+  }
   expect(new Set(ids).size).toBe(ids.length);
 });
 

@@ -14,10 +14,6 @@ import type { DeliveryRunner } from "../plugins/delivery/common.ts";
 import { startAnswerServer } from "./answer-server.ts";
 import { coordinatorConfig, runCoordinator, type CoordinatorRunner } from "../plugins/agent/coordinator.ts";
 import { createHash } from "node:crypto";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-
-const execFileAsync = promisify(execFile);
 
 type Json = Record<string, any>;
 
@@ -318,20 +314,5 @@ if (import.meta.main) {
   };
   await drain();
   setInterval(drain, 1000);
-  let supervising = false;
-  setInterval(async () => {
-    if (supervising) return;
-    supervising = true;
-    try {
-      const runtimePath = join(stateDir, "coordinator-runtime.json");
-      if (existsSync(runtimePath)) {
-        const runtime = JSON.parse(readFileSync(runtimePath, "utf8"));
-        for (const [space, record] of Object.entries(runtime.spaces ?? {})) {
-          if ((record as Json).enabled) await execFileAsync(join(homedir(), ".config", "herdr-app", "bin", "collie-supervisor"), ["ensure", "--space", space]);
-        }
-      }
-    } catch (error) { console.error("coordinator supervisor failed:", error instanceof Error ? error.message : error); }
-    finally { supervising = false; }
-  }, 10000);
   console.error(`collie service ready: ${incoming}`);
 }

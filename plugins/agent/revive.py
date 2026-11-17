@@ -148,9 +148,9 @@ def write_record(k, rec):
 
 
 def watched(k):
-    """An Assistant or a task's agent (its worker or reviewer): what comes back."""
+    """A coordinator (or a task's agent, when this fork carries that): what comes back."""
     labels = k.get("labels") or {}
-    return labels.get("herdr.inbox") == "true" and labels.get("herdr.role") == "coordinator"
+    return labels.get("herdr.role") == "coordinator"
 
 
 def task_ref(k):

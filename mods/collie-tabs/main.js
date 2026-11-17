@@ -4,12 +4,10 @@ import { panes, run, openOverlay, theme, window, shared, setShared, layout, sett
 import { spacesWithChats as spaces, sweep } from "./parked.js";
 import { agentIn, isCoordinatorTab, closeTab, watchNewSpaces, newSpace, openCoordinator, renameTab, renameSpace } from "./coordinator.js";
 import { startTick, tickOnChange } from "./tick.js";
-import { startInbox, count as inboxCount, countsByTab, readyCount, readyByTab, showInbox, toAlert } from "./inbox.js";
+import { startInbox, countsByTab, readyByTab, showInbox, toAlert } from "./inbox.js";
 import { serveRemote } from "./secrets.js";
-import { watchService } from "./service.js";
 import { startBridge } from "./bridge.js";
 import { countBadge, H, TEXT, RADIUS } from "./lib/ui.js";
-import { on as addonOn } from "./addons.js";
 import { watchViews } from "./usage.js";
 // A tab's name (what runs in it while Herdr named it): core/menus.js, as the web app's tab bar names it.
 import { tabName } from "./core/menus.js";
@@ -32,8 +30,6 @@ export default class Tabs extends View {
     cx.timer.every(5000, () => sweep());
     this.pressed = null;
     this.panels = JSON.parse(localStorage.getItem("panels") ?? "{}");
-    // Shepherdr's service, which does the background work while it runs (lib/service.js).
-    watchService(cx);
     // The person's pins, sidebar sections, icons and Notify, in step with the web app (lib/bridge.js).
     startBridge(cx);
     // Tasks' queue and merge watcher (mods/tasks owns it): left to the service while it runs.
@@ -103,8 +99,8 @@ export default class Tabs extends View {
       const first = this.space === undefined;
       this.space = space.id; this.pending = null;
       if (!(first && !(space.id in this.panels))) {
-        // The Inbox panel is gone: a space that had it open shows Tasks, where its items are.
-        const stored = this.panels[space.id] === "collie" ? "tasks" : this.panels[space.id] ?? null, want = enabled.includes(stored) ? stored : null;
+        // The old Tasks panel is gone: a space that had it open shows the Inbox.
+        const stored = this.panels[space.id] === "tasks" ? "collie" : this.panels[space.id] ?? null, want = enabled.includes(stored) ? stored : null;
         if (want !== now) {
           this.pending = { want, until: Date.now() + 1000 };
           if (want) { run("layout.select", { stack: "panel-body", child: want }); run("layout.show", { id: "panel" }); }
@@ -177,13 +173,12 @@ export default class Tabs extends View {
       ? Math.max(10, (root.traffic_lights[0] + 64) / settings().zoom - (sidebar?.hidden ? 0 : sidebar?.size?.px ?? 0))
       : 10;
     const panel = find(root, "panel"), body = find(root, "panel-body");
-    // Tasks and Artifacts are offered (Artifacts unless its add-on is off), beside whichever of
-    // Files and Changes are on.
-    const enabled = [...(shared("workspace.panels") ?? ["files", "changes"]), "tasks", "collie", ...(addonOn("artifacts") ? ["artifacts"] : [])];
+    // The Inbox is the only panel page collie owns now; shep's Files/Changes/Tasks/Artifacts
+    // pages are removed from the layout.
+    const enabled = ["collie"];
     this.syncPanel(space, panel, body, enabled);
-    // The side panels' buttons, one style for all: icon first; the label when the bar has room
-    // (the open one keeps its label); a count after the icon (Tasks': what needs the person, red,
-    // and what's Ready, green: [need, ready]).
+    // The side panel's button: icon first; the label when the bar has room (the open one keeps
+    // its label); a count after the icon (the Inbox's waiting work).
     const roomy = (this.width ?? 0) >= 1100;
     const panelButton = (id, label, icon, [need, ready] = [0, 0]) => {
       const badge = need + ready;
@@ -206,11 +201,7 @@ export default class Tabs extends View {
       .on_scroll_wheel(e => { if (Math.abs(e.delta.y) >= 1) run(e.delta.y > 0 ? "tab.prev" : "tab.next"); })
       .child(h_flex().id("tab-scroll").flex_1().min_w(0).h_full().items_center().gap(3).overflow_x_scrollbar().children(tabsShown ? shown.map(item) : []))
       .child(button("tab-new", "+", () => openOverlay({ mod: "new-menu-tasks", kind: "popup", width: 250, height: 543, props: { right: this.right } })))
-      .when(enabled.includes("files"), el => el.child(panelButton("files", "Files", "mods/files/file.svg")))
-      .when(enabled.includes("changes"), el => el.child(panelButton("changes", "Changes", "mods/changes/changes.svg")))
-      .child(panelButton("tasks", "Tasks", "mods/tasks/tasks.svg", [counts ? inboxCount() : 0, greens ? readyCount() : 0]))
       .child(panelButton("collie", "Inbox", "mods/tasks/tasks.svg", [shared("inbox.queue")?.waiting ?? 0, 0]))
-      .when(enabled.includes("artifacts"), el => el.child(panelButton("artifacts", "Artifacts", "mods/artifacts/artifacts.svg")))
       .when(w?.buttons, el => el.child(button("minimize", w.platform === "windows" ? svg("mods/tabs-tasks/win-min.svg").size(16) : "−", () => run("window.minimize")))
         .child(button("maximize", w.platform === "windows" ? svg(`mods/tabs-tasks/${w.maximized ? "win-restore" : "win-max"}.svg`).size(16) : "□", () => run("window.maximize")))
         .child(button("close-window", w.platform === "windows" ? svg("mods/tabs-tasks/win-close.svg").size(16) : svg("mods/pane/close.svg").size(13), () => run("window.close"))));

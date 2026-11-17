@@ -8,8 +8,7 @@
     "collie-rules",
     "collie-tabs",
     "collie-chrome",
-    "collie-settings",
-    "collie-chat"
+    "collie-settings"
   ],
   "needs": {
     "tasks": ">=3.1.0 <4",

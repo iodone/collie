@@ -103,7 +103,7 @@ def source_files(source: Path, root: Path) -> dict[str, Path]:
     ruleset = source / "protocol/fixtures/ruleset.json"
     if ruleset.is_file():
         files[(STATE / "ruleset.json").as_posix()] = ruleset
-    for name in ("collie", "collie-sync", "collie-answer", "collie-request", "collie-terminal", "collie-supervisor"):
+    for name in ("collie", "collie-sync", "collie-answer", "collie-request"):
         path = source / "bin" / name
         if path.is_file():
             files[(APP / "bin" / name).as_posix()] = path
