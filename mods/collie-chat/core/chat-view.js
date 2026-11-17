@@ -61,6 +61,11 @@ export const WORDS = {
   // find in the loaded rows (#23)
   find: "Find in the chat…",
   noMatches: "No matches",
+  // a long reply's fold (its band's Show more / Show less row)
+  showMore: "Show more",
+  showLess: "Show less",
+  copied: "Copied",
+  copy: "Copy",
 };
 
 // ---- a session that is gone ------------------------------------------------------------------

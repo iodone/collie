@@ -19,11 +19,11 @@
 // only.
 
 import { View, div, image, svg } from "gpui-kit";
-import { h_flex, v_flex, InputState, Input, TextareaState, Textarea, ScrollHandle, TextView } from "gpui-base";
+import { h_flex, v_flex, InputState, Input, TextareaState, Textarea, VirtualListScrollHandle, v_virtual_list, Scrollbar, TextView } from "gpui-base";
 import { appHome, exec, hc, home, openOverlay, props, readTextFile, run, setShared, shared, theme, watchFolder, writeTextFile } from "herdr";
 import { terminals, panes, spaces, inRender } from "./live.js";
 import { FIND, LOG, Conversation, records, summary, excerpt } from "./core/chat-log.js";
-import { WORDS, LOST, lostMessage, shellWord, sessionStarted, sessionFailed, notSent, dayOf, dayLabel, clock,
+import { WORDS, LOST, lostMessage, shellWord, sessionStarted, sessionFailed, notSent, dayOf, dayLabel,
   firstUser, firstKeys, literal, briefLabel, newsLine, published, artifactLine, resolveArtifacts, bgGroups,
   subagentsOf, subagentWord, ago,
 } from "./core/chat-view.js";
@@ -34,7 +34,7 @@ import { SecretCards } from "./secret-card.js";
 import { frequent, used } from "./core/emoji.js";
 import { openViewer, artifactCli } from "./lib/artview.js";
 import { asPerson } from "./core/person.js";
-import { NAMES, argvFor, asPick, current as currentOf, fitPick, freshArgv, line, samePick, sessionOf } from "./core/agents.js";
+import { NAMES, argvFor, asPick, current as currentOf, fitPick, forkArgv, freshArgv, line, samePick, sessionOf } from "./core/agents.js";
 import { cleanCommand } from "./core/clean-env.js";
 import { parseTemplate } from "./core/template.js";
 import { chatLabel } from "./core/spaces.js";
@@ -52,10 +52,10 @@ import * as mentions from "./core/mentions.js";
 import { ImageViewer, VIEW } from "./viewer.js";
 import EmojiPicker from "./reactions.js";
 import * as find from "./core/find.js";
+import { ACT, ACT_ROW, CODE_H, ICONS, PILL, PILL_H, QUIET_PY, bandActs, barLayout, edges, foldOf, guess, hitPart, most, parts, rowKey, shownLines, sizesOf, spaced } from "./core/rows.js";
 
 const PAGE = 200;
 const COLUMN = 760;
-const BUBBLE = 620;
 const KEEP = 2000;
 const KINDS = { "claude-code": "claude", claude: "claude", codex: "codex" };
 const TEMPLATE = 'dir="$HOME/.config/herdr-core/templates"; ';
@@ -192,7 +192,6 @@ export default class CoordinatorChat extends View {
     this.reactReqAt = shared("collie-chat.reactreq")?.at ?? null;
     this.myReacts = new Map();
     this.uses = {};
-    this.reactAt = null;
     this.usePath = `${appHome()}/data/chat-emoji-uses.json`;
     if (!this.readOnly) cx.spawn(async (cx) => {
       try { this.uses = JSON.parse(await readTextFile(this.usePath)) ?? {}; } catch {}
@@ -215,7 +214,29 @@ export default class CoordinatorChat extends View {
     this.screenBusy = new Set();
     this.screenErr = new Map();
     this.pinned = true;
-    this.scroll = ScrollHandle.new();
+    // The list is virtual: each row's height is measured once per key and width (heights), kept for a few seconds
+    // after (measuredAt), and forgotten when the width changes (measureGen gives the measuring boxes new ids).
+    this.scroll = VirtualListScrollHandle.new();
+    this.width = 600;
+    this.heights = new Map();
+    this.measuredAt = new Map();
+    this.heightsFor = 0;
+    this.measureGen = 0;
+    this.range = null;
+    this.listH = 0;
+    this.scrollTop = 0;
+    this.listSig = null;
+    this.blank = false;
+    // Where the last press was (its place in the list and in the window), for the bands' parts and the strips' controls
+    // (rows take no handlers of their own); and the message whose band stays open while the emoji picker is up.
+    this.press = null;
+    this.keepIcons = null;
+    this.hoverBand = null;
+    this.copied = null;
+    // The replies the person unfolded (Show less puts one back), and the message a reply answers.
+    this.unfolded = new Set();
+    this.quote = null;
+    this.stick = false;
     // Find in the loaded rows (Ctrl+F, #23): the bar above them, the match it is on, and the row it brings into view.
     this.finding = false;
     this.findIdx = 0;
@@ -237,6 +258,15 @@ export default class CoordinatorChat extends View {
     this.draftFile = `${appHome()}/data/chat-drafts/${String(this.slot ? `slot:${this.slot}` : this.addr ?? "none").replace(/[^\w.-]+/g, "_")}.json`;
     if (this.addr || this.role) cx.spawn(async (cx) => { await this.loadDraft(cx); attach.prune(); });
     cx.timer.every(1000, (cx) => cx.notify());
+    // The list drew nothing while it has rows (scrolled past its end, a height gone wrong): forget the heights and go
+    // to the newest again. Checked rarely; redraws only then.
+    cx.timer.every(1500, (cx) => {
+      if (!this.blank) return;
+      this.blank = false;
+      this.heights.clear(); this.measuredAt.clear(); this.measureGen++;
+      this.pinned = true; this.stick = true;
+      cx.notify();
+    });
     // The pane header's Terminal on a chat with no agent yet (mods/collie-pane-chat), and the model menu's picks.
     cx.timer.every(1000, (cx) => this.startRequest(cx));
     cx.timer.every(1000, (cx) => this.pickTicks(cx));
@@ -276,9 +306,9 @@ export default class CoordinatorChat extends View {
     // Find (#23): the match the bar is on comes into view once per step, and the list stops following the newest
     // (a message arriving must not pull the view off the match).
     const hit = this.finding ? find.rowAt(this.findMatches(rows), this.findIdx) : null;
-    if (this.finding && this.findJump && hit) { this.findJump = false; this.pinned = false; this.scroll.scroll_to_item(hit.index); }
-    // Newest at the bottom: the last row is on screen while the person is at the bottom.
-    if (this.pinned && rows.length) this.scroll.scroll_to_item(rows.length - 1);
+    if (this.finding && this.findJump && hit) { this.findJump = false; this.pinned = false; this.scroll.scroll_to_item(hit.index, "center"); }
+    // One width's heights: a resize forgets them, so every row is measured again where it is drawn now.
+    if (Math.abs(this.heightsFor - this.width) > 1) { this.heights.clear(); this.measuredAt.clear(); this.heightsFor = this.width; this.measureGen++; }
     // What the agent left running in the background, over the box (core/bg-jobs.js, #22).
     const bg = this.readOnly ? null : this.background(t, cx);
     return div().id("collie-chat").flex().flex_col().size_full().min_h(0).bg(t.background)
@@ -286,6 +316,9 @@ export default class CoordinatorChat extends View {
       .on_action("collie_chat_find", (_e, cx) => { cx.stop_propagation(); this.openFind(cx); })
       .when(this.finding, (el) => el.child(this.findBar(t, rows, cx)))
       .child(this.list(t, rows, cx))
+      // The agent still working: its line and Stop, under the rows (never in a chat that only reads).
+      .when(this.working() && !this.readOnly, (el) => el.child(h_flex().id("collie-chat-working-bar").flex_none().w_full().justify_center()
+        .child(div().w_full().max_w(COLUMN + 36).px(18).child(this.workingRow(t, cx)))))
       .when(Boolean(bg), (el) => el.child(bg))
       .child(this.composer(t, cx));
   }
@@ -299,6 +332,21 @@ export default class CoordinatorChat extends View {
     // The artifacts this conversation's publishes made (lib/artview.js's registry): a card for the latest publish of
     // one, a quiet line for its earlier ones, and a "Publishing…" line while the registry doesn't list it yet.
     const arts = this.resolveArts(items);
+    const working = this.working();
+    // The rows from `from` on are one message's block (spaced()).
+    const block = (from, blk) => { for (let k = from; k < out.length; k++) out[k] = { ...out[k], blk }; };
+    // A message's actions in a band row under it (its last row draws them too, while the pointer is on it).
+    const withBand = (from, x, side) => {
+      const text = x.text ?? "";
+      // Forking needs a saved session; the person's words are replied to and copied, a prompt also rewound.
+      const fork = side === "agent" && Boolean(this.kind) && Boolean(sessionOf(this.kind, this.path));
+      const bar = { id: `b:${x.id}`, of: x.id, target: text, text, side, at: x.at, pills: this.pills(x.id),
+        // Another agent's conversation only reads: its words can be copied, nothing sent.
+        acts: this.readOnly ? ["copy"] : bandActs(side, text, { from: x.from, fork }) };
+      if (out.length > from) out[out.length - 1] = { ...out[out.length - 1], bar };
+      out.push({ kind: "band", id: `ab:${x.id}`, bar });
+      block(from, x.id);
+    };
     let day = null;
     items.forEach((x, i) => {
       const at = x.at ?? 0;
@@ -308,11 +356,33 @@ export default class CoordinatorChat extends View {
       }
       if (x.kind === "user") {
         const label = briefLabel(x, i, { start: this.start, template: this.template, first });
-        out.push(label
-          ? { kind: "brief", id: x.id, at, text: label }
-          : { kind: "user", id: x.id, at, text: x.text ?? "", from: x.from ?? null, images: x.images ?? 0, paths: x.paths ?? null });
+        if (label) { out.push({ kind: "brief", id: x.id, at, text: label }); return; }
+        const from = out.length;
+        out.push({ kind: "user", id: x.id, at, text: x.text ?? "", from: x.from ?? null, images: x.images ?? 0, paths: x.paths ?? null });
+        // Its actions in a band row under it; a message with no words has none.
+        if (String(x.text ?? "").trim()) withBand(from, x, "user");
+        else block(from, x.id);
       } else if (x.kind === "agent") {
-        out.push({ kind: "agent", id: x.id, at, text: x.text ?? "" });
+        const from = out.length;
+        const ps = parts(x.text ?? "");
+        // A long reply: its first lines (the part where they end cut off there), then Show more.
+        const fold = this.foldOf(x, ps);
+        const clip = (n) => (fold && !fold.open ? fold.clips.get(n) : undefined);
+        if (!ps.length) out.push({ kind: "agent", id: x.id, at, text: "" });
+        else if (ps.length === 1 && ps[0].type === "md") out.push({ kind: "agent", id: x.id, at, text: ps[0].text, clip: clip(0) });
+        else ps.forEach((p, n) => {
+          if (fold && !fold.open && n > fold.last) return;
+          if (p.type === "md") out.push({ kind: "agent", id: `${x.id}:${n}`, at, text: p.text, clip: clip(n) });
+          else {
+            out.push({ kind: "codehead", id: `${x.id}:h${n}`, at, lang: p.lang, code: p.code });
+            out.push({ kind: "code", id: `${x.id}:c${n}`, at, lang: p.lang, code: p.code, clip: clip(n) });
+          }
+        });
+        if (fold) out.push({ kind: "fold", id: `fold:${x.id}`, of: x.id, open: fold.open });
+        // Every message of the agent's gets its own actions and reactions, also while it works; only the one it may
+        // still be writing (the newest, while working) waits. The actions go under its last row.
+        if (!(working && i === items.length - 1) && out.length > from) withBand(from, x, "agent");
+        else block(from, x.id);
       } else if (x.kind === "artifact") {
         const r = arts.get(x.id);
         if (r) out.push({ kind: "artifact", id: x.id, art: r.id, title: r.title, text: r.title, version: r.version, v: r.v, line: !r.latest });
@@ -347,58 +417,253 @@ export default class CoordinatorChat extends View {
     if (this.phase === "ended") out.push({ kind: "note", id: "ended", at: 0, text: WORDS.ended });
     if (this.phase === "unsupported") out.push({ kind: "failed", id: "unsupported", at: 0, text: "This terminal doesn't run Claude Code or Codex." });
     if (this.error) out.push({ kind: "failed", id: "error", at: 0, text: this.error });
-    return out;
+    if (out.length) out.push({ kind: "end", id: "end" });
+    return spaced(out);
+  }
+
+  // How a long reply folds, or null when it's short (or holds what Find looks for).
+  foldOf(x, ps) {
+    const q = this.findQuery().toLowerCase();
+    if (q && String(x.text).toLowerCase().includes(q)) return null;
+    return foldOf({ text: x.text, ps, width: this.width, column: COLUMN, unfolded: this.unfolded.has(x.id) });
+  }
+
+  // Show more / Show less. Opening grows the reply downward from where it is, and the list stops following the newest,
+  // so what is being read stays put; closing one read from far down brings its start back into view.
+  toggleFold(row, rows) {
+    this.pinned = false;
+    if (!this.unfolded.has(row.of)) { this.unfolded.add(row.of); return; }
+    this.unfolded.delete(row.of);
+    const i = rows.findIndex((r) => r.blk === row.of && r.kind !== "band");
+    if (i >= 0 && i <= (this.range?.start ?? 0)) this.scroll.scroll_to_item(i, "top");
+  }
+
+  // A row's height before it is measured.
+  guessRow(x) {
+    return guess(x, { width: this.width, column: COLUMN });
+  }
+
+  // Keeps the newest row in view, once this render's rows (and their measured heights) are in.
+  followBottom() {
+    if (!this.stick) return;
+    this.stick = false;
+    if (this.pinned) this.scroll.scroll_to_bottom();
   }
 
   list(t, rows, cx) {
     const empty = !this.readOnly && this.phase === "fresh" && !rows.length;
-    return div().id("collie-chat-rows").flex().flex_col().flex_1().min_h(0).overflow_y_scrollbar()
-      .track_scroll(this.scroll).py(8)
+    const keys = rows.map((x) => rowKey(x, { findQuery: this.findQuery() }));
+    // Every size a real number of pixels: one NaN, zero or runaway height leaves the list blank.
+    const sizes = sizesOf(rows, this.heights, keys, (x) => this.guessRow(x));
+    // New rows, or a row grown (a reply being written): while the person is at the bottom, the list follows it there.
+    const sum = sizes.reduce((a, b) => a + b, 0);
+    const sig = `${rows.length}|${sizes[0] ?? 0}|${sizes[sizes.length - 1] ?? 0}|${sum}`;
+    if (sig !== this.listSig) { this.listSig = sig; if (this.pinned) this.stick = true; }
+    this.followBottom();
+    // Following the newest, the list sits at its end: the scroll position is exactly that.
+    if (this.pinned && this.listH) this.scrollTop = Math.max(0, sizes.reduce((a, b) => a + b, 0) - (this.listH - 8));
+    return v_flex().id("collie-chat-rows").relative().flex_1().min_h(0).pt(8)
+      .on_size_change((size, cx) => {
+        const was = this.listH;
+        this.listH = size.height;
+        this.width = size.width;
+        if (was && Math.abs(was - size.height) > 0.5 && this.pinned) { this.stick = true; cx.notify(); }
+      })
+      // How far down the list a press was, for the bands' parts (rows take no handlers of their own).
+      .on_mouse_down("left", (e) => { this.press = { x: e.local_position?.x, y: e.local_position?.y, at: Date.now(), win: e.position }; this.keepIcons = null; })
+      // Rows' hover styles show on a redraw: one per 6 px the pointer moves down or up.
+      .on_mouse_move((e, cx) => {
+        const b = Math.floor((e.local_position?.y ?? 0) / 6);
+        if (b !== this.hoverBand) { this.hoverBand = b; cx.notify(); }
+      })
+      .on_hover((hovered, cx) => { if (!hovered) { this.hoverBand = null; cx.notify(); } })
+      .on_scroll_wheel((e, cx) => {
+        const y = e.delta?.y ?? 0;
+        // Where the list is scrolled to, as near as known (the list doesn't say): wheel moves it.
+        this.scrollTop = Math.max(0, (this.scrollTop ?? 0) - y);
+        // Scrolling up to read stops following the newest; back at the bottom follows again.
+        if (y > 0 && this.pinned) { this.pinned = false; cx.notify(); }
+        if (y < 0 && !this.pinned && this.range && this.range.end >= rows.length) { this.pinned = true; cx.notify(); }
+      })
       .when(empty, (el) => el.items_center().justify_center().child(
         div().max_w(420).flex().flex_col().gap(6).items_center()
           .child(div().text_size(15).font_semibold().text_color(t.foreground).child(WORDS.emptyTitle))
           .child(div().text_size(TEXT.body).text_color(t.muted).child(WORDS.emptyBody))
           .when(Boolean(this.pick?.agent), (el2) => el2.child(div().text_size(TEXT.id).text_color(t.dim).child(line(this.pick, this.menus))))))
-      .children(rows.map((r) => h_flex().w_full().justify_center()
-        .child(div().w_full().max_w(COLUMN + 36).px(18).py(6).child(this.row(t, r, cx)))))
-      .when(this.working(), (el) => el.child(h_flex().w_full().justify_center()
-        .child(div().w_full().max_w(COLUMN + 36).px(18).child(this.workingRow(t, cx)))));
+      .when(!empty, (el) => el
+        .child(v_virtual_list("collie-chat-list", rows.length, sizes, (i) => rows[i].id, (range) => {
+          this.range = range;
+          if (rows.length && !(range.end > range.start)) this.blank = true;
+          // The first row on screen bounds the scroll position: keep the estimate inside it.
+          const top = sizes.slice(0, range.start).reduce((a, b) => a + b, 0);
+          if ((this.scrollTop ?? 0) < top || (this.scrollTop ?? 0) >= top + (sizes[range.start] ?? 0)) this.scrollTop = top;
+          return rows.slice(range.start, range.end).map((x, j) => div().relative().w_full().h(sizes[range.start + j])
+            // A message's own row is clipped by its height; its band draws over it, so the row keeps its room.
+            .when(!x.bar || x.kind === "band", (el2) => el2.overflow_hidden())
+            .child(this.row(x, t, `v${this.measureGen}-`)));
+        })
+          .track_scroll(this.scroll).size_full()
+          .on_item_click((key, cx) => this.clickRow(key, rows, cx)))
+        .child(Scrollbar.vertical("collie-chat-list").absolute().inset_0())
+        .child(this.measurer(rows, keys, t)));
   }
 
-  row(t, r, cx) {
-    if (r.kind === "day") return this.quiet(t, r, { center: true, small: true });
-    if (r.kind === "brief") return this.quiet(t, r);
-    if (r.kind === "tools") return this.quiet(t, r);
-    if (r.kind === "news") return this.quiet(t, r, { small: true });
-    if (r.kind === "askend") return this.quiet(t, r, { small: true });
-    if (r.kind === "secretend") return this.quiet(t, r, { small: true });
-    if (r.kind === "card") return this.card(t, r);
-    if (r.kind === "artifact") return this.artifact(t, r);
-    if (r.kind === "queued") return this.quiet(t, r, { text: `${WORDS.inQueue} · ${excerpt(r.text, 100)}` });
-    if (r.kind === "note") return this.quiet(t, r, { small: true });
-    if (r.kind === "failed") return this.quiet(t, r, { danger: true });
-    if (r.kind === "user") {
-      return h_flex().id(r.id).w_full().justify_end().child(
-        div().max_w(BUBBLE).flex().flex_col().gap(2).items_end()
-          .when(Boolean(r.files?.length), (el) => el.child(h_flex().max_w(BUBBLE).gap(4).items_center()
-            .child(svg("mods/collie-chat/file.svg").size(12).flex_none().text_color(t.dim))
-            .child(div().min_w(0).truncate().text_size(11).text_color(t.muted).child(r.files.join(", ")))))
-          .when(Boolean(String(r.text ?? "").trim()), (el) => el.child(div().rounded(12).bg(t.accent + "33").border_1().border_color(t.accent + "4d").px(12).py(8).text_size(13)
-            .text_color(t.foreground).child(TextView.markdown(`chat-md-${r.id}`, this.marked(literal(this.mentionsIn(r.text))) || " ").selectable(true))))
-          .when(Boolean(r.paths?.length), (el) => el.child(this.thumbs(t, r.paths, r.id, cx, { faded: r.pending })))
-          .when(Boolean(r.error), (el) => el.child(div().text_size(11).text_color(t.ansi1).child(notSent(r.error))))
-          .child(h_flex().gap(8).items_center()
-            .child(this.reactions_(t, r, cx))
-            .child(div().text_size(11).text_color(t.dim).child(r.pending ? "Sending…" : clock(r.at)))));
+  // Rows not measured yet, drawn once out of sight at the list's width; their heights go to the list, which then
+  // places every row exactly. Those near what is shown go first.
+  measurer(rows, keys, t) {
+    const near = this.range ? this.range.start : rows.length - 1;
+    // Rows never measured, nearest first; and, measured again, the rows on screen and those measured in the last few
+    // seconds: markdown can lay out a moment after its first frame (a long message first measures as one line), so a
+    // height is never taken once and kept.
+    const now = Date.now();
+    const lo = Math.max(0, (this.range?.start ?? rows.length) - 2), hi = Math.min(rows.length, (this.range?.end ?? 0) + 2);
+    const fresh = rows.map((_, i) => i).filter((i) => !this.heights.has(keys[i]))
+      .sort((a, b) => Math.abs(a - near) - Math.abs(b - near)).slice(0, 30);
+    const again = rows.map((_, i) => i).filter((i) => this.heights.has(keys[i]) && ((i >= lo && i < hi) || now - (this.measuredAt.get(keys[i]) ?? 0) < 4000));
+    const order = [...new Set([...fresh, ...again])].slice(0, 60);
+    return div().absolute().top(0).left(0).w(this.width).h(0).overflow_hidden().opacity(0)
+      .child(v_flex().w_full().children(order.map((i) => div().id(`m${this.measureGen}-${keys[i]}`).flex_none().w_full()
+        .on_size_change((size, cx) => {
+          if (!this.measuredAt.has(keys[i])) this.measuredAt.set(keys[i], Date.now());
+          if (this.heights.get(keys[i]) === size.height) return;
+          this.heights.set(keys[i], size.height);
+          if (this.pinned) this.stick = true;
+          cx.notify();
+        })
+        .child(this.row(rows[i], t, "m-")))));
+  }
+
+  // One row of the conversation. Rows are drawn inside the list's layout: no handlers here, clicks come through the
+  // list's on_item_click. A message's last row carries its actions in a band below it, in a layer over the whole row
+  // that shows while the pointer is on the row: the row's own hover, so it is always the message under the pointer,
+  // and its room is always kept, so nothing moves.
+  row(x, t, pre = "") {
+    const keep = this.keepIcons === x.bar?.of;
+    // The band row: its pills always; the rest while the pointer is on it.
+    const box = x.bar?.box ?? { top: 0, h: ACT_ROW };
+    if (x.kind === "band") return div().relative().w_full().h(x.h)
+      .child(this.bar(x.bar, t, x.h - box.top - box.h, false))
+      .child(div().absolute().inset_0().opacity(keep ? 1 : 0).hover((s) => s.opacity(1)).child(this.bar(x.bar, t, x.h - box.top - box.h, true)));
+    const el = this.rowBare(x, t, pre);
+    if (!x.bar) return el;
+    // The message's last row: the same actions drawn just below it, in the band row's place, while the pointer is on
+    // the message (its row isn't clipped: see list()).
+    return div().relative().w_full().child(el)
+      .child(div().absolute().inset_0().opacity(keep ? 1 : 0).hover((s) => s.opacity(1)).child(this.bar(x.bar, t, -box.top - box.h, true)));
+  }
+
+  // A band's parts at barLayout()'s places: the hover ones (time, icons, the smiley) or the pills, each drawn in its
+  // own layer, so the pills stay while the rest fades in and out.
+  bar(bar, t, bottom, hover) {
+    const done = this.copied === bar.id;
+    const icon = (a) => div().size(ACT).flex().items_center().justify_center().rounded(5).cursor_pointer()
+      .text_color(done && a === "copy" ? t.foreground : t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground))
+      .child(svg(`mods/collie-chat/${done && a === "copy" ? "check" : ICONS[a]}.svg`).size(14));
+    const pill = (p) => h_flex().w(PILL).h(PILL_H).gap(4).items_center().justify_center().rounded(PILL_H / 2).border_1().cursor_pointer()
+      .when(p.you, (el) => el.bg(t.accent + "26").border_color(t.accent))
+      .when(!p.you, (el) => el.border_color(t.border).hover((s) => s.bg(t.hover)))
+      .child(div().text_size(13).child(p.emoji))
+      .child(div().text_size(11.5).font_medium().text_color(p.you ? t.foreground : t.muted).child(String((p.you ? 1 : 0) + (p.agent ? 1 : 0))));
+    const { parts: placed } = this.barLayout(bar);
+    return div().absolute().left(0).right(0).bottom(bottom).h(bar.box?.h ?? ACT_ROW)
+      .children(placed.filter((p) => Boolean(p.hover) === hover).map((p) => div().absolute().top(0).bottom(0).left(p.x).w(p.w).flex().items_center()
+        .when(bar.side === "user" && p.what === "time", (el) => el.justify_end())
+        .child(p.what === "time" ? div().pr(bar.side === "user" ? 4 : 0).pl(bar.side === "user" ? 0 : 4).text_size(11.5).text_color(t.dim).child(p.text)
+          : p.pill ? pill(p.pill) : icon(p.what))));
+  }
+
+  // A band's parts at their places, in this pane's width.
+  barLayout(bar) {
+    return barLayout(bar, { width: this.width, column: COLUMN, react: !this.readOnly });
+  }
+
+  // Which part of a band the press was on (rows take no handlers of their own): the band is a row of its own, so the
+  // list names it exactly; across, barLayout()'s places. The time isn't a button.
+  hitBar(row) {
+    const x = this.press?.x;
+    if (row.kind !== "band" || x === undefined || Date.now() - (this.press?.at ?? 0) > 3000) return null;
+    const p = hitPart(this.barLayout(row.bar).parts, x);
+    if (p) this.hitLeft = p.x;
+    return p?.what ?? null;
+  }
+
+  // A message's actions: copy its words, reply to them, rewind to a prompt, fork the conversation, react (and a pill:
+  // the person's reaction on or off).
+  act(row, what, cx) {
+    if (!what) return;
+    if (what === "copy") this.copy(row.text, row.id, cx);
+    if (what === "reply") {
+      const t = String(row.text ?? "").replace(/\s+$/, "");
+      this.quote = { text: t.length > 280 ? t.slice(0, 279).trimEnd() + "…" : t };
+      this.box.focus();
+      this.saveSoon(cx);
     }
-    // The agent's own words, on the left in its bubble.
-    return h_flex().id(r.id).w_full().justify_start().child(
-      div().max_w(BUBBLE).flex().flex_col().gap(2).items_start()
-        .child(div().rounded(12).bg(t.raised).px(12).py(8).text_size(13).text_color(t.foreground)
-          .child(TextView.markdown(`chat-md-${r.id}`, this.marked(r.text || " ")).selectable(true)))
-        .child(h_flex().gap(8).items_center()
-          .child(this.reactions_(t, r, cx))
-          .when(Boolean(r.at), (el) => el.child(div().text_size(11).text_color(t.dim).child(clock(r.at))))));
+    if (what === "rewind") this.rewind(row, cx);
+    if (what === "fork") this.fork(cx);
+    if (what === "react" && !this.readOnly) { this.keepIcons = row.of; this.openReactions(row); }
+    if (what.startsWith("pill:") && !this.readOnly) this.toggleReaction(row.of, row.target, what.slice(5), cx);
+  }
+
+  // A press on a row: a message's action, a code block's Copy, Show more / Show less, or an artifact.
+  clickRow(key, rows, cx) {
+    const row = rows.find((r) => r.id === key);
+    if (!row) return;
+    const bar = this.hitBar(row);
+    if (bar) { this.act(row.bar, bar, cx); cx.notify(); return; }
+    if (row.kind === "codehead") this.copy(row.code, row.id, cx);
+    else if (row.kind === "artifact" && row.art) this.openArtifact(row);
+    else if (row.kind === "fold") {
+      // Only on its words (as rowBare() draws them: the column's edge, the bubble's padding in).
+      const off = (this.press?.x ?? -1) - edges(this.width, COLUMN).left - 12;
+      if (off >= -4 && off <= 100) this.toggleFold(row, rows);
+    }
+    cx.notify();
+  }
+
+  // The person's copy of a message's words (the band's copy icon says Copied for a moment).
+  copy(text, id, cx) {
+    cx.write_to_clipboard(String(text ?? ""));
+    this.copied = id;
+    cx.timer.after(1500, (cx) => { if (this.copied === id) { this.copied = null; cx.notify(); } });
+  }
+
+  // The CLI's own rewind, on that message as nearly as it can: Claude Code's /rewind lists the prompts with the newest
+  // last (Up once per later prompt); Codex's Esc Esc browses the transcript from the last prompt (Left once per later
+  // prompt). Then the terminal shows it.
+  rewind(row, cx) {
+    if (!this.addr) return;
+    if (this.status() === "working") { toast({ title: "The agent is working", body: "Stop it first, then rewind.", level: "info" }); return; }
+    const users = (this.conv?.items ?? []).filter((x) => x.kind === "user" && !x.from && !/^\//.test(x.text ?? ""));
+    const i = users.findIndex((u) => u.id === row.of);
+    const back = i < 0 ? 1 : users.length - i;
+    const addr = this.addr;
+    cx.spawn(async (cx) => {
+      if (this.kind === "claude") {
+        await personHc(["send", addr, "/rewind"]).catch(() => null);
+        await cx.sleep(700);
+        await hc(["keys", addr, ...Array(back).fill("up")]).catch(() => null);
+      } else {
+        await hc(["keys", addr, "esc", "esc"]).catch(() => null);
+        await cx.sleep(500);
+        if (back > 1) await hc(["keys", addr, ...Array(back - 1).fill("left")]).catch(() => null);
+      }
+      this.toTerminal();
+      cx.notify();
+    });
+  }
+
+  // A copy of this conversation, continued in a new tab of this space (the CLI's own fork).
+  fork(cx) {
+    const session = sessionOf(this.kind, this.path);
+    if (!session) { toast({ title: "Can't fork", body: "This conversation has no saved session.", level: "info" }); return; }
+    const k = terminals().find((x) => x.address === this.addr);
+    const argv = k?.foreground?.argv ?? k?.argv ?? [];
+    const tab = panes().find((p) => p.pane === this.myPane())?.tab ?? this.slotRec()?.tab;
+    const space = spaces().find((s) => (s.tabs ?? []).some((x) => x.id === tab)) ?? spaces().find((s) => s.id === this.slotRec()?.space);
+    const folder = k?.foreground?.cwd ?? k?.cwd ?? this.slotRec()?.folder ?? undefined;
+    try { run("tab.new", { space: space?.id, folder, argv: forkArgv(this.kind, argv, session) }); }
+    catch (e) { toast({ title: "Can't fork", body: plainError(e), level: "error" }); }
+    cx.notify();
   }
 
   // ---- find (#23) ---------------------------------------------------------------------------------
@@ -492,37 +757,101 @@ export default class CoordinatorChat extends View {
         .text_size(TEXT.label).font_medium().text_color(t.foreground).child(WORDS.open));
   }
 
-  // A message's reactions: one chip per emoji (yours filled, the count when several people or a repeat), and the react
-  // button that opens the emoji picker over it.
-  reactions_(t, r, cx) {
-    const pills = r.text || r.paths?.length ? this.pills(r.id) : [];
-    // A read-only chat (another agent's conversation) shows its reactions and takes none; a message still being sent
-    // has no log id yet.
-    const live = !this.readOnly && !r.pending && !r.error;
-    const chip = (p) => h_flex().id(`pill-${r.id}-${p.emoji}`).h(20).px(6).gap(4).flex_none().items_center().rounded(10)
-      .bg(p.you ? t.selected : t.raised).border_1().border_color(p.you ? t.accent : t.border)
-      .when(live, (el) => el.cursor_pointer().hover((s) => s.bg(t.hover))
-        .on_click((_e, cx) => { cx.stop_propagation(); this.toggleReaction(r.id, r.text ?? "", p.emoji, cx); }))
-      .child(div().text_size(12).child(p.emoji))
-      .when(p.count > 1, (el) => el.child(div().text_size(TEXT.id).text_color(t.muted).child(String(p.count))));
-    return h_flex().id(`react-row-${r.id}`).gap(2).items_center()
-      .children(pills.map(chip))
-      .when(live, (el) => el.child(div().id(`react-${r.id}`).size(20).flex_none().flex().items_center().justify_center().rounded(10)
-        .cursor_pointer().hover((s) => s.bg(t.hover))
-        .on_mouse_down("left", (e) => { this.reactAt = e.position; })
-        .on_click((_e, cx) => { cx.stop_propagation(); this.openReactions(r); })
-        .child(svg("mods/collie-chat/react/smile-plus.svg").size(13).flex_none().text_color(t.dim))));
-  }
-
   // A card (an ask, a start screen): its strips, one row each, looking like one card (strips.js).
   card(t, r) {
     return div().id(r.id).w_full().flex().flex_col().py(4)
       .children(r.strips.map((s, i) => strip(t, s, i === 0, i === r.strips.length - 1)));
   }
 
-  quiet(t, r, { center = false, small = false, danger = false, text = null } = {}) {
-    return h_flex().id(r.id).w_full().py(2).when(center, (el) => el.justify_center())
-      .child(div().text_size(small ? 10 : 11).text_color(danger ? t.ansi1 : t.dim).child(text ?? r.text));
+  // A row of the conversation: its words, its images, its code (row()), without the actions' band. A row's outer room
+  // goes at its block's edges (top0 / bot0), where spaced() puts the gap instead.
+  rowBare(x, t, pre = "") {
+    // A readable column, centered when the pane is wide.
+    const col = (el, px = 18, py = 6) => h_flex().w_full().justify_center()
+      .child(div().w_full().max_w(COLUMN + 2 * px).px(px).pt(x.top0 ? 0 : py).pb(x.bot0 ? 0 : py).child(el));
+    const pad = (el) => col(el, 18, 7);
+    // The person's words on the right in an accent tint; the agent's on the left, in its raised bubble.
+    const mostW = most(this.width, COLUMN);
+    const bubble = (text) => h_flex().w_full().justify_end().child(
+      // An accent tint under the normal text color: readable in light and dark themes.
+      div().max_w(mostW).px(12).py(8).rounded(12).bg(t.accent + "33").border_1().border_color(t.accent + "4d")
+        .text_color(t.foreground)
+        .child(TextView.markdown(`${pre}chat-md-${x.id}`, this.marked(literal(this.mentionsIn(text))) || " ").selectable(true)));
+    const theirs = (text, clip) => h_flex().w_full().justify_start().child(
+      div().max_w(mostW).px(12).py(8).rounded(12).bg(t.raised).text_color(t.foreground)
+        // Folded: only the lines that show (shownLines()), as their own view.
+        .child(clip ? this.clipped(t.raised, clip, TextView.markdown(`${pre}chat-md-fold-${x.id}`, this.marked(this.mentionsIn(shownLines(text, clip, mostW - 24))) || " ").selectable(true))
+          : TextView.markdown(`${pre}chat-md-${x.id}`, this.marked(this.mentionsIn(text)) || " ").selectable(true)));
+    const fileLine = (label) => h_flex().gap(5).items_center().text_size(12).text_color(t.dim)
+      .child(svg("mods/collie-chat/paperclip.svg").size(12).flex_none()).child(div().min_w(0).truncate().child(label));
+    switch (x.kind) {
+      case "end":
+        return div().w_full().h(10);
+      case "gap":
+        return div().w_full().h(x.h);
+      case "day":
+        return col(div().w_full().text_center().text_size(12).font_medium().text_color(t.dim).child(x.text), 18, 0);
+      case "brief":
+      case "tools":
+      case "news":
+      case "askend":
+      case "secretend":
+        return col(h_flex().w_full().px(6).py(QUIET_PY).text_size(12).text_color(t.dim)
+          .child(div().min_w(0).truncate().child(x.text ?? "")), 12, 0);
+      case "queued":
+        return col(h_flex().w_full().px(6).py(QUIET_PY).text_size(12).text_color(t.dim)
+          .child(div().min_w(0).truncate().child(`${WORDS.inQueue} · ${excerpt(x.text ?? "", 100)}`)), 12, 0);
+      case "note":
+        return pad(div().w_full().text_center().text_size(12).text_color(t.muted).child(x.text));
+      case "failed":
+        return pad(div().w_full().text_size(12).text_color(t.ansi1).child(x.text));
+      case "user":
+        return pad(v_flex().w_full().items_end().gap(3)
+          .when(Boolean(x.from), (el) => el.child(div().text_size(12).text_color(t.dim).child(`From ${x.from}`)))
+          .when(Boolean(x.files?.length), (el) => el.child(fileLine(x.files.join(", "))))
+          .when(Boolean(String(x.text ?? "").trim()), (el) => el.child(bubble(x.text)))
+          .when(Boolean(x.paths?.length), (el) => el.child(this.thumbs(t, x.paths, x.id, null, { faded: x.pending || Boolean(x.error) })))
+          // Still going to the agent (no band to say so): a small line under it.
+          .when(Boolean(x.pending) && !x.error, (el) => el.child(div().text_size(11).text_color(t.dim).child("Sending…")))
+          .when(Boolean(x.error), (el) => el.child(div().text_size(11).text_color(t.ansi1).child(notSent(x.error)))));
+      case "agent":
+        return pad(theirs(x.text ?? "", x.clip));
+      case "codehead": {
+        const done = this.copied === x.id;
+        return col(h_flex().w_full().h(28).pl(12).pr(4).items_center().rounded_t(8).bg(t.surface).border_1().border_b(0).border_color(t.border)
+          .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.dim).child(x.lang || "code"))
+          .child(h_flex().h(22).px(6).gap(5).items_center().rounded(6).cursor_pointer().text_size(12).text_color(done ? t.foreground : t.dim)
+            .hover((s) => s.bg(t.hover).text_color(t.foreground))
+            .child(svg(`mods/collie-chat/${done ? "check" : "copy"}.svg`).size(12).flex_none())
+            .child(done ? WORDS.copied : WORDS.copy)), 18, 0).pt(x.top0 ? 0 : 6);
+      }
+      case "code": {
+        // Folded, only the lines that show and one under the fade (as shownLines()).
+        const all = String(x.code ?? "").split("\n");
+        const lines = v_flex().w_full().flex_none().children((x.clip ? all.slice(0, Math.ceil(x.clip / CODE_H) + 1) : all).map((l) => div().min_h(CODE_H).child(l || " ")));
+        return col(div().w_full().px(12).py(8).rounded_b(8).bg(t.surface).border_1().border_color(t.border).overflow_hidden()
+          .text_size(12.5).text_color(t.foreground)
+          .child(x.clip ? this.clipped(t.surface, x.clip, lines) : lines), 18, 0).pb(x.bot0 ? 0 : 6);
+      }
+      case "fold":
+        // Show more / Show less, under the reply's bubble, in line with its words (clickRow()).
+        return col(h_flex().w_full().h(22).pl(12).child(h_flex().h(22).gap(4).items_center().cursor_pointer()
+          .text_size(12.5).font_medium().text_color(t.muted).hover((s) => s.text_color(t.foreground))
+          .child(x.open ? WORDS.showLess : WORDS.showMore)
+          .child(svg(`mods/collie-chat/chevron-${x.open ? "up" : "down"}.svg`).size(14).flex_none())), 18, 2);
+      case "card":
+        return col(this.card(t, x), 18, 0);
+      case "artifact":
+        return col(this.artifact(t, x), 18, 0);
+    }
+    return div();
+  }
+
+  // A folded reply's first `h` px of `el`, fading out into `bg` (its bubble's color).
+  clipped(bg, h, el) {
+    const fade = [0.3, 0.55, 0.8, 0.95];
+    return div().relative().w_full().max_h(h).overflow_hidden().child(el)
+      .child(v_flex().absolute().left(0).right(0).bottom(0).children(fade.map((o) => div().w_full().h(8).bg(bg).opacity(o))));
   }
 
   workingRow(t, cx) {
@@ -561,12 +890,14 @@ export default class CoordinatorChat extends View {
   // above it when there is room, else below.
   openReactions(row) {
     const W = 360, H = 420;
-    const p = this.reactAt;
+    // The picker goes over the smiley that was pressed (its place in the window, from the press).
+    const p = this.press?.win ?? null;
     const at = p ? { x: Math.max(8, p.x - W + 28), y: Math.max(8, p.y - H - 8) } : "pointer";
+    const target = row.of ?? row.id;
     const fr = frequent(this.uses, 18);
     openOverlay({ mod: "collie-chat", kind: "popup", frame: "none", width: W, height: H, at,
-      props: { react: { pane: this.myPane(), target: row.id, text: row.text ?? "", height: H, width: W,
-        frequent: fr, mine: this.pills(row.id).filter((p) => p.you).map((p) => p.emoji) } } });
+      props: { react: { pane: this.myPane(), target, text: row.text ?? "", height: H, width: W,
+        frequent: fr, mine: this.pills(target).filter((p2) => p2.you).map((p2) => p2.emoji) } } });
   }
 
   // The picker's answer, once each: only this chat's pane's, and only for 5 s (an older request is another chat's).
@@ -822,6 +1153,14 @@ export default class CoordinatorChat extends View {
     return v_flex().id("collie-chat-box").w_full().max_w(COLUMN + 28).mx_auto().px(14).pt(8).pb(4).gap(6)
       .child(div().w_full().rounded(10).border_1().border_color(t.input).bg(t.background).overflow_hidden()
         .when(list.length > 0, (el) => el.child(this.slashList(t, list, sel, cx)))
+        // The message this one answers (its band's reply): its first words, and out again with Escape.
+        .when(Boolean(this.quote), (el) => el.child(h_flex().id("collie-chat-quote").w_full().h(24).px(4).gap(6).items_center()
+          .child(svg("mods/collie-chat/reply.svg").size(12).flex_none().text_color(t.dim))
+          .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.dim).child(norm(this.quote?.text)))
+          .child(div().id("collie-chat-quote-x").size(20).flex_none().flex().items_center().justify_center().rounded(RADIUS.control)
+            .cursor_pointer().text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground))
+            .on_click((_e, cx) => { cx.stop_propagation(); this.quote = null; this.saveSoon(cx); cx.notify(); })
+            .child(svg("mods/collie-chat/x.svg").size(10)))))
         .when(this.files.length > 0, (el) => el.child(this.tiles(t, cx)))
         .child(div().px(10).py(6).child(Textarea.new(this.box).w_full().text_size(13).text_color(t.foreground)))
         // A drop anywhere on the field takes its files, as a paste does.
@@ -844,6 +1183,8 @@ export default class CoordinatorChat extends View {
       if (k === "tab") { cx.stop_propagation(); this.pick(list[sel], cx); return; }
       if (k === "escape") { this.slashOff = this.box.value().replace(/\n+$/, ""); cx.stop_propagation(); cx.notify(); return; }
     }
+    // Escape lets go of the message being answered (the band's reply).
+    if (k === "escape" && this.quote) { this.quote = null; cx.stop_propagation(); this.saveSoon(cx); cx.notify(); return; }
     if (k !== "enter" || m.shift) return;
     cx.stop_propagation();
     this.enter(cx, Boolean(m.control || m.platform));
@@ -1078,6 +1419,7 @@ export default class CoordinatorChat extends View {
     if (d.text && !this.box.value()) { this.box.set_value(d.text); this.lastValue = d.text; }
     this.files = Array.isArray(d.files) ? d.files : [];
     this.queue = Array.isArray(d.queue) ? d.queue : [];
+    this.quote = d.quote ?? null;
     cx.notify();
   }
 
@@ -1088,8 +1430,8 @@ export default class CoordinatorChat extends View {
   }
 
   async saveDraft() {
-    const d = { text: this.box.value(), files: this.files, queue: this.queue };
-    const empty = !String(d.text ?? "").trim() && !d.files.length && !d.queue.length;
+    const d = { text: this.box.value(), files: this.files, queue: this.queue, quote: this.quote };
+    const empty = !String(d.text ?? "").trim() && !d.files.length && !d.queue.length && !d.quote;
     try {
       if (empty) { await exec("rm", ["-f", this.draftFile]); return; }
       await exec("mkdir", ["-p", `${appHome()}/data/chat-drafts`]);
@@ -1130,7 +1472,8 @@ export default class CoordinatorChat extends View {
     this.slashOff = null;
     this.slashSel = 0;
     this.saveSoon(cx);
-    const msg = { id: `m${Date.now()}`, text, at: Date.now(), files };
+    const msg = { id: `m${Date.now()}`, text, at: Date.now(), files, quote: this.quote };
+    this.quote = null;
     if (hold && this.status() === "working") {
       this.queue.push(msg);
       cx.notify();
@@ -1163,7 +1506,7 @@ export default class CoordinatorChat extends View {
       return;
     }
     // The person's words get their reply tag.
-    const body = messageBody({ text: msg.text });
+    const body = messageBody({ text: msg.text, quote: msg.quote ?? null });
     // A command with its own menu in the CLI: after sending, show it where it works (the terminal).
     const menu = msg.files?.length ? null : slash.opensMenu(this.kind, msg.text);
     const p = { id: `pending-${msg.id}`, text: msg.text, at: Date.now(), sent: body, match: norm(msg.text).slice(0, 60) || null,

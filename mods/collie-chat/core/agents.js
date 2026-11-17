@@ -121,6 +121,21 @@ export function sessionOf(kind, path) {
   return m ? m[1] : null;
 }
 
+// A copy of the conversation in a new tab beside this one, through the CLI's own fork (shepherdr's forkArgv).
+export function forkArgv(kind, argv, session) {
+  argv = argv ?? [];
+  // The same model, effort and speed as the original.
+  const same = kind === "claude"
+    ? ["--model", "--effort", "--settings"].flatMap((f) => { const v = flag(argv, f); return v ? [f, v] : []; })
+    : (() => {
+      const m = flag(argv, "-m", "--model"), o = overrides(argv);
+      return [...(m ? ["-m", m] : []), "--no-daemon",
+        ...["model_reasoning_effort", "service_tier"].flatMap((k) => (o[k] ? ["-c", `${k}="${o[k]}"`] : []))];
+    })();
+  const flags = [...kept(kind, argv), ...same];
+  return kind === "claude" ? ["claude", ...flags, "--resume", session, "--fork-session"] : ["codex", "fork", ...flags, session];
+}
+
 // ---- what the agent runs on, and what the picker offers --------------------------------------
 
 export const NAMES = { claude: "Claude Code", codex: "Codex" };
