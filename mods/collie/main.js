@@ -10,6 +10,7 @@ import {
   diffTarget, inboxDecisions, parseQueue, queuePath, receiptPath, taskTarget,
   waitingQueue, workingBadge, workingCount,
 } from "./lib/inbox-queue.js";
+import { openViewer } from "./lib/artview.js";
 
 const v = () => div().flex().flex_col();
 const h = () => div().flex().flex_row();
@@ -22,6 +23,10 @@ const selected = () => shared("inbox.selected") ?? null;
 function openDiff(target) {
   if (!diffTarget(target)) return;
   openOverlay({ mod: "collie", kind: "dialog", modal: true, width: 900, height: 700, props: { view: "diff", target } });
+}
+
+function openTerminal(target) {
+  if (target?.terminal) run("terminal.peek", { terminal: target.terminal });
 }
 
 function openDetails(decision, target, receipt) {
@@ -85,6 +90,7 @@ export default class Inbox extends View {
     this.view = _props?.view ?? props()?.view ?? "queue";
     this.filter = shared("inbox.filter") ?? "all";
     this.tickets = [];
+    this.detailTab = "artifacts";
     this.rows = [];
     this.decisions = [];
     this.targets = new Map();
@@ -167,10 +173,10 @@ export default class Inbox extends View {
   quote(decision, cx) {
     if (this.tickets.some((ticket) => ticket.id === decision.id)) return;
     const target = this.targets.get(decision.id);
-    this.tickets.push({
+    this.tickets = [{
       id: decision.id,
       title: decision.card?.question ?? target?.title ?? decision.why ?? decision.id,
-    });
+    }];
     cx.notify();
   }
 
@@ -198,26 +204,26 @@ export default class Inbox extends View {
       .child(h().w_full().gap(6).items_center()
         .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(decision.space))
         .child(div().text_size(11).text_color(t.dim).child(target?.ref ?? decision.run?.task_ref ?? "Decision"))
-        .child(action(`collie-quote-${decision.id}`, "引用", true, (cx) => this.quote(decision, cx), t)));
+        .when(decision.state === "waiting", (el) => el.child(action(`collie-quote-${decision.id}`, "引用", true, (cx) => this.quote(decision, cx), t))));
   }
 
   queue(t) {
     const tabs = [["all", "All"], ["waiting", "Needs you"], ["working", "Working"], ["review", "Review"], ["settled", "Settled"]];
     return v().id("collie").size_full().min_h(0).bg(t.background).text_color(t.foreground).text_size(13)
       .child(h().h(46).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
-        .children(tabs.map(([id, label]) => action(`inbox-${id}`, label, true, (cx) => this.setFilter(id, cx), t))))
-      .child(v().flex_none().border_b(1).border_color(t.border)
-        .when(this.tickets.length > 0, (el) => el.child(h().flex_wrap().px(10).pt(8).gap(6)
-          .children(this.tickets.map((ticket) => this.ticketChip(ticket, t)))))
-        .child(h().flex_none().px(10).py(8).gap(8)
-          .child(Input.new(this.goal).flex_1().min_w(0))
-          .child(action("collie-build-go", this.building ? "Working…" : "Send", !this.building, (cx) => this.newBuild(cx), t))))
-      .when(this.error, (el) => el.child(div().px(12).py(6).text_color(t.ansi1).child(this.error)))
+        .children(tabs.map(([id, label]) => action(`inbox-${id}`, label, this.filter !== id, (cx) => this.setFilter(id, cx), t))))
       .child(v().flex_1().min_h(0).overflow_y_scrollbar().p(6).gap(6)
         .children(this.rows.map((row) => this.row(row, t)))
         .when(!this.rows.length, (el) => el.child(div().p(18).text_center().text_size(12)
           .text_color(this.error ? t.ansi1 : t.dim)
-          .child(this.error ?? (this.loading ? "Reading decisions…" : this.filter === "waiting" ? "Nothing needs you." : "Nothing here.")))));
+          .child(this.error ?? (this.loading ? "Reading decisions…" : this.filter === "waiting" ? "Nothing needs you." : "Nothing here.")))))
+      .when(this.error, (el) => el.child(div().px(12).py(6).text_color(t.ansi1).child(this.error)))
+      .child(v().flex_none().border_t(1).border_color(t.border)
+        .when(this.tickets.length > 0, (el) => el.child(h().flex_wrap().px(10).pt(8).gap(6)
+          .children(this.tickets.map((ticket) => this.ticketChip(ticket, t)))))
+        .child(h().flex_none().px(10).py(8).gap(8)
+          .child(Input.new(this.goal).flex_1().min_w(0))
+          .child(action("collie-build-go", this.building ? "Working…" : "Send", !this.building, (cx) => this.newBuild(cx), t))));
   }
 
   async answer(option, cx) {
@@ -249,6 +255,13 @@ export default class Inbox extends View {
     }
   }
 
+  async resume(decision, cx) {
+    const result = await exec(REQUEST(), ["--goal", "Resume this ticket and continue its workflow", "--ticket", decision.id]);
+    if (result.code !== 0) this.error = result.stderr || result.stdout || "resume failed";
+    else this.back(cx);
+    cx.notify();
+  }
+
   detail(t) {
     const deepLink = props()?.decisionId;
     const current = deepLink ? {
@@ -264,7 +277,16 @@ export default class Inbox extends View {
       .child(h().h(46).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
         .child(action("collie-back", "‹ Inbox", true, (cx) => this.back(cx), t))
         .child(div().flex_1())
-        .child(action("collie-detail-diff", "Diff", Boolean(diffTarget(target)), () => openDiff(target), t)))
+        .child(action("collie-terminal", "Terminal", this.detailTab !== "terminal", (cx) => {
+          this.detailTab = "terminal";
+          openTerminal(target);
+          cx.notify();
+        }, t))
+        .child(action("collie-artifacts", "Artifacts", this.detailTab !== "artifacts", (cx) => {
+          this.detailTab = "artifacts";
+          if (receipt?.proof?.id) openViewer({ id: receipt.proof.id, title: receipt.proof.title, machine: target?.machine, modal: true });
+          cx.notify();
+        }, t)))
       .child(v().flex_1().min_h(0).overflow_y_scrollbar().p(16).gap(14)
         .child(v().gap(6)
           .child(div().text_size(17).font_semibold().child(receipt?.summary ?? decision.card?.question ?? target?.title ?? decision.why))
@@ -303,6 +325,8 @@ export default class Inbox extends View {
             .child(action("answer-rework", "Rework", decision.card?.options?.includes("rework"), (cx) => this.answer("rework", cx), t))
             .child(action("answer-later", "Later", decision.card?.options?.includes("later"), (cx) => this.answer("later", cx), t))
             .child(action("answer-drop", "Drop", decision.card?.options?.includes("drop"), (cx) => this.answer("drop", cx), t)))))
+        .when(["done", "closed", "failed"].includes(decision.state), (el) => el.child(
+          action("resume-ticket", "Resume", true, (cx) => this.resume(decision, cx), t)))
         .when(this.answering, (el) => el.child(div().text_color(t.dim).child("Sending the choice to coordinator…")))
         .when(this.error, (el) => el.child(div().text_color(t.ansi1).child(this.error))));
   }

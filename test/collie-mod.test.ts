@@ -165,6 +165,11 @@ test("Inbox 固定五个过滤器，引用 chip 与 Receipt/Task 详情不经过
   expect(source).toContain('div().text_size(11).font_semibold().text_color(t.muted).child("Proof")');
   expect(source).not.toContain('div().font_semibold().child("Inbox")');
   expect(source).not.toContain('child("New / Build")');
+  expect(source).toContain('action(`inbox-${id}`, label, this.filter !== id');
+  expect(source).toContain('this.tickets = [{');
+  expect(source).toContain('openTerminal(target)');
+  expect(source).toContain('openViewer({ id: receipt.proof.id');
+  expect(source).toContain('action("resume-ticket", "Resume"');
   expect(source).toContain("receipt.proof?.text");
   expect(source).toContain("Task state");
   expect(source).toContain("run.task_ref");
