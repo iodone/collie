@@ -86,7 +86,7 @@ writeFileSync(taskPath, JSON.stringify(taskList, null, 2), { mode: 0o600 });
 
 // One artifact, published to this folder and attached to the seed task. Old UI seeds are removed
 // first so repeating the script doesn't pile up versions.
-const artifact = join(homedir(), ".config", "herdr-app", "mods", "artifacts", "bin", "herdr-artifact");
+const artifact = join(project, "mods", "collie-artifacts", "bin", "collie-artifact");
 const listed = JSON.parse(execFileSync(artifact, ["list", "--folder", project, "--json"], { encoding: "utf8" }));
 for (const item of listed.artifacts ?? []) {
   if (String(item.title).includes("【UI测试】")) execFileSync(artifact, ["rm", item.id, "--json"], { stdio: "ignore" });

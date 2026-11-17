@@ -20,9 +20,9 @@
 
 - Python 3.10+；
 - herdr / shepherdr，且 `herdr-task` 在 `PATH`；
-- shepherdr 3.1.x 提供的 `herdr-task` 执行层，以及 `tasks` / `chat` / `artifacts` 三个 add-on；
+- shepherdr 3.1.x 提供的 `herdr-task` 执行层，以及 `chat` add-on；
 - `bun`、`git` 在 `PATH`；
-- Inbox 使用独立 layout；Ticket 详情的 Terminal 用 herdr 的 terminal block，Artifacts 复用 shepherdr 的 `task-artifacts`。
+- Inbox 使用独立 layout；Ticket 详情的 Terminal 用 herdr 的 terminal block，Artifacts 用 collie 自有的 `collie-artifacts`（列表与 viewer 工具栏同一个 mod）。
 
 版本优先从 `.config/shepherdr/installed.json` 或 herdr-app 的 `data/shepherdr/installed.json` 读取；没有这些文件时依次尝试 add-on 元数据和 `herdr-task --version`。缺依赖时安装会在写入前停止。
 
@@ -221,12 +221,12 @@ bin/collie-sync --check
 
 | 症状 | 检查 |
 | :-- | :-- |
-| 安装前报缺依赖 | `PATH`、shepherdr 版本、`tasks` / `chat` / `artifacts` / `task-artifacts` mod 是否存在 |
+| 安装前报缺依赖 | `PATH`、shepherdr 版本、`chat` mod 是否存在 |
 | 报 unmanaged file differs | 确认文件归属；需要接管时显式加 `--adopt` |
 | doctor 报 modified | 文件已偏离 manifest；保留修改或人工恢复，不直接重跑覆盖 |
 | doctor 报 pending update | 处理对应 `.new`，不要删除原文件 |
 | update 报 source unavailable | 恢复 manifest 中的源码 checkout；不要另换来源静默更新 |
-| layout mod 缺失 | 安装对应 shepherdr mod（`tasks` / `chat` / `artifacts` / `task-artifacts`），或先修复本包 layout 与 mod 的交付完整性 |
+| layout mod 缺失 | 重装 collie（layout 的 mod 都在 `addons.json` 的 `mods` 里），或先修复本包 layout 与 mod 的交付完整性 |
 | review 工作被当成 build 显示 | coordinator 没写 `Decision.run.kind="review"`；补上后 Work 显示 `kind=review` |
 | Accept 后停在 Working | coordinator 未恢复或没有可用的 coordinator；检查 `collie-answer` 的 assistant 解析与 coordinator 会话 |
 | `Settled` 数量不对 | 检查 Decision 是否真的带 `settled`；`failed` 与 `ack` 都不算 |

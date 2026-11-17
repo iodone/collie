@@ -1,19 +1,17 @@
-// The artifact viewer (the person's decision): a chat card, Ctrl+K and a task's proof open an
-// artifact here; the Artifacts sidebar shows one in place instead (mods/artifacts). The image
-// viewer's shell: mods/chat-image's toolbar (props.artifact, its artifact-bar.js) over the
-// artifact's own mod, on a backdrop in the theme's colors. From a chat (its card, or Ctrl+K over
-// the shown chat pane) it covers that chat pane only, exactly like an opened image; with no
-// pane to cover, the whole window. From a dialog (the Accept card's Proof) it opens as a modal
-// of a fitting size over that dialog instead (artifact.modal), and closing it returns there.
+// The artifact viewer: a ticket's Artifacts list opens one here. The shell: mods/collie-artifacts'
+// toolbar (props.artifact, its bar.js) over the artifact's own mod, on a backdrop in the theme's
+// colors. From a ticket it covers its chat when its place is known, else the whole window. From a
+// dialog it opens as a modal of a fitting size over that dialog instead (artifact.modal), and
+// closing it returns there.
 // Shared: the source is lib/artview.js; bin/collie-sync copies it into each mod in lib/COPIES.
 // Edit lib/artview.js, never a mod's copy, then run bin/collie-sync.
 
 import { exec, appHome, openOverlay, theme, shared, setShared, panes, focused, settings } from "herdr";
 import { toast, plainError } from "./ui.js";
 
-const CLI = () => `${appHome()}/mods/artifacts/bin/herdr-artifact`;
+const CLI = () => `${appHome()}/mods/collie-artifacts/bin/collie-artifact`;
 
-// The artifact helper (herdr-artifact, --json); a failure throws its own words.
+// The artifact helper (collie-artifact, --json); a failure throws its own words.
 export async function artifactCli(machine, args) {
   const r = await exec(CLI(), [...(machine ? ["--on", machine] : []), ...args, "--json"]);
   let out = null;
@@ -29,7 +27,7 @@ export const baseMod = (mod) => String(mod).replace(/--v\d+$/, "");
 export function viewerLayout(artifact) {
   return {
     type: "column", background: `${theme().background}f2`, children: [
-      { type: "block", size: { px: 48 }, content: { mod: "chat-image", props: { artifact } } },
+      { type: "block", size: { px: 48 }, content: { mod: "collie-artifacts", props: { artifact } } },
       { type: "column", padding: [8, 24], children: [
         { type: "block", radius: 8, background: "background", border: { width: 1, color: "border" }, content: { mod: artifact.mod } }] }],
   };
@@ -52,7 +50,7 @@ function modalSize() {
 function showModal(artifact) {
   openOverlay({ kind: "dialog", ...modalSize(), layout: {
     type: "column", background: "popover", divider: { width: 1, color: "border" }, children: [
-      { type: "block", size: { px: 48 }, content: { mod: "chat-image", props: { artifact } } },
+      { type: "block", size: { px: 48 }, content: { mod: "collie-artifacts", props: { artifact } } },
       { type: "block", background: "background", content: { mod: artifact.mod } }] } });
 }
 

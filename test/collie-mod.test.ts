@@ -203,6 +203,23 @@ test("mod 只导入包内共享库拷贝，不越过 herdr 模块边界", () => 
   const shared = readFileSync(new URL("../lib/inbox-queue.js", import.meta.url), "utf8");
   const copied = readFileSync(new URL("../mods/collie/lib/inbox-queue.js", import.meta.url), "utf8");
   expect(copied).toBe(shared);
+
+  // #6: the ticket's list and the viewer's toolbar are one collie-owned mod.
+  const arts = readFileSync(new URL("../mods/collie-artifacts/main.js", import.meta.url), "utf8");
+  expect(arts).toContain('from "./lib/artview.js"');
+  expect(arts).toContain('from "./core/task-artifacts.js"');
+  expect(arts).toContain('from "./lib/ui.js"');
+  expect(arts).toContain('from "./bar.js"');
+  expect(arts).not.toContain('from "../');
+  expect(arts).not.toContain("chat-image");
+  expect(arts).not.toContain("artifact-sidebar");
+  const bar = readFileSync(new URL("../mods/collie-artifacts/bar.js", import.meta.url), "utf8");
+  expect(bar).toContain('from "./lib/artview.js"');
+  expect(bar).toContain('from "./lib/ui.js"');
+  expect(bar).not.toContain('from "../');
+  expect(bar).not.toContain("chat-image");
+  expect(bar).not.toContain("artifact-sidebar");
+  expect(bar).not.toContain("panel-right");
 });
 
 test("ticket 详情复用 shepherdr 的任务视图，只留 Terminal 与 Artifacts", () => {
@@ -218,7 +235,7 @@ test("ticket 详情复用 shepherdr 的任务视图，只留 Terminal 与 Artifa
   });
   expect(body.type).toEqual("stack");
   expect(body.children.map((child: any) => child.id)).toEqual(["collie-ticket-artifacts"]);
-  expect(body.children[0].content).toEqual({ mod: "task-artifacts" });
+  expect(body.children[0].content).toEqual({ mod: "collie-artifacts" });
   expect(body.active).toEqual("collie-ticket-artifacts");
   const stack = node(layout, "collie");
   expect(stack.type).toEqual("stack");
@@ -393,6 +410,12 @@ describe("chrome / tabs / settings / toasts 自包含（#8）", () => {
     "mods/collie-tabs/inbox.js",
     "mods/collie-tabs/core/spaces.js",
     "mods/collie-settings/main.js",
+    "mods/collie-artifacts/main.js",
+    "mods/collie-artifacts/bar.js",
+    "lib/artview.js",
+    "mods/collie/lib/artview.js",
+    "mods/collie-artifacts/lib/artview.js",
+    "mods/collie-artifacts/lib/ui.js",
     "lib/ui.js",
     "mods/collie/lib/ui.js",
     "mods/collie-tabs/lib/ui.js",
@@ -457,8 +480,9 @@ describe("chrome / tabs / settings / toasts 自包含（#8）", () => {
     expect(mods).toContain("workspace-status");
     expect(mods).not.toContain("workspace-status-chat");
     expect(ids).not.toContain("toasts");
-    // #6/#7 own these: still there until they land.
+    // #6's artifacts are collie's own mod now; #7's chat is still named here.
     expect(mods).toContain("spaces-chat");
-    expect(mods).toContain("task-artifacts");
+    expect(mods).toContain("collie-artifacts");
+    expect(mods).not.toContain("task-artifacts");
   });
 });

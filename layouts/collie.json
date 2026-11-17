@@ -165,7 +165,7 @@
                                   "id": "collie-ticket-artifacts",
                                   "type": "block",
                                   "content": {
-                                    "mod": "task-artifacts"
+                                    "mod": "collie-artifacts"
                                   }
                                 }
                               ],
