@@ -13,11 +13,13 @@
 // (core/mentions.js). #22 added the chat's cards and states: reactions (chips under a message, the emoji picker in
 // reactions.js), secrets an agent asks for by name (secret-card.js, core/secrets.js into Collie's own store), the
 // artifacts a publish made (a card that opens the collie-artifacts viewer), and what the agent left running in the
-// background (core/bg-jobs.js). Shepherdr's threads, Tasks panel and voice stay out: this is the Coordinator's
-// conversation only.
+// background (core/bg-jobs.js). #23 adds Find: Ctrl+F (Cmd+F on a Mac) opens a bar over the loaded rows that counts the
+// matches, steps through them with Enter / Shift+Enter, bolds the words found in a message, brings their row into view,
+// and closes on Escape. Shepherdr's threads, Tasks panel and voice stay out: this is the Coordinator's conversation
+// only.
 
 import { View, div, image, svg } from "gpui-kit";
-import { h_flex, v_flex, TextareaState, Textarea, ScrollHandle, TextView } from "gpui-base";
+import { h_flex, v_flex, InputState, Input, TextareaState, Textarea, ScrollHandle, TextView } from "gpui-base";
 import { appHome, exec, hc, home, openOverlay, props, readTextFile, run, setShared, shared, theme, watchFolder, writeTextFile } from "herdr";
 import { terminals, panes, spaces, inRender } from "./live.js";
 import { FIND, LOG, Conversation, records, summary, excerpt } from "./core/chat-log.js";
@@ -49,6 +51,7 @@ import * as slash from "./core/slash.js";
 import * as mentions from "./core/mentions.js";
 import { ImageViewer, VIEW } from "./viewer.js";
 import EmojiPicker from "./reactions.js";
+import * as find from "./core/find.js";
 
 const PAGE = 200;
 const KEEP = 2000;
@@ -58,6 +61,29 @@ const norm = (s) => String(s ?? "").replace(/\s+/g, " ").trim();
 const personHc = asPerson({ hc, exec });
 // A request's id is <terminal>.<time>.<hook pid>: its moment.
 const askAt = (id) => { const p = String(id).split("."), sec = Number(p[p.length - 2]); return Number.isFinite(sec) && sec > 1e9 ? sec * 1000 + 999 : Date.now(); };
+
+// Find's keys, bound once for the whole app (cx.bind_keys is the application's keymap, not a view's): Ctrl+F (Cmd+F on
+// a Mac) opens the bar over the rows where the chat's own root declares the "collie_chat" context, and inside the bar
+// Escape closes it while Enter and Shift+Enter walk the matches (the box is an Input, which keeps those keys itself).
+let findKeys = false;
+function bindFindKeys(cx) {
+  if (findKeys) return;
+  findKeys = true;
+  const keys = [
+    { keystroke: "ctrl-f", action: "collie_chat_find", context: "collie_chat" },
+    { keystroke: "cmd-f", action: "collie_chat_find", context: "collie_chat" },
+    { keystroke: "escape", action: "collie_chat_find_close", context: "collie_chat_find" },
+    { keystroke: "enter", action: "collie_chat_find_next", context: "collie_chat_find" },
+    { keystroke: "shift-enter", action: "collie_chat_find_prev", context: "collie_chat_find" },
+  ];
+  for (const ctx of ["Input", "TextArea", "Textarea"]) {
+    keys.push(
+      { keystroke: "escape", action: "collie_chat_find_close", context: `collie_chat_find > ${ctx}` },
+      { keystroke: "enter", action: "collie_chat_find_next", context: `collie_chat_find > ${ctx}` },
+      { keystroke: "shift-enter", action: "collie_chat_find_prev", context: `collie_chat_find > ${ctx}` });
+  }
+  try { cx.bind_keys(keys); } catch {}
+}
 
 // Which CLI a terminal runs: "claude" | "codex" from its report or its program, else null.
 const cliOf = (k) => {
@@ -188,6 +214,13 @@ export default class CoordinatorChat extends View {
     this.screenErr = new Map();
     this.pinned = true;
     this.scroll = ScrollHandle.new();
+    // Find in the loaded rows (Ctrl+F, #23): the bar above them, the match it is on, and the row it brings into view.
+    this.finding = false;
+    this.findIdx = 0;
+    this.findJump = false;
+    this.findBox = InputState.new({ placeholder: WORDS.find });
+    this.findBox.on("change", (_e, cx) => { this.findIdx = 0; this.findJump = true; cx.notify(); });
+    bindFindKeys(cx);
     this.box = TextareaState.new({ placeholder: "Message the Coordinator…" });
     this.box.set_rows(1);
     this.box.on("submit", (e, cx) => { if (!e?.shift) this.enter(cx, Boolean(e?.secondary)); });
@@ -238,11 +271,18 @@ export default class CoordinatorChat extends View {
     const rows = this.rows(cx);
     // The images the box and the rows show: each is linked for image() once, its size read with it.
     this.needViews([...this.files.filter((f) => f.image).map((f) => f.path), ...rows.flatMap((r) => r.paths ?? [])], cx);
+    // Find (#23): the match the bar is on comes into view once per step, and the list stops following the newest
+    // (a message arriving must not pull the view off the match).
+    const hit = this.finding ? find.rowAt(this.findMatches(rows), this.findIdx) : null;
+    if (this.finding && this.findJump && hit) { this.findJump = false; this.pinned = false; this.scroll.scroll_to_item(hit.index); }
     // Newest at the bottom: the last row is on screen while the person is at the bottom.
     if (this.pinned && rows.length) this.scroll.scroll_to_item(rows.length - 1);
     // What the agent left running in the background, over the box (core/bg-jobs.js, #22).
     const bg = this.readOnly ? null : this.background(t, cx);
     return div().id("collie-chat").flex().flex_col().size_full().min_h(0).bg(t.background)
+      .key_context("collie_chat")
+      .on_action("collie_chat_find", (_e, cx) => { cx.stop_propagation(); this.openFind(cx); })
+      .when(this.finding, (el) => el.child(this.findBar(t, rows, cx)))
       .child(this.list(t, rows, cx))
       .when(Boolean(bg), (el) => el.child(bg))
       .child(this.composer(t, cx));
@@ -340,7 +380,7 @@ export default class CoordinatorChat extends View {
             .child(svg("mods/collie-chat/file.svg").size(12).flex_none().text_color(t.dim))
             .child(div().min_w(0).truncate().text_size(11).text_color(t.muted).child(r.files.join(", ")))))
           .when(Boolean(String(r.text ?? "").trim()), (el) => el.child(div().rounded(RADIUS.card).bg(t.raised).border_1().border_color(t.border).px(12).py(8).text_size(13)
-            .text_color(t.foreground).child(TextView.markdown(`chat-md-${r.id}`, literal(this.mentionsIn(r.text)) || " ").selectable(true))))
+            .text_color(t.foreground).child(TextView.markdown(`chat-md-${r.id}`, this.marked(literal(this.mentionsIn(r.text))) || " ").selectable(true))))
           .when(Boolean(r.paths?.length), (el) => el.child(this.thumbs(t, r.paths, r.id, cx, { faded: r.pending })))
           .when(Boolean(r.error), (el) => el.child(div().text_size(11).text_color(t.ansi1).child(notSent(r.error))))
           .child(h_flex().gap(8).items_center()
@@ -349,10 +389,79 @@ export default class CoordinatorChat extends View {
     }
     // The agent's own words.
     return div().id(r.id).w_full().flex().flex_col().gap(2).px(2).py(2)
-      .child(div().text_size(13).text_color(t.foreground).child(TextView.markdown(`chat-md-${r.id}`, r.text || " ").selectable(true)))
+      .child(div().text_size(13).text_color(t.foreground).child(TextView.markdown(`chat-md-${r.id}`, this.marked(r.text || " ")).selectable(true)))
       .child(h_flex().gap(8).items_center()
         .child(this.reactions_(t, r, cx))
         .when(Boolean(r.at), (el) => el.child(div().text_size(11).text_color(t.dim).child(clock(r.at)))));
+  }
+
+  // ---- find (#23) ---------------------------------------------------------------------------------
+
+  // Ctrl+F over the loaded conversation: the bar appears and takes the keyboard; the first match is shown at once.
+  openFind(cx) {
+    if (!this.findBox) return;
+    this.finding = true;
+    this.findJump = true;
+    cx.timer.after(0, () => { this.findBox.focus(); cx.notify(); });
+    cx.notify();
+  }
+
+  // Escape, or the bar's X: the bar goes, back to the box (a chat with one).
+  closeFind(cx) {
+    this.finding = false;
+    this.findJump = false;
+    if (!this.readOnly) this.box.focus();
+    cx.notify();
+  }
+
+  findQuery() {
+    return this.finding ? this.findBox.value().trim() : "";
+  }
+
+  // Every match in the rows on screen, in their order (core/find.js).
+  findMatches(rows) {
+    return find.matches(rows, this.findQuery());
+  }
+
+  // Enter / Shift+Enter, and the bar's arrows: the next (or earlier) match, wrapping at either end.
+  findStep(d, rows, cx) {
+    const total = find.totalOf(this.findMatches(rows));
+    if (!total) return;
+    this.findIdx = find.step(this.findIdx, total, d);
+    this.findJump = true;
+    cx.notify();
+  }
+
+  // A row's words with the query's matches in bold: its markdown rows only (the user's and the agent's), where bold
+  // is words the renderer knows. A quiet row shows its words as they are.
+  marked(text) {
+    const q = this.findQuery();
+    return q ? find.mark(text, q) : text;
+  }
+
+  // The bar above the rows: the box, how many matched, the earlier and next match, and close.
+  findBar(t, rows, cx) {
+    const found = this.findMatches(rows);
+    const total = find.totalOf(found);
+    const q = this.findQuery();
+    const count = !q ? "" : total ? find.countWord(this.findIdx, total) : WORDS.noMatches;
+    const icon = (id, path, fn) => div().id(id).size(H.sm).flex_none().flex().items_center().justify_center()
+      .rounded(RADIUS.control).cursor_pointer().text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground))
+      .on_click((_e, cx) => { cx.stop_propagation(); fn(cx); cx.notify(); })
+      .child(svg(path).size(14));
+    const take = (fn) => (_e, cx) => { fn(cx); cx.stop_propagation(); cx.notify(); };
+    return h_flex().id("collie-chat-find").flex_none().w_full().h(40).px(12).gap(8).items_center()
+      .border_b(1).border_color(t.border).bg(t.background)
+      .key_context("collie_chat_find")
+      .on_action("collie_chat_find_close", take((cx) => this.closeFind(cx)))
+      .on_action("collie_chat_find_next", take((cx) => this.findStep(1, rows, cx)))
+      .on_action("collie_chat_find_prev", take((cx) => this.findStep(-1, rows, cx)))
+      .child(svg("mods/collie-chat/search.svg").size(14).flex_none().text_color(t.dim))
+      .child(Input.new(this.findBox).flex_1().text_size(TEXT.body).text_color(t.foreground))
+      .child(div().flex_none().text_size(TEXT.id).text_color(t.dim).child(count))
+      .child(icon("find-prev", "mods/collie-chat/chevron-up.svg", (cx) => this.findStep(-1, rows, cx)))
+      .child(icon("find-next", "mods/collie-chat/chevron-down.svg", (cx) => this.findStep(1, rows, cx)))
+      .child(icon("find-x", "mods/collie-chat/x.svg", (cx) => this.closeFind(cx)));
   }
 
   // A published artifact: its card (the latest publish of it; earlier ones a quiet line), or a quiet line while the

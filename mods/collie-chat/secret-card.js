@@ -8,6 +8,7 @@
 
 import { InputState } from "gpui-base";
 import * as secrets from "./core/secrets.js";
+import { hc } from "herdr";
 import { terminals } from "./live.js";
 import { headStrip } from "./cards.js";
 import { green } from "./lib/ui.js";
@@ -75,6 +76,7 @@ export class SecretCards {
         st.box?.set_value("");
         this.kept.set(key(ask.address, ask.name), { address: ask.address, name: ask.name, why: ask.why, how: "Kept", at: Date.now() });
         this.host.say(secrets.keptLine(ask.name, this.host.where), cx);
+        hc(["label", ask.address, `collie.secret.ask.${ask.name}=`]).catch(() => {});
         this.onEnd?.(ask, "Kept");
       } catch (e) { st.err = String(e?.message ?? e); }
       st.busy = false;
@@ -104,6 +106,7 @@ export class SecretCards {
       if (st) st.busy = false;
       this.kept.set(key(ask.address, ask.name), { address: ask.address, name: ask.name, why: ask.why, how: "Declined", at: Date.now() });
       this.host.say(secrets.declinedLine(ask.name), cx);
+      hc(["label", ask.address, `collie.secret.ask.${ask.name}=`]).catch(() => {});
       this.onEnd?.(ask, "Declined");
       cx.notify();
     });

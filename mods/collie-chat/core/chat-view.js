@@ -58,6 +58,9 @@ export const WORDS = {
   loading: "Loading…",
   noOutput: "(no output)",
   stop: "Stop",
+  // find in the loaded rows (#23)
+  find: "Find in the chat…",
+  noMatches: "No matches",
 };
 
 // ---- a session that is gone ------------------------------------------------------------------
