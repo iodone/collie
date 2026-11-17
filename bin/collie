@@ -511,12 +511,10 @@ def remove_empty_parents(path: Path, stop: Path, preserve: Path) -> None:
         path = path.parent
 
 
-def service_status(args) -> int:
-    root = args.root.expanduser().resolve()
+def service_health(root: Path):
     socket_path = target_path(root, STATE / "service.sock")
     if not socket_path.exists():
-        print(f"collie service is not running (no socket at {socket_path})", file=sys.stderr)
-        return 1
+        return False, {"error": f"collie service is not running (no socket at {socket_path})"}
     import socket
     client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     client.settimeout(3)
@@ -530,16 +528,64 @@ def service_status(args) -> int:
                 break
             chunks.append(chunk)
     except OSError as exc:
-        print(f"collie service did not answer: {exc}", file=sys.stderr)
-        return 1
+        return False, {"error": f"collie service did not answer: {exc}"}
     finally:
         client.close()
     raw = b"".join(chunks)
     head, _, body = raw.partition(b"\r\n\r\n")
     if b" 200 " not in head.split(b"\r\n", 1)[0]:
-        print(f"collie service health failed: {head.decode(errors='replace')}", file=sys.stderr)
+        return False, {"error": f"collie service health failed: {head.decode(errors='replace')}"}
+    try:
+        return True, json.loads(body or b"{}")
+    except ValueError:
+        return False, {"error": "collie service returned invalid JSON"}
+
+
+def service_status(args) -> int:
+    root = args.root.expanduser().resolve()
+    ok, result = service_health(root)
+    if not ok:
+        print(result["error"], file=sys.stderr)
         return 1
-    print(body.decode(errors="replace"))
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
+def status(args) -> int:
+    root = args.root.expanduser().resolve()
+    ok, service = service_health(root)
+    try:
+        core_result = subprocess.run(["hc", "server", "status"], capture_output=True, text=True, timeout=10)
+        core = json.loads(core_result.stdout) if core_result.returncode == 0 else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        core = None
+    app = None
+    try:
+        app_result = subprocess.run(["herdr-app", "status"], capture_output=True, text=True, timeout=10)
+        app = json.loads(app_result.stdout) if app_result.returncode == 0 else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        app = None
+    coordinators = []
+    try:
+        listed = subprocess.run(["hc", "ls", "--json"], capture_output=True, text=True, timeout=10)
+        terminals = json.loads(listed.stdout).get("terminals", []) if listed.returncode == 0 else []
+        for terminal in terminals:
+            labels = terminal.get("labels") or {}
+            if labels.get("herdr.role") == "coordinator" or labels.get("herdr.inbox") == "true":
+                coordinators.append({
+                    "address": terminal.get("address"),
+                    "state": terminal.get("state"),
+                    "space": labels.get("herdr.coordinator.space") or labels.get("herdr.space"),
+                })
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    print(json.dumps({
+        "root": str(root),
+        "service": service if ok else {"running": False, **service},
+        "core": core,
+        "app": app,
+        "coordinators": coordinators,
+    }, ensure_ascii=False, indent=2, sort_keys=True))
     return 0
 
 
@@ -610,11 +656,14 @@ def parser() -> argparse.ArgumentParser:
     command = sub.add_parser("doctor")
     command.add_argument("--root", type=Path, default=Path.home())
     command.set_defaults(function=doctor)
+    command = sub.add_parser("status")
+    command.add_argument("--root", type=Path, default=Path.home())
+    command.set_defaults(function=status)
     service = sub.add_parser("service")
     service_sub = service.add_subparsers(dest="service_command", required=True)
-    status = service_sub.add_parser("status")
-    status.add_argument("--root", type=Path, default=Path.home())
-    status.set_defaults(function=service_status)
+    status_command = service_sub.add_parser("status")
+    status_command.add_argument("--root", type=Path, default=Path.home())
+    status_command.set_defaults(function=service_status)
     command = sub.add_parser("uninstall")
     common(command)
     command.set_defaults(function=uninstall)
