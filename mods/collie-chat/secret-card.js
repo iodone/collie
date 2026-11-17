@@ -1,6 +1,6 @@
-// The card for a secret an agent asked for (herdr-secret ask NAME --why …: a label on its
+// The card for a secret an agent asked for (collie-secret ask NAME --why …: a label on its
 // terminal, secrets.js asksOf()): "Secret: NAME", the reason, a masked box, where to keep it
-// (its space, its machine, Everywhere; the most specific first), Save and Decline. Save writes
+// (this computer), Save and Decline. Save writes
 // the vault here directly (secrets.js keep()); the agent is told by name only. The value never
 // goes through hc send, the conversation, a log or an artifact. For a few seconds after, the
 // card says "Kept: NAME". Shown in the agent's own chat where it asked, and in its Assistant's

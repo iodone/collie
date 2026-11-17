@@ -1,10 +1,9 @@
-// Shepherdr settings' rows as data: each row's key in ~/.herdr/shepherdr.json, its words and its choices, and every
+// Coordinator settings' rows as data: each row's key, its words and its choices, and every
 // title, line and button word the window's Settings say (mods/collie-settings), so the window, the service and the
 // web app's Settings say the same. collie-task reads the file (herdr_task/settings.py: settings_for); its defaults are
 // DEFAULTS there and here.
 // Shared core: the source is core/settings.js; bin/sync-shared copies it into the mods in lib/COPIES.
 import { NAMES, levelName, current, rowFor, menuFor } from "./agents.js";
-import { SERVE } from "./host.js";
 
 // ---- the frame -------------------------------------------------------------------------------------------------
 // The pages, in the window's order. space: a space's own settings have it too ("local": only a space on this computer);
@@ -124,8 +123,8 @@ export const FEEDBACK = {
   about: "When Shepherdr itself misbehaves, agents offer once to file it as a GitHub issue, only with your yes.",
   repoTitle: "Feedback repo",
   repoAbout: "Where feedback issues go, as owner/name. Empty: Shepherdr's own repo.",
-  repo: "eliasstravik/shepherdr",
-  bad: "Write it as owner/name, like eliasstravik/shepherdr.",
+  repo: "iodone/collie",
+  bad: "Write it as owner/name.",
 };
 // owner/name from what was typed (owner/name or a github.com link), "" for empty, null when it isn't one.
 export function feedbackRepo(v) {
@@ -253,7 +252,7 @@ export const SECRETS = {
   keptNote: (name, where) => `Kept ${name} for ${where}.`,
   removedNote: (name, where) => `Removed ${name} from ${where}.`,
   pasteNew: (name) => `Paste the new value for ${name}.`,
-  // Kept on: the machine whose vault every machine's agents and voice calls use (shepherdr secrets move-to)
+  // Kept on: Collie keeps its secrets on this computer
   keptOn: "Kept on", keptHere: "This computer", thisOne: "this computer",
   keptAbout: "Every machine's agents and voice calls get them from there. Pick an always-on machine.",
   // nobody picked one: they follow Serve from (core/secrets.js followTo)
@@ -302,7 +301,7 @@ export function homeAbout(on, st) {
 }
 
 // ---- Window ----------------------------------------------------------------------------------------------------
-// On/off switches kept in shared state (on unless false), then Add-ons (lib/addons.json's switches).
+// On/off switches kept in shared state (on unless false).
 export const SWITCHES = [
   { id: "tabs", title: "Show tabs", about: "The space's tabs, in the bar at the top. The bar's buttons stay either way.",
     key: "tabbar.tabs" },
@@ -341,12 +340,6 @@ export function addonAbout(about, now, stop) {
 // ---- Web -------------------------------------------------------------------------------------------------------
 export const WEB = { title: "Shepherdr on the web", link: "Link", copy: "Copy", phone: "Open it on your phone" };
 // The Web page's state line: off (the Web add-on), not read yet, no service, or what the service last said (web.json).
-// Served from another machine (Serve from, core/host.js): says which; a move under way says that first.
-export const webState = (off, loaded, w) => (off ? "Off. Turn it on under Window › Add-ons." : !loaded ? "Reading…"
-  : !w ? "Shepherdr's service isn't running here." : w.serve?.moving ? SERVE.moving(w.serve.moving)
-  : w.serve?.host && !w.serve.reachable ? SERVE.unreachable(w.serve.host) : w.why ? w.why
-  : w.serve?.host ? SERVE.elsewhere(w.serve.host) : "On, private to your tailnet.");
-
 // ---- the rows' choices -----------------------------------------------------------------------------------------
 export const MERGE = [["ask", "On Accept"], ["checks", "After checks pass"], ["auto", "Right away"]];
 export const MUST_FIX = [["blocker", "Blockers"], ["major", "Major and up"], ["minor", "Everything"]];

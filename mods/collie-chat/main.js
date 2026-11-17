@@ -60,7 +60,6 @@ import { notifies } from "./notify.js";
 import { ScreenWatch, screenStrips, openCard, cardsOf, starting, cliOf } from "./screens.js";
 import { dayLabel, dayOf } from "./days.js";
 import { CallScreen } from "./call-screen.js";
-import { on as addonOn } from "./addons.js";
 import { note } from "./usage.js";
 
 // Messages a page of history holds: the newest page first, earlier ones as the person scrolls up.
@@ -94,6 +93,8 @@ const assistant = (k) => k?.labels?.["herdr.role"] === "coordinator";
 // The composer's round buttons (Send, Call, End call, mic, Mute), and the height of its text row
 // (one line of the box), which the call's row keeps so nothing moves when a call starts.
 const ROUND = 28, TEXT_ROW = 34;
+// Collie does not ship the voice call / dictation stack; its entry points stay hidden.
+const VOICE = false;
 // Image thumbnails: the box's files are squares this many px, this far apart; under sent
 // messages each image keeps its shape, fitted in THUMB_ONE (one image) or THUMB_MANY (w, h).
 const THUMB = 56, THUMB_GAP = 6;
@@ -369,7 +370,7 @@ export default class Chat extends View {
     }, cx.focus_handle());
     this.codexAsk = null;
     this.shownAsks = new Map();
-    // Secrets agents ask for (herdr-secret ask): their masked cards, here and for the workers.
+    // Secrets agents ask for (collie-secret ask): their masked cards, here and for the workers.
     this.secretCards = new SecretCards();
     // Kept or declined here: its quiet line, where its card was.
     this.secretCards.onEnd = (ask, how) => this.secretEnded(ask, how);
@@ -450,7 +451,7 @@ export default class Chat extends View {
     this.originKey = labels["herdr.chat.origin"] || (this.slot ? `slot:${this.slot}` : null) || this.addr || "none";
     this.typing = labels["herdr.typing"] ? { addr: this.addr, at: Number(labels["herdr.typing"]) || 0 } : null;
     this.dict = new Dictation(this.originKey);
-    if (addonOn("voice")) warmAudio();
+    if (VOICE) warmAudio();
     this.draftFile = `${appHome()}/data/chat-drafts/${safe(this.originKey)}.json`;
     if (!this.addr && this.role) this.phase = "fresh";
     if (this.phase === "fresh") this.loadChoice(cx);
@@ -520,8 +521,8 @@ export default class Chat extends View {
         if (c === "focus") { this.box.focus(); cx.notify(); continue; }
         if (focused()?.pane !== this.myPane()) continue;
         // Voice off (Shepherdr settings > Window > Add-ons): its keys do nothing.
-        if (c === "dictate" && addonOn("voice")) this.toggleDictation(cx);
-        if (c === "call" && addonOn("voice")) this.toggleCall(cx);
+        if (c === "dictate" && VOICE) this.toggleDictation(cx);
+        if (c === "call" && VOICE) this.toggleCall(cx);
         if (c === "mute") this.callMute(cx);
         if (c === "find") this.openFind(cx);
         cx.notify();
@@ -2009,7 +2010,7 @@ export default class Chat extends View {
     const room = right - left, timeW = time ? (time.length > 5 ? 82 : 38) + ACT_GAP : 0;
     const need = bar.acts.length * (ACT + ACT_GAP) + ACT + (bar.pills?.length ?? 0) * (PILL + PILL_EDGE);
     // Reactions off (an add-on): no smiley; the pills already there still show.
-    const order = bandOrder(bar.side, bar.acts, { time: Boolean(time) && need + timeW <= room, react: addonOn("reactions") });
+    const order = bandOrder(bar.side, bar.acts, { time: Boolean(time) && need + timeW <= room, react: true });
     for (const what of order) {
       if (what === "time") add("time", timeW - ACT_GAP, ACT_GAP, { hover: true, text: time });
       // The pills PILL_GAP apart, PILL_EDGE from what comes before or after them.
@@ -2167,6 +2168,7 @@ export default class Chat extends View {
 
   // Ctrl+Shift+D, the mic button and Done: start recording, or stop and write it down.
   toggleDictation(cx) {
+    if (!VOICE) return;
     if (this.dict.state === "writing") return;
     if (this.dict.state === "recording") {
       cx.notify();
@@ -2226,6 +2228,7 @@ export default class Chat extends View {
   get callDir() { return `${appHome()}/data/chat-voice/${safe(this.originKey)}`; }
 
   toggleCall(cx) {
+    if (!VOICE) return;
     if (this.call) { cx.spawn(async (cx) => { await this.hangup(); cx.notify(); }); return; }
     if (this.dict.state === "recording") this.dict.cancel();
     this.call = { phase: "connecting", who: null, muted: false, error: null, started: Date.now() };
@@ -2447,7 +2450,7 @@ export default class Chat extends View {
     if (pid) exec("sh", ["-c", 'sleep 1; kill "$1" 2>/dev/null; true', "x", String(pid)]);
   }
 
-  // The call for the sidebar's call card (mods/spaces-chat voiceRow): shared "collie-chat.calls" =
+  // The sidebar's call card: shared "collie-chat.calls" =
   // { <chat pane>: { phase, who, muted, started, beat, name, tab, said } }.
   callShared() {
     const mine = this.myPane() ?? this.lastPane;
@@ -2902,7 +2905,7 @@ export default class Chat extends View {
 
   // How another Assistant's machine is named (core/chat-view.js fromName): the person's name for it, as the sidebar's.
   names() {
-    return { machineName: (m) => shared("spaces-chat")?.machines?.[m]?.name || null, here: this.machine ?? coreName() };
+    return { machineName: (m) => m || "This computer", here: this.machine ?? coreName() };
   }
 
   // Whose ask a card shows: the CLI's short name ("Claude asks").
@@ -3892,7 +3895,7 @@ export default class Chat extends View {
         .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.blocked).child(rec === "idle" ? this.dict.error ?? "" : ""))
         .when(Boolean(this.addr), (el) => el.children(this.pickParts(t, true)))
         .when(!this.addr && this.phase === "fresh" && Boolean(this.choice?.sel) && Boolean(cx), (el) => el.child(this.freshPick(t, cx)))
-        .when(addonOn("voice"), (el) => el.child(this.round("chat-mic", "mods/collie-chat/mic.svg", t, "ghost", (cx) => this.toggleDictation(cx))))
+        .when(VOICE, (el) => el.child(this.round("chat-mic", "mods/collie-chat/mic.svg", t, "ghost", (cx) => this.toggleDictation(cx))))
         // Always Send (SHEP-108): quiet with nothing to send, filled once there is. A call is with
         // Shepherdr itself, from the top of the sidebar (SHEP-105), never from a chat's box.
         .child(this.round("chat-send", "mods/collie-chat/send.svg", t, can ? "solid" : "off", can ? (cx) => this.send(cx) : null)))));
@@ -4007,7 +4010,7 @@ export default class Chat extends View {
     this.wasFocused = paneFocused;
     this.hadBox = showsBox;
     this.paneFocused = paneFocused;
-    // The sidebar's Shepherdr row (mods/spaces-chat voiceRow, SHEP-105) starts, mutes and ends the call it runs here
+    // The sidebar's call card starts, mutes and ends the call it runs here
     // through shared "collie-chat.callreq" = { pane, at, action: "start" | "mute" | "end" } (none: start or end).
     const req = shared("collie-chat.callreq");
     if (req && req.pane === mine && req.at !== this.callReqAt && Date.now() - req.at < 5000) {

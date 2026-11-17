@@ -5,7 +5,7 @@
 // answer to something Herdr or a task sent it). Read: the turn last seen, kept on the agent's own
 // terminal as the core label herdr.chat.read, so every Herdr client and device shows the same.
 // Having its chat (or its terminal) on screen, in a window in front, reads it; a space row's menu
-// has Mark as read (mods/spaces-chat).
+// has Mark as read.
 // Shared: the source is lib/unread.js; bin/sync-shared copies it into each mod in lib/COPIES.
 // Edit lib/unread.js, never a mod's copy, then run bin/sync-shared.
 

@@ -116,7 +116,7 @@ describe("the ported tree is every file shepherdr's chat has, adapted, and it lo
   });
 
   test("the pure cores load: chat-view, chat-log, secrets, asks, screens, agents, slash, mentions", async () => {
-    const cores = ["chat-view", "chat-log", "secrets", "asks", "screens", "agents", "slash", "mentions", "person", "bg-jobs", "clean-env", "task-artifacts", "usage"];
+    const cores = ["chat-view", "chat-log", "secrets", "asks", "screens", "agents", "slash", "mentions", "person", "bg-jobs", "clean-env", "task-artifacts"];
     for (const name of cores) {
       const mod = await import(join(ROOT, "core", `${name}.js`));
       expect([name, Object.keys(mod).length > 0]).toEqual([name, true]);
