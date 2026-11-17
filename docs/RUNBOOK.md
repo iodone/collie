@@ -96,9 +96,13 @@ bun "$ROOT/.local/share/collie/service/main.ts"
     "collie": {
       "coordinator": { "cli": "claude", "model": "default", "effort": "medium" }
     }
-  }
+  },
+  "chat": { "agent": "claude", "model": null, "effort": null, "fast": false, "perm": "plan" }
 }
 ```
+
+`chat` 是 Coordinator chat 的 picker 记住的选择：下一次空 chat 从这里起步，首条消息按它启动。`model: null` 表示
+用 CLI 自己的默认模型（不加 `--model`）。它只属于聊天，和 headless coordinator 的 `everywhere.coordinator` 相互独立。
 
 space 配置覆盖 Everywhere；未配置有效 `cli` 时不会静默选择另一款 agent。CLI 只返回 Decision JSON，spawn、护栏和 delivery 仍由 service 执行。
 

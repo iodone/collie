@@ -432,7 +432,12 @@ Inbox 不是第二个操作台。每行右侧只有一个 **回复** 按钮：
   - Claude 的 permission/question/plan 由 `ask-hook.sh` 写入 `data/chat-asks/{open,req,ans,end}`，chat 用 `cards.js` / `strips.js` 显示并回答，`hc interrupt` 仍作 Stop；
   - session 开始时 `session-note.sh`（`collie install` 写进 `~/.claude/settings.json` / `~/.codex/hooks.json` 的 SessionStart）说明 chat 的标签约定；Assistant 另得 `collie-task _session-note` 给出的 “Your settings” 块；
   - CLI 启动前的 trust / sign-in 等屏幕由 `screens.js` / `core/screens.js` 读屏成卡片，按下只在该屏幕仍是原样时生效；
-  - 尚未移植（Slice 3+）：ticket 工具、图片/模型/反应/线程。
+  - composer 的 pick 按钮打开 `picker.js`（移植 shep 的 `chat-models`）：agent / model / reasoning effort / Fast /
+    permissions。空 chat 的选择决定首条消息的 `argvFor`，并存进 Collie 自己的
+    `~/.local/state/collie/coordinator.json` 的 `chat` 字段，下一次空 chat 从它起步（不读 shep settings）；运行中 Restart 走
+    `mods/collie-tabs/bin/restart.sh`，同一 agent 带 `--resume`（`HERDR_RESTART_RESUME=1`），换 agent 则带 handoff，
+    `herdr.chat` / `herdr.chat.slot` / `herdr.role` / `herdr.coordinator.*` 原样保留；
+  - 尚未移植（Slice 3+）：ticket 工具、图片/反应/线程、模型置顶与搜索。
 - Inbox 的“回复”按 `herdr.chat` / `herdr.chat.slot` 找 coordinator 终端；chat pane 没有 terminal，旧写法会把消息静默丢掉。
 - 生命周期：
   - 空 chat → 第一条消息 → starting → live → working/idle；

@@ -5,12 +5,14 @@
 // the agent (the template) parked behind this chat with that message as its task; shared "coordinator.slots"[slot] =
 // { space, tab, pane, folder } says which pane and tab it is. When that agent ends, the chat is empty again.
 // Or { terminal }: an agent's address ("t7", or "vps/t7" on another machine), read-only, to read a conversation.
-// The rest of shepherdr's chat (threads, Tasks panel, voice, models, reactions, secrets, images, artifacts, background
-// jobs: #7 Slice 2+) is deliberately absent: this is the coordinator conversation only.
+// The box's pick button (picker.js, #21) chooses the agent, model, reasoning effort, Fast and permissions before the
+// first message, or restarts the running agent on them (mods/collie-tabs/bin/restart.sh: same session or a handoff, the
+// tab's and slot's labels kept). The rest of shepherdr's chat (threads, Tasks panel, voice, reactions, secrets, images,
+// artifacts, background jobs: #7 Slice 2+) is deliberately absent: this is the coordinator conversation only.
 
-import { View, div } from "gpui-kit";
+import { View, div, svg } from "gpui-kit";
 import { h_flex, TextareaState, Textarea, ScrollHandle, TextView } from "gpui-base";
-import { appHome, exec, hc, home, props, readTextFile, run, setShared, shared, theme, watchFolder, writeTextFile } from "herdr";
+import { appHome, exec, hc, home, openOverlay, props, readTextFile, run, setShared, shared, theme, watchFolder, writeTextFile } from "herdr";
 import { terminals, panes, spaces, inRender } from "./live.js";
 import { FIND, LOG, Conversation, records, summary, excerpt } from "./core/chat-log.js";
 import { WORDS, LOST, lostMessage, shellWord, sessionStarted, sessionFailed, notSent, dayOf, dayLabel, clock,
@@ -18,7 +20,7 @@ import { WORDS, LOST, lostMessage, shellWord, sessionStarted, sessionFailed, not
 } from "./core/chat-view.js";
 import { sendBody, refusal, messageBody } from "./core/send.js";
 import { asPerson } from "./core/person.js";
-import { argvFor, freshArgv } from "./core/agents.js";
+import { NAMES, argvFor, asPick, current as currentOf, fitPick, freshArgv, line, samePick, sessionOf } from "./core/agents.js";
 import { cleanCommand } from "./core/clean-env.js";
 import { parseTemplate } from "./core/template.js";
 import { chatLabel } from "./core/spaces.js";
@@ -26,7 +28,9 @@ import { words as askWords, howAnswered } from "./core/asks.js";
 import { AskCards } from "./cards.js";
 import { strip } from "./strips.js";
 import { ScreenWatch, screenStrips, openCard as openScreen, starting } from "./screens.js";
-import { RADIUS, TEXT, button, toast } from "./lib/ui.js";
+import { H, RADIUS, TEXT, button, plainError, toast } from "./lib/ui.js";
+import { chatPick, withChatPickText } from "./core/pick-settings.js";
+import { ModelPicker, PICK, loadChoices } from "./picker.js";
 
 const PAGE = 200;
 const KEEP = 2000;
@@ -46,6 +50,11 @@ const cliOf = (k) => {
 export default class CoordinatorChat extends View {
   init(_props, cx) {
     const P = props() ?? {};
+    // The model menu is this mod too, in an overlay (openPicker): it draws none of the chat.
+    if (P.picker) {
+      this.picker = new ModelPicker(P.picker, cx);
+      return;
+    }
     this.origin = P.terminal ?? null;
     this.addr = this.origin;
     this.readOnly = Boolean(P.terminal);
@@ -66,6 +75,16 @@ export default class CoordinatorChat extends View {
     this.start = null;
     // The last pane header's start request this chat answered (shared "collie-chat.startreq").
     this.startReqAt = shared("collie-chat.startreq")?.at ?? null;
+    // What the agent starts on, from the chat's picker (shared "collie-chat.pick"), and the pick this chat last
+    // answered: { agent, model, effort, fast, perm } (core/agents.js). The menus are what Collie's agents offer.
+    this.pick = null;
+    this.pickAtPos = null;
+    this.pickReqAt = shared("collie-chat.pick")?.at ?? null;
+    // The picker's Restart (shared "collie-chat.restartreq" = { pane, at, pick }), answered once.
+    this.restartReqAt = shared("collie-chat.restartreq")?.at ?? null;
+    this.restarting = false;
+    this.menus = null;
+    this.dflt = {};
     this.end = 0;
     this.records = [];
     this.pending = [];
@@ -96,8 +115,18 @@ export default class CoordinatorChat extends View {
     this.box.set_rows(1);
     this.box.on("submit", (e, cx) => { if (!e?.shift) this.enter(cx, Boolean(e?.secondary)); });
     cx.timer.every(1000, (cx) => cx.notify());
-    // The pane header's Terminal on a chat with no agent yet (mods/collie-pane-chat).
+    // The pane header's Terminal on a chat with no agent yet (mods/collie-pane-chat), and the model menu's picks.
     cx.timer.every(1000, (cx) => this.startRequest(cx));
+    cx.timer.every(1000, (cx) => this.pickTicks(cx));
+    // Before the first message: what the last chat saved in Collie's settings (the picker's choice), else
+    // props.settings (the Coordinator's configured CLI), else the agents' own defaults. pickReady lets a first message
+    // sent at once wait for it.
+    this.pickReady = null;
+    if (!this.readOnly) {
+      let ready = null;
+      this.pickReady = new Promise((r) => { ready = r; });
+      cx.spawn(async (cx) => { try { await this.loadPick(cx); } finally { ready(); } });
+    }
     // Asks: the hook's request folder while there is an agent; the flag says a chat shows it.
     cx.spawn(async (cx) => this.watchAsks(cx));
     // CLI start screens: read while the agent is still before its session.
@@ -109,6 +138,7 @@ export default class CoordinatorChat extends View {
 
   // One copy of Herdr's live lists for the whole render (live.js): past ~50 ms Herdr stops it.
   render(cx) {
+    if (this.picker) return this.picker.render(cx);
     return inRender(() => this.draw(cx));
   }
 
@@ -174,7 +204,8 @@ export default class CoordinatorChat extends View {
       .when(empty, (el) => el.items_center().justify_center().child(
         div().max_w(420).flex().flex_col().gap(6).items_center()
           .child(div().text_size(15).font_semibold().text_color(t.foreground).child(WORDS.emptyTitle))
-          .child(div().text_size(TEXT.body).text_color(t.muted).child(WORDS.emptyBody))))
+          .child(div().text_size(TEXT.body).text_color(t.muted).child(WORDS.emptyBody))
+          .when(Boolean(this.pick?.agent), (el2) => el2.child(div().text_size(TEXT.id).text_color(t.dim).child(line(this.pick, this.menus))))))
       .children(rows.map((r) => this.row(t, r, cx)))
       .when(this.working(), (el) => el.child(this.workingRow(t, cx)));
   }
@@ -229,9 +260,11 @@ export default class CoordinatorChat extends View {
   composer(t, cx) {
     if (this.readOnly) return div().id("collie-chat-foot").px(24).py(8).text_size(11).text_color(t.dim).child(WORDS.readOnly);
     const can = this.phase !== "starting" && this.phase !== "ended";
+    const pick = can ? this.pickShown() : null;
     return h_flex().id("collie-chat-box").w_full().px(16).py(10).gap(8).items_end().border_t(1).border_color(t.border)
       .child(div().flex_1().min_w(0).rounded(RADIUS.card).border_1().border_color(t.border).bg(t.raised).px(10).py(6)
         .child(Textarea.new(this.box).w_full().text_size(13).text_color(t.foreground)))
+      .when(Boolean(pick?.agent), (el) => el.child(this.pickButton(t, cx)))
       .when(can, (el) => el.child(button("collie-chat-send", "Send", { kind: "primary", onClick: (_e, cx) => this.enter(cx, false) })));
   }
 
@@ -473,13 +506,15 @@ export default class CoordinatorChat extends View {
       // session's markers the holder may carry (core/clean-env.js), then execs the agent. hc runs a template's command
       // under sh -c, and where sh is dash the shell would stay the terminal's program.
       let launch = template, oneOff = null, words = "";
-      // The New space dialog's pick ("default" = the agent's own default model: no --model flag).
-      const st = props()?.settings ? { ...props().settings } : null;
-      if (st) for (const k of ["model", "effort"]) if (!st[k] || st[k] === "default") delete st[k];
+      // The pick the chat's menu made (the last chat's saved choice, else props.settings, is its first one): the
+      // template's command gives way to the chosen agent's argv ("default" = the agent's own model: no --model flag).
+      if (this.pickReady) await this.pickReady;
+      const pick = this.pick?.agent ? this.pick : asPick(props()?.settings);
       const on = machine ? { on: machine } : {};
       const src = (await exec("sh", ["-c", TEMPLATE + 'cat "$dir/$1.md"', "x", template], on).catch(() => null))?.stdout ?? "";
       const { body, command } = parseTemplate(src);
-      const cmd = st?.agent ? argvFor(st, { agent: null, argv: [] }).argv.map(shellWord).join(" ") : command;
+      const cmd = pick ? argvFor(pick, { agent: null, argv: [] }).argv.map(shellWord).join(" ") : command;
+      if (pick) this.savePick();
       if (body && cmd) {
         words = body;
         oneOff = `collie-coordinator-${Date.now().toString(36)}`;
@@ -490,7 +525,7 @@ export default class CoordinatorChat extends View {
       const args = ["run", "--bg", "--json", "--no-parent", "--keep", ...(machine ? ["--on", machine] : []),
         ...(folder ? ["--cwd", folder] : []),
         "--label", `herdr.chat=${chatLabel(pane)}`, "--label", `herdr.chat.slot=${this.slot}`, "--label", `herdr.chat.origin=slot:${this.slot}`,
-        "--label", `herdr.role=${this.role ?? "coordinator"}`,
+        "--label", `herdr.role=${this.role ?? "coordinator"}`, ...(pick ? ["--label", `herdr.agent=${pick.agent}`] : []),
         ...(space ? ["--label", `herdr.coordinator.space=${String(space.id).split("/").pop()}`] : []),
         ...(rec?.tab ? ["--label", `herdr.coordinator.tab=${String(rec.tab).split("/").pop()}`] : []),
         launch, ...(task ? [task] : [])];
@@ -541,6 +576,151 @@ export default class CoordinatorChat extends View {
     if (!req || !mine || req.pane !== mine || req.at === this.startReqAt || !(Date.now() - req.at < 5000) || this.phase !== "fresh") return;
     this.startReqAt = req.at;
     cx.timer.after(0, (cx) => { this.startAgent(null, cx, true); });
+  }
+
+  // ---- what the agent starts on, and restarting it (the model menu, picker.js) ------------------
+
+  // Collie's own settings, where the chat's choice lives (never Shepherdr's).
+  coordinatorPath() {
+    return `${home()}/.local/state/collie/coordinator.json`;
+  }
+
+  // The choice before the first message: the last chat's, from Collie's settings (coordinator.json "chat"), else
+  // props.settings (the Coordinator's configured CLI, from openCoordinator); fit to what this machine's CLIs offer,
+  // else their defaults. As in shepherdr, the choice the person last made wins over the settings it opened with.
+  async loadPick(cx) {
+    const text = await readTextFile(this.coordinatorPath()).catch(() => null);
+    let saved = null;
+    try { saved = chatPick(JSON.parse(text ?? "{}")); } catch { saved = null; }
+    const want = saved ?? asPick(props()?.settings);
+    const space = spaces().find((x) => x.id === (props()?.space ?? this.slotRec()?.space));
+    const machine = this.machine ?? space?.machine ?? null;
+    try {
+      const data = await loadChoices(machine, want?.agent ? { [want.agent]: want.model } : {});
+      this.menus = data.menus;
+      this.dflt = data.dflts ?? {};
+      this.pick = fitPick(data.menus, want ?? data.defaults, data.permDefault);
+    } catch {
+      this.pick = want ?? { agent: "claude", model: null, effort: null, fast: false, perm: "manual" };
+    }
+    cx.notify();
+  }
+
+  // The chat's choice goes into Collie's settings' "chat" field, so the next coordinator chat starts from it; the rest
+  // of the file (the headless coordinator's everywhere.coordinator) stays as it was.
+  savePick() {
+    if (this.readOnly || !this.pick?.agent) return;
+    const pick = { ...this.pick };
+    (async () => {
+      const path = this.coordinatorPath();
+      const text = await readTextFile(path).catch(() => null);
+      await writeTextFile(path, withChatPickText(text, pick), text).catch(() => null);
+    })();
+  }
+
+  // What the running agent is on, from its arguments and its log (core/agents.js current).
+  currentPick() {
+    if (!this.addr || !this.kind) return this.pick;
+    const k = terminals().find((x) => x.address === this.addr);
+    const kind = cliOf(k) ?? this.kind;
+    const c = currentOf(kind, k?.foreground?.argv ?? k?.argv ?? [], this.conv?.meta ?? {}, this.dflt?.[kind] ?? {});
+    return { agent: c.agent, model: c.model ?? null, effort: c.effort ?? null, fast: Boolean(c.fast), perm: c.perm ?? null };
+  }
+
+  // What the menu opens on: the choice before the first message, else what the agent runs on now (once its CLI is
+  // known: until then the chat doesn't know what to show or restart).
+  pickShown() {
+    if (this.phase === "fresh") return this.pick?.agent ? this.pick : null;
+    return this.kind ? this.currentPick() : null;
+  }
+
+  // The pick button: what the agent runs on (or starts on), opening the menu above it.
+  pickButton(t, cx) {
+    const c = this.pickShown();
+    return h_flex().id("collie-chat-pick-button").h(H.sm).max_w(240).flex_none().pl(8).pr(5).gap(4).items_center()
+      .rounded(RADIUS.control).border_1().border_color(t.input).bg(t.background)
+      .text_size(TEXT.label).text_color(t.muted).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground))
+      .on_mouse_down("left", (e) => { this.pickAtPos = e.position; })
+      .on_click((_e, cx) => { cx.stop_propagation(); this.openPicker(this.pickAtPos, cx); })
+      .child(div().min_w(0).truncate().child(line(c, this.menus) || "Agent"))
+      .child(svg("mods/collie-chrome/chevron-down.svg").size(12).flex_none().text_color(t.dim));
+  }
+
+  // The model menu, this mod in an overlay above the button (picker.js). Its answers come back through shared
+  // "collie-chat.pick" (before the first message) or "collie-chat.restartreq" (Restart).
+  openPicker(at, cx) {
+    const pane = this.myPane();
+    const c = this.pickShown();
+    if (!pane || !c?.agent) return;
+    openOverlay({ mod: "collie-chat", kind: "popup", frame: "none", width: PICK.width, height: PICK.height,
+      at: at ? { x: Math.max(8, at.x - PICK.width + 90), y: Math.max(8, at.y - PICK.height - 10) } : "pointer",
+      props: { picker: { mode: this.phase === "fresh" ? "fresh" : "restart", pane, machine: this.machine, current: { ...c } } } });
+  }
+
+  // The menu's answers, once each: a pick before the first message (kept, and saved for the next chat), or Restart.
+  // Only this chat's pane's, and only for 5 s (an older request is another chat's).
+  pickTicks(cx) {
+    const mine = this.myPane();
+    if (!mine) return;
+    const p = shared("collie-chat.pick");
+    if (p && p.pane === mine && p.at !== this.pickReqAt && Date.now() - p.at < 5000) {
+      this.pickReqAt = p.at;
+      if (this.phase === "fresh" && p.pick?.agent && !samePick(this.pick, p.pick)) {
+        this.pick = { ...p.pick };
+        this.savePick();
+        cx.notify();
+      }
+    }
+    const rr = shared("collie-chat.restartreq");
+    if (rr && rr.pane === mine && rr.at !== this.restartReqAt && Date.now() - rr.at < 5000) {
+      this.restartReqAt = rr.at;
+      cx.timer.after(0, (cx) => this.applyPick(rr.pick, cx));
+    }
+  }
+
+  // Restart with the menu's choice: collie-tabs/bin/restart.sh starts the new agent parked behind this chat (the same
+  // herdr.chat, herdr.chat.slot, herdr.role and herdr.coordinator.* labels), resuming when the agent stays the same,
+  // else with a handoff; this chat follows it.
+  applyPick(pick, cx) {
+    if (this.restarting || !this.addr || !pick?.agent || this.phase === "fresh") return;
+    const pane = this.myPane();
+    if (!pane) return;
+    this.restarting = true;
+    cx.spawn(async (cx) => {
+      try {
+        const out = await hc(["get", this.addr, "--json"]).catch(() => null);
+        let t = null;
+        try { t = JSON.parse(out?.stdout || "null"); } catch {}
+        if (!t?.address) throw new Error("This chat's agent wasn't found.");
+        const kind = cliOf(t) ?? this.kind ?? pick.agent;
+        const built = argvFor(pick, { agent: kind, argv: t.foreground?.argv ?? [], session: sessionOf(kind, this.path) });
+        this.swapping = true;
+        const next = await this.restartAgent(t, built, pane);
+        this.followTo(next);
+        // The choice now also starts the next conversation, as the menu's picks do.
+        this.pick = { ...pick };
+        this.savePick();
+        this.note = built.resume ? "Restarted. The conversation continues." : `Started ${NAMES[pick.agent] ?? pick.agent} with a handoff.`;
+        cx.timer.after(6000, (cx) => { this.note = null; cx.notify(); });
+      } catch (e) {
+        toast({ title: "The agent didn't restart", body: plainError(e), level: "error" });
+      }
+      this.swapping = false;
+      this.restarting = false;
+      cx.notify();
+    });
+  }
+
+  // A new agent for this chat, through mods/collie-tabs/bin/restart.sh: HERDR_RESTART_CHAT names the chat pane it starts
+  // parked behind (its herdr.chat label); HERDR_RESTART_RESUME says the argv continues the same conversation. The script
+  // keeps the tab's and slot's labels, ends the old agent, and prints the new one's address.
+  async restartAgent(t, built, pane) {
+    const env = `HERDR_RESTART_CHAT="$1"${built.resume ? " HERDR_RESTART_RESUME=1" : ""}`;
+    const r = await exec("sh", ["-c", `${env} bash "$2" "$3" "$4"`, "x", chatLabel(pane),
+      `${appHome()}/mods/collie-tabs/bin/restart.sh`, t.address, JSON.stringify(built.argv)]);
+    const addr = r.stdout.trim().split("\n").pop();
+    if (r.code !== 0 || !addr) throw new Error((r.stderr || r.stdout || "It didn't restart.").trim());
+    return addr;
   }
 
   // ---- following the log ------------------------------------------------------------------------

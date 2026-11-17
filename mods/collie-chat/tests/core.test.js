@@ -4,7 +4,9 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
 import { CHAT, SLOT, chatLabel, chatPane, machineOf, slotOf } from "../core/spaces.js";
-import { argvFor, freshArgv, sessionOf } from "../core/agents.js";
+import { argvFor, asPick, choicesFrom, chooseModel, current, fitPick, freshArgv, line, menuFor, modelName,
+  parseDefaults, pickChanges, sessionOf } from "../core/agents.js";
+import { chatPick, withChatPick, withChatPickText } from "../core/pick-settings.js";
 import { parseTemplate } from "../core/template.js";
 import { briefLabel, clock, dayLabel, dayOf, firstKeys, firstUser, initialOf, literal, lostMessage, LOST, shellWord, newsWords, newsLine } from "../core/chat-view.js";
 import { words, allow, deny, answer, dismiss, howAnswered } from "../core/asks.js";
@@ -164,5 +166,127 @@ describe("core/chat-view.js: task news as a slim line", () => {
     expect(newsLine({ ref: "HAT-5", event: "done", text: "HAT-5 done: Ship it (Ship it)" }, { title: "Ship it" })).toBe("HAT-5 done · Ship it");
     const started = { ref: "HAT-6", event: "started", text: "HAT-6 started: On it (Do the thing)" };
     expect(newsWords(started)).toMatchObject({ mark: "started", what: "started", text: "On it" });
+  });
+});
+
+describe("core/agents.js: the picker's choices (ported from shepherdr's model menu)", () => {
+  const dflts = {
+    claude: { model: "sonnet", effort: "high", fast: false, per: { opus: "xhigh" }, mode: "acceptEdits" },
+    codex: { model: "gpt-6", effort: "medium", fast: true, sandbox: "workspace-write",
+      models: [{ id: "gpt-6", label: "GPT-6", efforts: ["low", "medium", "high"], fast: true, defaultEffort: "medium" }] },
+  };
+
+  test("each agent's menu has its own default first, then what the CLI offers", () => {
+    const claude = menuFor("claude", dflts.claude);
+    expect(claude.models[0]).toMatchObject({ id: null, name: "Claude's own model" });
+    expect(claude.models.map((m) => m.id)).toContain("sonnet");
+    expect(claude.models.find((m) => m.id === "opus").defaultEffort).toBe("xhigh");
+    expect(claude.perms.map((p) => p.id)).toEqual(["manual", "auto", "acceptEdits", "plan", "bypassPermissions"]);
+    const codex = menuFor("codex", dflts.codex);
+    expect(codex.models[0].id).toBe(null);
+    expect(codex.models.find((m) => m.id === "gpt-6")).toMatchObject({ name: "GPT-6", fast: true, defaultEffort: "medium" });
+    // a running model the CLI doesn't list stays on offer
+    expect(menuFor("codex", dflts.codex, "gpt-old").models.map((m) => m.id)).toContain("gpt-old");
+  });
+
+  test("what the agent's own files say, in defaults", () => {
+    const claude = parseDefaults("claude", 'model\tsonnet\neffort\txhigh\nfast\ton\nper\t{"opus":"high"}\nmode\tplan');
+    expect(claude).toMatchObject({ model: "sonnet", effort: "xhigh", fast: true, per: { opus: "high" }, mode: "plan" });
+    const cache = { models: [
+      { slug: "gpt-6", display_name: "GPT-6", supported_reasoning_levels: [{ effort: "low" }, { effort: "high" }], service_tiers: [{}], default_reasoning_level: "high" },
+      { slug: "hidden", display_name: "Hidden", visibility: "hide" },
+    ] };
+    const codex = parseDefaults("codex", "model\tgpt-6\nmodel_reasoning_effort\thigh\nservice_tier\tfast\nsandbox_mode\tworkspace-write\n"
+      + `models\t${JSON.stringify(cache)}`);
+    expect(codex).toMatchObject({ model: "gpt-6", effort: "high", fast: true, sandbox: "workspace-write" });
+    expect(codex.models).toEqual([{ id: "gpt-6", label: "GPT-6", efforts: ["low", "high"], fast: true, defaultEffort: "high" }]);
+  });
+
+  test("a choice the menus don't offer falls back to one they do", () => {
+    const { menus, permDefault, defaults } = choicesFrom(dflts, { claude: true, codex: true });
+    expect(defaults).toEqual({ agent: "claude", model: "opus", effort: "high", fast: false, perm: "acceptEdits" });
+    expect(fitPick(menus, { agent: "claude", model: "gone", effort: "max", fast: true, perm: "nope" }, permDefault))
+      .toEqual({ agent: "claude", model: null, effort: "max", fast: true, perm: "acceptEdits" });
+    expect(fitPick(menus, { agent: "codex", model: "gpt-6", effort: "medium", fast: true, perm: "read-only" }, permDefault))
+      .toEqual({ agent: "codex", model: "gpt-6", effort: "medium", fast: true, perm: "read-only" });
+  });
+
+  test("another agent brings its own permission mode; full access stays full", () => {
+    const { menus, permDefault } = choicesFrom(dflts, { claude: true, codex: true });
+    const claude = { agent: "claude", model: "sonnet", effort: "high", fast: true, perm: "bypassPermissions" };
+    expect(chooseModel(menus, permDefault, claude, "codex", "gpt-6")).toEqual({ agent: "codex", model: "gpt-6", effort: "high", fast: false, perm: "full" });
+    const codex = { agent: "codex", model: "gpt-6", effort: "low", fast: true, perm: "auto" };
+    expect(chooseModel(menus, permDefault, codex, "claude", "opus")).toMatchObject({ agent: "claude", model: "opus", effort: "low", fast: false, perm: "acceptEdits" });
+    // another model of the same agent keeps the effort where it takes it
+    expect(chooseModel(menus, permDefault, codex, "codex", "gpt-6").effort).toBe("low");
+  });
+
+  test("the button's words and what Restart would change", () => {
+    const { menus } = choicesFrom(dflts, { claude: true, codex: true });
+    expect(line({ agent: "claude", model: "opus", effort: "xhigh", fast: true, perm: "plan" }, menus))
+      .toBe("Claude Code · Opus 5.5 · Extra high · Fast · Plan");
+    expect(line({ agent: "codex", model: "gpt-6", effort: "high", fast: false, perm: "auto" }, menus))
+      .toBe("Codex · GPT-6 · High · Auto");
+    const was = { agent: "claude", model: "opus", effort: "xhigh", fast: false, perm: "plan" };
+    expect(pickChanges(menus, was, was)).toEqual([]);
+    expect(pickChanges(menus, { ...was, fast: true }, was)).toEqual(["Fast"]);
+    expect(pickChanges(menus, { agent: "claude", model: "sonnet", effort: "high", fast: false, perm: "bypassPermissions" }, was))
+      .toEqual(["Sonnet 5.5", "High", "Full access"]);
+    expect(pickChanges(menus, { agent: "codex", model: "gpt-6", effort: "medium", fast: true, perm: "auto" }, was))
+      .toEqual(["Codex", "GPT-6", "Medium", "Fast", "Auto"]);
+  });
+
+  test("what a terminal runs on, from its argv and log", () => {
+    const c = current("claude", ["claude", "--model", "sonnet", "--effort", "low", "--settings", '{"fastMode":true}',
+      "--permission-mode", "plan"], { model: "sonnet", used: 120000 }, dflts.claude);
+    expect(c).toEqual({ agent: "claude", model: "sonnet", effort: "low", fast: true, perm: "plan" });
+    const x = current("codex", ["codex", "-m", "gpt-6", "-c", 'model_reasoning_effort="high"', "-c", 'service_tier="fast"',
+      "-s", "read-only", "-a", "on-request"], {}, dflts.codex);
+    expect(x).toEqual({ agent: "codex", model: "gpt-6", effort: "high", fast: true, perm: "read-only" });
+  });
+
+  test("a saved or dialog choice becomes a pick; \"default\" is no flag", () => {
+    expect(asPick({ agent: "claude", model: "default", effort: "high", perm: "plan" }))
+      .toEqual({ agent: "claude", model: null, effort: "high", fast: false, perm: "plan" });
+    expect(asPick({ agent: "codex", model: "gpt-6" }))
+      .toEqual({ agent: "codex", model: "gpt-6", effort: null, fast: false, perm: "auto" });
+    expect(asPick({ agent: "other" })).toBe(null);
+    expect(modelName("claude-opus-5-5")).toBe("Opus 5.5");
+  });
+});
+
+describe("core/pick-settings.js: Collie's own chat defaults", () => {
+  test("reads and writes coordinator.json's chat field, keeping the rest of the file", () => {
+    const cfg = { everywhere: { coordinator: { cli: "codex", model: "gpt-6", effort: "high" } }, spaces: { s1: { coordinator: { cli: "claude" } } } };
+    const next = withChatPick(cfg, { agent: "claude", model: "sonnet", effort: "high", fast: true, perm: "plan" });
+    expect(next.everywhere).toEqual(cfg.everywhere);
+    expect(next.spaces).toEqual(cfg.spaces);
+    expect(chatPick(next)).toEqual({ agent: "claude", model: "sonnet", effort: "high", fast: true, perm: "plan" });
+    // model "default" reads as no model flag
+    expect(chatPick({ chat: { agent: "codex", model: "default", effort: "default" } }))
+      .toEqual({ agent: "codex", model: null, effort: null, fast: false, perm: "auto" });
+    expect(chatPick({})).toBe(null);
+    expect(chatPick({ chat: { agent: "nope" } })).toBe(null);
+  });
+
+  test("the written file is JSON with a last newline, from any text", () => {
+    const text = withChatPickText('{"everywhere":{"coordinator":{"cli":"codex"}},"chat":{"agent":"codex"}}',
+      { agent: "claude", model: null, effort: "low", fast: false, perm: "manual" });
+    expect(text.endsWith("\n")).toBe(true);
+    const back = JSON.parse(text);
+    expect(back.everywhere.coordinator.cli).toBe("codex");
+    expect(back.chat).toEqual({ agent: "claude", model: null, effort: "low", fast: false, perm: "manual" });
+    expect(JSON.parse(withChatPickText("not json", { agent: "codex" })).chat.agent).toBe("codex");
+  });
+});
+
+describe("mods/collie-tabs/bin/restart.sh: what a chat's Restart keeps", () => {
+  const sh = readFileSync(new URL("../../collie-tabs/bin/restart.sh", import.meta.url), "utf8");
+
+  test("a parked agent restarts behind the same chat pane, with its slot and coordinator labels, and resumes", () => {
+    for (const label of ["herdr.chat.slot", "herdr.coordinator.space", "herdr.coordinator.tab", "herdr.role=coordinator"])
+      expect(sh).toContain(label);
+    expect(sh).toContain("HERDR_RESTART_CHAT");
+    expect(sh).toContain("HERDR_RESTART_RESUME");
   });
 });
