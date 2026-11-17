@@ -14,3 +14,6 @@ build/
 .state/
 .state-*/
 lib/.last/
+mods/*/gpui-kit.d.ts
+mods/*/jsconfig.json
+mods/*/lib/gpui-kit.d.ts
