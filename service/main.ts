@@ -296,7 +296,7 @@ if (import.meta.main) {
   const service = new InboxService({
     stateDir,
     ruleset: JSON.parse(readFileSync(rulesetPath, "utf8")),
-    rolePromptRef: join(homedir(), ".config", "herdr-core", "templates", "coordinator.md"),
+    rolePromptRef: join(homedir(), ".config", "herdr-core", "templates", "collie-coordinator.md"),
     ...(existsSync(workspacesPath) ? { workspaces: JSON.parse(readFileSync(workspacesPath, "utf8")) } : {}),
     coordinator: { settingsPath: coordinatorPath },
   });

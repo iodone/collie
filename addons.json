@@ -5,21 +5,20 @@
   "mods": [
     "collie",
     "collie-artifacts",
+    "collie-chat",
     "collie-rail",
     "collie-rules",
     "collie-tabs",
     "collie-chrome",
     "collie-settings"
   ],
-  "needs": {
-    "chat": ">=3.1.0 <4"
-  },
+  "needs": {},
   "helpers": [
     "collie-sync",
     "collie-task"
   ],
   "templates": [
-    "coordinator.md",
+    "collie-coordinator.md",
     "dev/worker.md"
   ],
   "keys": {},

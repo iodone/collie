@@ -65,5 +65,5 @@ dark, the same as the task dots (`dot.js` uses them). `onStatus()` is text on on
 - No tooltips: nothing pops up on hover (SHEP-25; `test/test_repo.py` checks). What people need shows as words; an
   icon-only control on the web keeps an `aria-label`.
 
-Already on these parts: the count badges (`tabs-tasks`, `spaces-chat`), the task dots
-(`dot.js`), the New space dialog's footer (`newspace`). Everything else moves area by area.
+Already on these parts: the count badges (`collie-tabs`), the task dots (`lib/ticket-dot.js`), the New
+space dialog's footer (`collie-tabs/coordinator.js`). Everything else moves area by area.

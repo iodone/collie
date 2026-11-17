@@ -2,7 +2,7 @@
 // there is no Inbox panel). Items are derived
 // each time from what is there now and never stored, so they go once handled:
 //   ask      a Claude agent asks (a permission, a plan, questions) through the chat's
-//            PermissionRequest hook (mods/chat/ask-hook.sh): answered on its chat's card
+//            PermissionRequest hook (the chat's ask hook, #7 Slice 2): answered on its chat's card
 //   blocked  any other agent waiting for the person (its live status), here or elsewhere
 //   merge    a task in Ready (herdr-task's status ready): kept in "inbox.tasks" but not an
 //            item, since it sits in Tasks' Ready, not Needs you (ready(): the green counts)
@@ -24,7 +24,7 @@
 // program to find out: shared "inbox.asks" (waiting requests), "inbox.tasks", "inbox.autos".
 // Live agents are read where the items are made (items()).
 //
-// The hook (mods/chat/ask-hook.sh) asks the chat every time, whoever reads it (the web app, a
+// The hook (the chat's ask hook, #7 Slice 2) asks the chat every time, whoever reads it (the web app, a
 // phone); the flag the engine touches (data/chat-asks/open/<terminal>) matters only where hc or jq
 // is missing. Claude shows its own prompt in its terminal meanwhile; Codex waits on the hook, so
 // a Codex agent's ask is released once its terminal comes on screen, and Codex asks there.
@@ -53,7 +53,7 @@ const claudeHere = (k) => k.state === "live" && !String(k.address).includes("/")
 // The chat pane showing a terminal, if one is open.
 export function chatOf(address) {
   const c = chatPane(terminals().find((k) => k.address === address));
-  return c && panes().some((p) => p.pane === c && p.mod === "chat") ? c : null;
+  return c && panes().some((p) => p.pane === c && p.mod === "collie-chat") ? c : null;
 }
 
 // On screen as a terminal: its pane is in the shown tab, with no chat showing it.
@@ -62,12 +62,12 @@ function onScreen(address) {
   return Boolean(tab) && panes().some((p) => p.terminal === address && p.tab === tab) && !chatOf(address) && !threadShown(address);
 }
 
-// A task worker's thread (mods/chat openThread(): shared "chat.threads" = { [pane]: { terminal,
+// A task worker's thread (the old chat's openThread(): shared "chat.threads" = { [pane]: { terminal,
 // task, title } }) in the shown tab: its asks are answered on the thread's card there.
 function threadShown(address) {
   const tab = focused()?.tab;
   return Boolean(tab) && Object.entries(shared("chat.threads") ?? {}).some(([pane, v]) => v?.terminal === address
-    && panes().some((p) => p.pane === pane && p.mod === "chat" && p.tab === tab));
+    && panes().some((p) => p.pane === pane && p.mod === "collie-chat" && p.tab === tab));
 }
 
 // ---- the engine (the tab bar runs it) --------------------------------------------------------
@@ -382,7 +382,7 @@ export function showInbox() {
 export function toAgent(address) {
   const chat = chatOf(address);
   if (chat) { selectTabOf(chat); run("pane.focus", { pane: chat }); return; }
-  // A task worker's thread, open beside its coordinator's chat (mods/chat).
+  // A task worker's thread, open beside its coordinator's chat (a chat feature #7 does not port yet).
   const thread = Object.entries(shared("chat.threads") ?? {}).find(([p, v]) => v?.terminal === address && panes().some((x) => x.pane === p))?.[0];
   if (thread) { selectTabOf(thread); run("pane.focus", { pane: thread }); return; }
   const p = panes().find((x) => x.terminal === address);

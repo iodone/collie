@@ -29,7 +29,7 @@
               "id": "spaces",
               "type": "block",
               "content": {
-                "mod": "spaces-chat"
+                "mod": "spaces"
               },
               "size": {
                 "weight": 1.0193114280700684
@@ -97,7 +97,7 @@
                 "pane": {
                   "header": {
                     "content": {
-                      "mod": "pane-chat"
+                      "mod": "pane"
                     },
                     "reveal": "always",
                     "height": 30,
@@ -208,17 +208,7 @@
             }
           ],
           "padding": 8,
-          "gap": 8,
-          "floating": [
-            {
-              "id": "chat-call",
-              "content": {
-                "mod": "chat-call"
-              },
-              "edge": "top",
-              "align": "center"
-            }
-          ]
+          "gap": 8
         },
         {
           "id": "status",

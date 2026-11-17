@@ -1,7 +1,7 @@
 // What the window needs to know about the spaces' chats: the core labels an agent and its chat pane
-// are marked with (herdr.chat, herdr.chat.read), and which machine an address belongs to. The
-// window gets the spaces themselves from Herdr (spaces()).
-// Shared core: this copy is maintained in collie-tabs until its source moves to core/ (#11 follow-up).
+// are marked with (herdr.chat, herdr.chat.read, herdr.chat.slot), and which machine an address
+// belongs to. The window gets the spaces themselves from Herdr (spaces()).
+// Shared core: the source is core/spaces.js; bin/collie-sync copies it into the mods in lib/COPIES.
 
 export const READ = "herdr.chat.read";
 export const machineOf = (address) => (String(address).includes("/") ? String(address).split("/")[0] : null);
@@ -21,3 +21,8 @@ export function chatPane(k) {
   const m = machineOf(k.address ?? ""), id = chatLabel(c);
   return m ? `${m}/${id}` : id;
 }
+
+// The slot an agent was started for (a coordinator chat's, before it had an agent): herdr.chat.slot. The chat finds
+// its agent again after a reload by it (mods/collie-chat slotAgent()). It holds the slot name as written.
+export const SLOT = "herdr.chat.slot";
+export const slotOf = (k) => k?.labels?.[SLOT] ?? null;

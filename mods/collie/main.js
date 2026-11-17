@@ -12,6 +12,7 @@ import {
 } from "./lib/inbox-queue.js";
 import { ownProgress, taskDot } from "./lib/ticket-dot.js";
 import { artifactCli, openViewer } from "./lib/artview.js";
+import { SLOT, chatPane } from "./core/spaces.js";
 import { GREP, publishedIds, taskArtifacts } from "./core/task-artifacts.js";
 import { RADIUS, TEXT, plainError, segmented, toast } from "./lib/ui.js";
 
@@ -217,9 +218,21 @@ function stateChip(t, stage, need = null, kind = null, outcome = null) {
 // focus it, and let the LLM explain the evidence and suggest options. The person decides there.
 function coordinatorChat() {
   const here = focused();
-  const chat = panes().find((p) => p.mod === "chat" && p.tab === here?.tab) ?? panes().find((p) => p.mod === "chat");
+  const chat = panes().find((p) => p.mod === "collie-chat" && p.tab === here?.tab) ?? panes().find((p) => p.mod === "collie-chat");
   if (!chat) return null;
   return chat;
+}
+
+// The agent a coordinator chat holds: the one parked behind its pane (herdr.chat), else the one its slot started
+// (herdr.chat.slot; shared "coordinator.slots" says which pane a slot is). A chat pane is no terminal of its own,
+// so the old reply, sent to the pane's terminal, was always dropped.
+function coordinatorAgent(chat) {
+  if (!chat) return null;
+  const parked = terminals().find((k) => k.state === "live" && chatPane(k) === chat.pane);
+  if (parked) return parked.address;
+  const slot = Object.entries(shared("coordinator.slots") ?? {}).find(([, s]) => s?.pane === chat.pane)?.[0] ?? null;
+  if (!slot) return null;
+  return terminals().find((k) => k.state === "live" && k.labels?.[SLOT] === slot)?.address ?? null;
 }
 
 function replyContext(decision, target, receipt) {
@@ -236,10 +249,11 @@ function replyContext(decision, target, receipt) {
 async function replyToCoordinator(decision, target, receipt) {
   const chat = coordinatorChat();
   if (!chat) return;
-  if (chat.terminal) {
-    try { await exec("hc", ["send", chat.terminal, replyContext(decision, target, receipt)]); } catch {}
+  const addr = coordinatorAgent(chat);
+  if (addr) {
+    try { await exec("hc", ["send", addr, replyContext(decision, target, receipt)]); } catch {}
   }
-  if (chat.pane) run("pane.focus", { pane: chat.pane });
+  run("pane.focus", { pane: chat.pane });
 }
 
 function action(id, label, enabled, onClick, t) {
@@ -443,7 +457,7 @@ export default class Inbox extends View {
   // name, its count; a click opens the space.
   spaceHead(t, key, count) {
     const space = spaces().find((s) => s.id === key || s.name === key);
-    const icon = space ? shared("spaces-chat")?.icons?.[space.id] ?? null : null;
+    const icon = space ? shared("collie.spaceIcons")?.[space.id] ?? null : null;
     return h().id(`collie-group-space-${key}`).h(28).flex_none().px(8).gap(12).items_center().rounded(RADIUS.card).text_size(TEXT.label)
       .when(Boolean(space), (el) => el.cursor_pointer().hover((s) => s.bg(t.hover))
         .on_click((e, cx) => { cx.stop_propagation(); run("space.select", { id: space.id }); cx.notify(); }))

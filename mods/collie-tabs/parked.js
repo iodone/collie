@@ -1,4 +1,4 @@
-// Agents parked behind a chat pane (the pane-chat switch), known by their core label
+// Agents parked behind a coordinator chat (mods/collie-chat), known by their core label
 // herdr.chat=<chat pane>. Herdr lists an agent through its
 // pane, so an agent whose terminal is parked while its chat shows drops out of agents(), tab
 // and space status. Mods that list agents add these back, as the chat pane's agent.
@@ -15,7 +15,7 @@ const STATES = ["working", "blocked", "done", "idle"];
 // Shaped like agents()'s entries; `pane` is the chat pane.
 export function chatAgents() {
   const seen = shared("chat.seen") ?? {};
-  const chats = new Map(panes().filter((p) => p.mod === "chat").map((p) => [p.pane, p]));
+  const chats = new Map(panes().filter((p) => p.mod === "collie-chat").map((p) => [p.pane, p]));
   const own = new Set(panes().map((p) => p.terminal).filter(Boolean));
   const where = new Map(spaces().flatMap((s) => s.tabs.map((t) => [t.id, { s, t }])));
   const now = focused()?.pane;

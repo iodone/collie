@@ -276,7 +276,11 @@ test("Inbox 的过滤器对应四个 Work 状态，回复回到 coordinator chat
   expect(source).toContain('action(`collie-reply-${decision.id}`, "回复"');
   expect(source).toContain("async function replyToCoordinator");
   expect(source).toContain("replyContext(decision, target, receipt)");
-  expect(source).toContain('exec("hc", ["send", chat.terminal');
+  expect(source).toContain("function coordinatorAgent(chat)");
+  expect(source).toContain("chatPane(k) === chat.pane");
+  expect(source).toContain('k.labels?.[SLOT] === slot');
+  expect(source).not.toContain("chat.terminal");
+  expect(source).toContain('exec("hc", ["send", addr, replyContext(decision, target, receipt)]');
   expect(source).toContain('run("pane.focus", { pane: chat.pane })');
   expect(source).not.toContain("collie-quote");
   expect(source).not.toContain("openDecision");
@@ -409,6 +413,9 @@ describe("chrome / tabs / settings / toasts 自包含（#8）", () => {
     "mods/collie-tabs/coordinator.js",
     "mods/collie-tabs/inbox.js",
     "mods/collie-tabs/core/spaces.js",
+    "mods/collie-chat/main.js",
+    "mods/collie-chat/core/chat-view.js",
+    "mods/collie-chat/core/spaces.js",
     "mods/collie-settings/main.js",
     "mods/collie-artifacts/main.js",
     "mods/collie-artifacts/bar.js",
@@ -444,7 +451,7 @@ describe("chrome / tabs / settings / toasts 自包含（#8）", () => {
       const source = file(path);
       for (const word of banned) expect([path, word, source.includes(word)]).toEqual([path, word, false]);
       // The sidebar mod (#7) is only named where the layout mounts it.
-      if (path !== "layouts/collie.json") expect([path, source.includes("spaces-chat")]).toEqual([path, false]);
+      for (const gone of ["spaces-chat", "pane-chat", "chat-call"]) expect([path, gone, source.includes(gone)]).toEqual([path, gone, false]);
     }
   });
 
@@ -480,9 +487,12 @@ describe("chrome / tabs / settings / toasts 自包含（#8）", () => {
     expect(mods).toContain("workspace-status");
     expect(mods).not.toContain("workspace-status-chat");
     expect(ids).not.toContain("toasts");
-    // #6's artifacts are collie's own mod now; #7's chat is still named here.
-    expect(mods).toContain("spaces-chat");
+    // #6's artifacts and #7's chat are collie's own mods now; the sidebar and the pane header are herdr's shipped ones.
+    expect(mods).toContain("spaces");
+    expect(mods).toContain("pane");
     expect(mods).toContain("collie-artifacts");
     expect(mods).not.toContain("task-artifacts");
+    for (const gone of ["spaces-chat", "pane-chat", "chat-call", "chat"]) expect(mods).not.toContain(gone);
+    expect(ids).not.toContain("chat-call");
   });
 });

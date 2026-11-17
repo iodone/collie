@@ -423,6 +423,13 @@ Inbox 不是第二个操作台。每行右侧只有一个 **回复** 按钮：
   - `herdr.coordinator.space=<space>`
   - `herdr.coordinator.tab=<tab>`
 - coordinator 是普通 kept terminal，不是 daemon，不需要 per-space supervisor 常驻轮询。
+- 聊天界面是 Collie 自己的 `mods/collie-chat`（#7 Slice 1），不再挂 shepherdr 的 `chat` / `pane-chat` / `spaces-chat` / `chat-call`：
+  - 消息从 agent 自己的 session log 读（`core/chat-log.js`），发送走 `hc send`（`core/send.js`），以“人”的身份不留 caller（`core/person.js`）；
+  - 空 slot 的 chat 每 2s 用 `herdr.chat.slot` 找自己的 agent（`adoptSlot`），reload 后自动跟上；
+  - 首条消息读 `~/.config/herdr-core/templates/collie-coordinator.md`，生成一次性模板（`cleanCommand` + `argvFor`）后 `hc run`，用完即删；
+  - session 丢失时用同一模板的正文重开新 session 并说明（`lostMessage`）。
+  - 尚未移植（Slice 2+）：news、asks/cards、screens、ticket 工具、图片/模型/反应/线程。
+- Inbox 的“回复”按 `herdr.chat` / `herdr.chat.slot` 找 coordinator 终端；chat pane 没有 terminal，旧写法会把消息静默丢掉。
 - 生命周期：
   - 空 chat → 第一条消息 → starting → live → working/idle；
   - 菜单 Restart → 新 agent 在同一 tab 启动，handoff 或 resume，旧 agent 结束；
