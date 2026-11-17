@@ -60,7 +60,16 @@ bin/collie doctor --root "$ROOT"
 bun "$HOME/.local/share/collie/service/main.ts"
 ```
 
-正式安装由 systemd user unit / launchd agent 管理（见 #9）：`RunAtLoad` + `KeepAlive`，开机自动拉起。**每台机器只有一个 collie service**，不是每个 space 一个。
+正式安装由 systemd user unit / launchd agent 管理：`RunAtLoad` + `KeepAlive`，开机自动拉起。**每台机器只有一个 collie service**，不是每个 space 一个。
+
+```sh
+collie service install      # 写 unit 并启动（真实 HOME）
+collie service status       # GET /health: pid/uptime/state
+collie service stop
+collie service uninstall
+```
+
+隔离 root 的 `service install` 只写 unit，不调用 launchctl/systemctl。
 
 隔离 root 必须同时隔离进程的 HOME，否则服务会回到真实 HOME 找状态：
 
