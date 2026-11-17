@@ -15,7 +15,8 @@ AGENTS = {"claude": ["claude"], "codex": ["codex", "--no-daemon"]}
 
 # ---- the person's settings ------------------------------------------------------------------
 
-SETTINGS = os.environ.get("COLLIE_TASK_SETTINGS") or os.environ.get("HERDR_TASK_SETTINGS") or os.path.join(HOME, ".herdr", "shepherdr.json")
+SETTINGS = os.environ.get("COLLIE_TASK_SETTINGS") or os.environ.get("HERDR_TASK_SETTINGS") or os.path.join(HOME, ".config", "collie", "settings.json")
+LEGACY_SETTINGS = os.path.join(HOME, ".herdr", "shepherdr.json")
 # The role instructions are herdr-core templates (`hc templates` lists them): assistant.md (the
 # coordinator's), worker.md and reviewer.md. Workers and reviewers used ~/.herdr/instructions.
 TEMPLATES = os.environ.get("COLLIE_TASK_TEMPLATES") or os.environ.get("HERDR_TASK_TEMPLATES") or os.path.join(HOME, ".config", "herdr-core", "templates")
@@ -24,7 +25,7 @@ ASSISTANT_TEMPLATES = ("assistant", "coordinator", "collie-coordinator")  # "coo
 DEFAULTS = {"tasks": {"merge": "ask", "review_rounds": 0, "must_fix": "major", "max_running": MAX_RUNNING, "worktrees": True,
                       "start_notes": "", "finish_notes": "", "archive_after": 7, "proof": True, "base": "", "branch": ""},
             "automations": {"enabled": True}, "worker": {}, "reviewer": {}, "coordinator": {}, "backup": {},
-            "agents": {"reactions": True, "feedback": True, "feedback_repo": "eliasstravik/shepherdr"}}
+            "agents": {"reactions": True, "feedback": True, "feedback_repo": "iodone/collie"}}
 LEVELS = ["blocker", "major", "minor"]
 
 
@@ -36,12 +37,15 @@ LOCAL_MACHINE = "local"
 
 def read_settings():
     """The settings file as it is ({} when there is none or it can't be read)."""
-    try:
-        with open(SETTINGS) as f:
-            d = json.load(f)
-    except (OSError, ValueError):
-        return {}
-    return d if isinstance(d, dict) else {}
+    for path in (SETTINGS, LEGACY_SETTINGS):
+        try:
+            with open(path) as f:
+                d = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if isinstance(d, dict):
+            return d
+    return {}
 
 
 def autopilot_layers(d, space=None):

@@ -44,8 +44,11 @@ def secret_path():
 
 
 def own_path():
-    """This herdr-task as agents write it: the one on PATH when that is this file, else this file."""
+    """This task CLI as agents write it: collie-task on PATH, else this vendored entry."""
     me = ENTRY
+    found = shutil.which("collie-task")
+    if found:
+        return found
     found = shutil.which("herdr-task")
     return found if found and os.path.realpath(found) == me else me
 

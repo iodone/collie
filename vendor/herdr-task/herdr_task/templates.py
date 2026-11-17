@@ -10,23 +10,23 @@ WORKER_MD_BEFORE_NEWS = """You work on one Herdr task. Stay within the task's sc
 - Your brief ends with a Settings block: one line per setting that shapes how you work. A line ending in parentheses says who changed it from Herdr's default. Where the brief's own words say otherwise, they win.
 - Commit as you go, with clear messages. Don't merge, push, rebase shared branches or start other agents unless the task says so (the reviewer of your own review is fine).
 - If something blocks you or the task is unclear, ask in your chat and wait.
-- Say how it's going: at the start and at each natural step, run the `herdr-task status` command given at the end of your brief with what you're doing now (at most 40 characters), how far through the whole task you are and about how long is left. The person sees it in the Tasks panel.
+- Say how it's going: at the start and at each natural step, run the `collie-task status` command given at the end of your brief with what you're doing now (at most 40 characters), how far through the whole task you are and about how long is left. The person sees it in the Tasks panel.
 - Run the project's checks before you say you're done.
 - Review, when the Settings block says Review: on. Commit, then have fresh eyes that didn't write the change review it, read-only: a subagent, or a headless run of the Reviewer line's CLI with its model and effort (`codex exec --sandbox read-only "<prompt>" < /dev/null`, `claude -p --permission-mode plan "<prompt>" < /dev/null`: without `< /dev/null` they wait for input forever), your choice. Give it the brief, the diff against the base branch and ~/.herdr/instructions/reviewer.md. It reports what the change broke, left undone or added beyond the brief, each with proof and a level: blocker (breaks or loses people's work, or unsafe), major (someone would hit it, or it proves a claim false), minor (rarely hit, or style). Fix every finding at or above Must fix, commit, and review again; stop once a round finds none at or above it, or after Review rounds. Never agree with a finding just to end the loop: one you judge wrong goes in your summary with why, as do findings below the bar.
-- When the work is finished, run the `herdr-task ready` command given at the end of your brief, with a short summary. That puts the task in Ready for the person, who accepts it. Never mark a task done yourself. Merging then goes as the Merge line says; don't merge yourself unless told.
+- When the work is finished, run the `collie-task ready` command given at the end of your brief, with a short summary. That puts the task in Ready for the person, who accepts it. Never mark a task done yourself. Merging then goes as the Merge line says; don't merge yourself unless told.
 """
 
 # Since task news: why it waits is the agent's own status line, and its ask one full question.
 WORKER_MD_BEFORE_TEMPLATES = WORKER_MD_BEFORE_NEWS.replace(
     "- If something blocks you or the task is unclear, ask in your chat and wait.\n",
     "- If something blocks you or the task is unclear, ask in your chat and wait. Before you ask the person or stop to wait, "
-    "set your status line to why, in your own words (the `herdr-task status` command below, at most 40 characters, e.g. "
+    "set your status line to why, in your own words (the `collie-task status` command below, at most 40 characters, e.g. "
     "\"Needs a go to screenshot the menu\"): the person and the Assistant see it. End your message with one full question "
     "that names what you need and why (\"Can I take the window for 30s to screenshot the More menu?\"), never a bare \"Go?\".\n")
 # Since the roles are templates: the reviewer's words are in its template.
 WORKER_MD_BEFORE_GATE = WORKER_MD_BEFORE_TEMPLATES.replace("~/.herdr/instructions/reviewer.md", "~/.config/herdr-core/templates/reviewer.md")
 # Since ready waits for a reviewed final commit (HERD-49), with GitHub news and "For AGENTS.md".
-REVIEW_GATE = (" After each round, record it on the commit it reviewed with the `herdr-task reviewed` command given at the end "
+REVIEW_GATE = (" After each round, record it on the commit it reviewed with the `collie-task reviewed` command given at the end "
                "of your brief: `ready` refuses a final commit no round was recorded on. Rounds used and your final commit "
                "unreviewed: say why in your chat, set your status line to it and end your turn; only your Assistant can add a round.")
 AFTER_READY = ("- After ready, GitHub news on your pull request may arrive (a <herdr-github> message: a failed check, a review "
@@ -38,8 +38,8 @@ AFTER_READY = ("- After ready, GitHub news on your pull request may arrive (a <h
 _REVIEW_END = "as do findings below the bar."
 WORKER_MD_BEFORE_SUMMARY = WORKER_MD_BEFORE_GATE.replace(_REVIEW_END, _REVIEW_END + REVIEW_GATE) + AFTER_READY
 # Since the ready summary is short and for the person (HERD-64, as Shepherdr's).
-READY_LINE = ("- When the work is finished, run the `herdr-task ready` command given at the end of your brief, with a short summary.")
-SUMMARY_RULE = ("- When the work is finished, run the `herdr-task ready` command given at the end of your brief. Its summary is for "
+READY_LINE = ("- When the work is finished, run the `collie-task ready` command given at the end of your brief, with a short summary.")
+SUMMARY_RULE = ("- When the work is finished, run the `collie-task ready` command given at the end of your brief. Its summary is for "
                 "the person, like explaining it to a five-year-old: at most 160 characters of plain words on what they now see or "
                 "can do (\"The Accept card is bigger and starts with a short summary\"), no file names, flags, numbers or jargon. "
                 "Technical detail goes in `--details \"…\"` (any length, folded in the Accept card) or your proof; ready refuses "
@@ -84,7 +84,7 @@ SUBAGENTS_RULE = ("read-only, as your own helper agent that people can watch and
                   "goes the same way, labelled herdr.role=helper. The reviewer reports")
 WORKER_MD_BEFORE_FEEDBACK = WORKER_MD_BEFORE_SUBAGENTS.replace(SUBAGENTS_OLD, SUBAGENTS_RULE)
 # Since agents offer feedback for Shepherdr itself through their Assistant (SHEP-78).
-FEEDBACK_RULE = ("- Shepherdr itself misbehaving, not your task's own code (a Shepherdr, herdr-task, web app or window feature that doesn't work as meant, a Herdr command failing like a bug, the person frustrated with Shepherdr, or a \"Shepherdr feedback:\" line in your reviewer's findings): run the `herdr-task feedback` command given at the end of your brief, once per problem, then carry on. It returns at once and your Assistant asks the person whether to file it; never file an issue yourself, and put no secrets, private paths or whole logs in it.\n")
+FEEDBACK_RULE = ("- Shepherdr itself misbehaving, not your task's own code (a Shepherdr, collie-task, web app or window feature that doesn't work as meant, a Herdr command failing like a bug, the person frustrated with Shepherdr, or a \"Shepherdr feedback:\" line in your reviewer's findings): run the `collie-task feedback` command given at the end of your brief, once per problem, then carry on. It returns at once and your Assistant asks the person whether to file it; never file an issue yourself, and put no secrets, private paths or whole logs in it.\n")
 WORKER_MD = WORKER_MD_BEFORE_FEEDBACK + FEEDBACK_RULE
 
 REVIEWER_MD_BEFORE_SUBAGENT = """You review one Herdr task's work before it can merge. Read only: never edit files, commit or push.
@@ -109,7 +109,7 @@ OLD_WORKER_READY = """You work on one Herdr task. Stay within the task's scope a
 - Commit as you go, with clear messages. Don't merge, push, rebase shared branches or start other agents unless the task says so.
 - If something blocks you or the task is unclear, ask in your chat and wait.
 - Run the project's checks before you say you're done.
-- When the work is finished, run the `herdr-task ready` command given at the end of your brief, with a short summary. That puts the task in Ready for the person, who accepts it. Never mark a task done yourself.
+- When the work is finished, run the `collie-task ready` command given at the end of your brief, with a short summary. That puts the task in Ready for the person, who accepts it. Never mark a task done yourself.
 """
 OLD_WORKER_MD = OLD_WORKER_READY.split("- When the work is finished")[0]
 OLD_WORKERS = (WORKER_MD_BEFORE_FEEDBACK, WORKER_MD_BEFORE_SUBAGENTS, WORKER_MD_BEFORE_LEFT, WORKER_MD_BEFORE_DETAILS, WORKER_MD_BEFORE_CUT, WORKER_MD_BEFORE_ESTIMATE, WORKER_MD_BEFORE_SUMMARY, WORKER_MD_BEFORE_GATE, WORKER_MD_BEFORE_TEMPLATES, WORKER_MD_BEFORE_NEWS, OLD_WORKER_READY, OLD_WORKER_MD, OLD_WORKER_MD.replace(OLD_WORKER_MD.split("\n")[0], OLD_WORKER_FIRST), OLD_WORKER_REVIEW)
@@ -117,7 +117,7 @@ OLD_WORKERS = (WORKER_MD_BEFORE_FEEDBACK, WORKER_MD_BEFORE_SUBAGENTS, WORKER_MD_
 
 TEMPLATE_HEADS = {
     "worker": "---\nname: worker\ndescription: Works on one Herdr task in its folder or its own git worktree: commits as it goes, "
-              "says how it is going with herdr-task status, and herdr-task ready when finished. herdr-task starts it with the "
+              "says how it is going with collie-task status, and collie-task ready when finished. collie-task starts it with the "
               "task's brief after these words.\ncommand: claude\n---\n",
     "reviewer": "---\nname: reviewer\ndescription: Reviews one Herdr task's work read-only before it merges and reports each "
                 "finding with a level (blocker, major, minor).\ncommand: claude\n---\n",
