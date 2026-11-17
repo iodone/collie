@@ -1,6 +1,7 @@
-// What an agent left running in the background, shown over the Coordinator chat's box: its shells and watchers, live,
-// gone once they end, each one stoppable (as Claude Code's "1 shell · ↓ to manage"). Ported from shepherdr's
-// core/bg-jobs.js for #22 (no Tasks panel: the rows are the chat's own).
+// Shared core: the source is core/bg-jobs.js; the chat mod and the service use it (bin/sync-shared copies it into
+// mods/collie-chat/core/). Edit it here, never a copy.
+// What an agent left running in the background, shown over the chat box: its shells and watchers, live, gone once
+// they end, each one stoppable (as Claude Code's "1 shell · ↓ to manage").
 //   Claude Code: its log says what it started (a shell run in the background or moved there mid-run, a Monitor) and
 //   when each ended (core/chat-log.js: Conversation.bg). A job stopped in its terminal or a watcher that timed out
 //   leaves no word in the log, so the agent's own processes have the last say: a job runs while one of them holds its
@@ -62,7 +63,6 @@ true`;
 const EVERY = { claude: 3000, codex: 5000 };
 // A Codex shell that is only its agent's own work right now: sh -c "<command>" of a tool call, not a hook.
 const SHELL = /(?:^|\s|\/)(?:ba|z|da)?sh\s+-l?c\s+(.*)$/;
-// A hook of the harness itself, never a job of the agent's.
 const HOOK = /collie-agent-state|session-note|ask-hook/;
 
 export class BgJobs {

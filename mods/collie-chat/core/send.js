@@ -1,9 +1,10 @@
-// Sending the person's words to the Coordinator's agent: the reply tag line, then hc send. When the agent waits on
-// its own dialog in its terminal (a question, a permission), Esc closes it and the words go as a message ("Reply
-// instead…"). Claude Code holds a message typed mid-turn until its turn ends: its own "send now" (Ctrl+Enter) makes
-// it steer at once. Ported from shepherdr's core/send.js, without task mentions (#7 Slice 1); a reaction's tag line is
-// reactionLine() (#22).
+// Sending the person's words to an agent, the same way from the window's chat and from the web app:
+// the tag lines Herdr puts before them (the message it replies to, the tasks it mentions), then hc send. When
+// the agent waits on its own dialog in its terminal (a question, a permission), Esc closes it and the words go
+// as a message ("Reply instead…"). Claude Code holds a message typed mid-turn until its turn ends: its own
+// "send now" (Ctrl+Enter) makes it steer at once (DECISIONS: messages are never held unless asked).
 // io = { hc(args) -> Promise<{ code, stdout, stderr }>, sleep(ms), status() -> the agent's status now }.
+// Shared core: the source is core/send.js; bin/sync-shared copies it into the mods in lib/COPIES.
 
 import { excerpt } from "./chat-log.js";
 
@@ -14,15 +15,30 @@ export function refusal(r) {
   return { kind: /"kind":"blocked"/.test(text) ? "blocked" : null, message: text || "It didn't go through." };
 }
 
-// The words as the agent gets them: the reply tag, then the person's text.
+const attr = (v) => String(v ?? "").replace(/\s*\n\s*/g, " ").replace(/"/g, "”");
+
+// A mentioned task's tag line: <hc task=… title=… state=… folder=…>its prompt</hc>.
+export function taskTag(x, ref) {
+  return `<hc task="${attr(ref.replace(/^#/, ""))}" title="${attr(x.title)}" state="${attr(x.status_text ?? x.state)}"${x.why ? ` why="${attr(x.why)}"` : ""} folder="${attr(x.folder)}">${String(x.prompt ?? "").slice(0, 500)}</hc>\n`;
+}
+
+// The tasks a message mentions: HAT-1 as written (or #HAT-1, @HAT-1 and a picked [@HAT-1](task:…), core/mentions.js); a
+// task without a prefix only as #4, never a bare number.
+// tasks: [{ ref, id, ... }] (the chat's folder's).
+export function mentionedIn(text, tasks) {
+  const t = String(text ?? ""), low = t.toLowerCase();
+  return (tasks ?? []).filter((x) => {
+    if (!low.includes(String(x.ref ? x.ref : `#${x.id}`).toLowerCase())) return false;
+    const ref = x.ref ? `[#@]?${String(x.ref).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}` : `#${x.id}`;
+    return new RegExp(`(^|[\\s([])${ref}\\b`, "i").test(t);
+  });
+}
+
+// The words as the agent gets them: the reply tag, the task tags, then the person's text.
 export function messageBody({ text, quote = null, tags = "" }) {
   const reply = quote ? `<hc reply-to="${excerpt(quote, 80)}"/>\n` : "";
   return reply + tags + text;
 }
-
-// The person's reaction on a message (or its removal): one tag line to the agent, naming the message by its first
-// words (core/chat-log.js reactionLines() reads it back the same way).
-export const reactionLine = (emoji, text, on = true) => `<hc from="person" ${on ? "reaction" : "reaction-removed"}="${emoji}" to="${excerpt(text)}"/>`;
 
 // The agent waits on its own dialog: Esc closes it, then the words go once it takes typing again.
 export async function replyInstead(io, addr, text) {
@@ -37,7 +53,8 @@ export async function replyInstead(io, addr, text) {
 }
 
 // Claude Code's "send now" for a message it queued while working: Ctrl+Enter, only when its screen offers it
-// (pressed on an empty prompt it would do something else). -> whether it was pressed.
+// (pressed on an empty prompt it would do something else). Also a queued message's own Send now (#662), for one left
+// in its queue when the screen didn't offer it in time. -> whether it was pressed.
 export async function steerNow(io, addr) {
   for (let i = 0; i < 4; i++) {
     await io.sleep(i ? 300 : 150);
@@ -158,6 +175,9 @@ export async function sendTyped(io, addr, kind, body, opts = SETTLE, again = fal
 
 // A message that stays in Claude Code's box: sending it again presses its Enter (never types it twice).
 export const STUCK = "It's still in the agent's message box: its Enter didn't take.";
+
+// The person's reaction to a message, as the agent reads it (on: added, else removed).
+export const reactionLine = (emoji, text, on = true) => `<hc from="person" ${on ? "reaction" : "reaction-removed"}="${emoji}" to="${excerpt(text)}"/>`;
 
 // Sends the body. kind: "claude", "codex" or another CLI. -> hc's result (code 0: it's in the agent's terminal).
 // again: its last send stayed in Claude Code's box (sendTyped).

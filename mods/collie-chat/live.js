@@ -7,8 +7,8 @@
 // the live list, as before. The copies are shared by the whole render: never sort or change them
 // in place. Every view wraps its render in inRender(), and the shared modules read the lists here.
 //
-// Each mod keeps its own copy (mods/collie-tabs/live.js is the same file): a mod can only import inside its own
-// folder. Edit both together, or move it to core/ when a third mod needs it.
+// Shared: the source is lib/live.js; bin/sync-shared copies it into each mod in lib/COPIES.
+// Edit lib/live.js, never a mod's copy, then run bin/sync-shared.
 import { agents as liveAgents, panes as livePanes, terminals as liveTerminals, spaces as liveSpaces } from "herdr";
 
 // The render's copies. A render Herdr stops runs no `finally`, so a copy older than any render

@@ -1,8 +1,36 @@
-// How to start (or start again) the agent a Coordinator chat runs on: the person's chosen agent and flags
-// ({ agent, model, effort, fast, perm }, from the New space dialog or the chat's own picker), the argv that resumes a
-// session whose agent ended, and the choices the picker offers (the model menu's rules, ported from shepherdr's
-// core/agents.js: #21). No pins, search sections or typed model ids: the picker lists every model the CLIs offer, plus
-// each agent's own default.
+// What an agent runs on (agent, model, effort, speed, context) and how to start it again with other choices: the
+// rules both the window's model menu (lib/agent.js, mods/collie-chat-models) and the web app's use. Reading an agent's own
+// settings and restarting it run where each side runs commands (lib/agent.js, service/agents.ts).
+// Shared core: the source is core/agents.js; bin/sync-shared copies it into the mods in lib/COPIES.
+export const NAMES = { claude: "Claude Code", codex: "Codex" };
+
+// Claude Code's current models, as its /model menu offers them. `id` is what --model gets;
+// `match` the names a running agent may report for it.
+const CLAUDE_MODELS = [
+  { id: "opus", name: "Opus 5.5", match: ["opus", "claude-opus-5-5"] },
+  { id: "opus[1m]", name: "Opus 5.5 · 1M", match: ["opus[1m]", "claude-opus-5-5[1m]"] },
+  { id: "claude-fable-5-1", name: "Fable 5.1", match: ["fable", "claude-fable-5-1"] },
+  { id: "sonnet", name: "Sonnet 5.5", match: ["sonnet", "claude-sonnet-5-5"] },
+  { id: "haiku", name: "Haiku 5.5", match: ["haiku", "claude-haiku-5-5"] },
+];
+const CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+// Permission modes as each CLI has them (Claude: --permission-mode, or
+// --dangerously-skip-permissions for full access; Codex: its sandbox and approvals).
+const PERMS = {
+  claude: [{ id: "manual", label: "Ask" }, { id: "auto", label: "Auto" }, { id: "acceptEdits", label: "Accept edits" },
+    { id: "plan", label: "Plan" }, { id: "bypassPermissions", label: "Full access" }],
+  codex: [{ id: "read-only", label: "Read only" }, { id: "auto", label: "Auto" }, { id: "full", label: "Full access" }],
+};
+
+// What a model id says, in words: "claude-opus-5-5" → "Opus 5.5", "opus[1m]" → "Opus 1M".
+export function modelName(id) {
+  if (!id) return null;
+  const m = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?/.exec(id);
+  if (m) return `${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2]}${m[3] ? "." + m[3] : ""}`;
+  const a = /^([a-z]+)(\[1m\])?$/.exec(id);
+  if (a) return `${a[1][0].toUpperCase()}${a[1].slice(1)}${a[2] ? " 1M" : ""}`;
+  return id;
+}
 
 // A flag's value in argv: --model x, --model=x, or -m x.
 function flag(argv, ...names) {
@@ -25,161 +53,8 @@ function overrides(argv) {
   return out;
 }
 
-// Flags that are about what to resume, which model, effort or speed: set again by a restart.
-const CLAUDE_DROP = new Set(["--model", "--effort", "--settings", "--session-id", "--resume", "-r", "--permission-mode"]);
-const CLAUDE_BARE = new Set(["--continue", "-c", "--fork-session", "--dangerously-skip-permissions"]);
-// Flags whose next word is their value (so it isn't taken for a first message).
-const CLAUDE_VALUE = new Set(["--add-dir", "--mcp-config", "--append-system-prompt", "--system-prompt",
-  "--allowedTools", "--allowed-tools", "--disallowedTools", "--disallowed-tools", "--agent", "--agents", "--plugin-dir",
-  "--fallback-model", "--output-format", "--input-format", "--name", "--setting-sources", "--betas", "--debug-file"]);
-const CODEX_VALUE = new Set(["-c", "--config", "-m", "--model", "-p", "--profile", "-s", "--sandbox", "-a", "--ask-for-approval",
-  "-C", "--cd", "--add-dir", "-i", "--image", "--enable", "--disable", "--local-provider", "--oss"]);
-
-// The old agent's flags worth keeping (permissions, folders, ...), without what is chosen again
-// or a first message.
-function kept(kind, argv) {
-  const out = [];
-  const rest = argv.slice(1);
-  for (let i = 0; i < rest.length; i++) {
-    const a = rest[i];
-    if (kind === "claude") {
-      if (CLAUDE_BARE.has(a)) continue;
-      if (CLAUDE_DROP.has(a)) { if (rest[i + 1] && !rest[i + 1].startsWith("-")) i++; continue; }
-      if ([...CLAUDE_DROP].some((f) => a.startsWith(f + "="))) continue;
-      if (CLAUDE_VALUE.has(a)) { out.push(a, rest[++i]); continue; }
-      if (a.startsWith("-")) out.push(a);
-    } else {
-      if (i === 0 && (a === "resume" || a === "fork")) { if (rest[1] && !rest[1].startsWith("-")) i++; continue; }
-      if (a === "--no-daemon" || a === "--dangerously-bypass-approvals-and-sandbox" || a === "--full-auto") continue;
-      if (["-m", "--model", "-s", "--sandbox", "-a", "--ask-for-approval"].includes(a)) { i++; continue; }
-      if ((a === "-c" || a === "--config") && /^(model|model_reasoning_effort|service_tier)=/.test(rest[i + 1] ?? "")) { i++; continue; }
-      if (CODEX_VALUE.has(a)) { out.push(a, rest[++i]); continue; }
-      if (a.startsWith("-")) out.push(a);
-    }
-  }
-  return out.filter((x) => x !== undefined);
-}
-
-// The same agent and flags as `argv`, without what resumed a conversation (and without a
-// first message), or null when argv resumed none: for a fresh start once that session is gone.
-export function freshArgv(kind, argv) {
-  argv = argv ?? [];
-  const at = argv.findIndex((a, i) => (i === 0 || !a.startsWith("-")) && /^(claude|codex)$/.test(String(a).split("/").pop()));
-  if (at < 0) return null;
-  const rest = argv.slice(at + 1), out = [argv[at]];
-  let resumed = false;
-  for (let i = 0; i < rest.length; i++) {
-    const a = rest[i];
-    if (kind === "claude") {
-      if (a === "--resume" || a === "-r" || a === "--session-id") { resumed ||= a !== "--session-id"; if (rest[i + 1] && !rest[i + 1].startsWith("-")) i++; continue; }
-      if (/^--(resume|session-id)=/.test(a)) { resumed ||= a.startsWith("--resume"); continue; }
-      if (a === "--continue" || a === "-c") { resumed = true; continue; }
-      if (a === "--fork-session") continue;
-      if (CLAUDE_VALUE.has(a) || ["--model", "--effort", "--settings", "--permission-mode"].includes(a)) { out.push(a, rest[++i]); continue; }
-    } else {
-      if (i === 0 && (a === "resume" || a === "fork")) { resumed = true; continue; }
-      if (a === "--last") continue;
-      if (CODEX_VALUE.has(a)) { out.push(a, rest[++i]); continue; }
-    }
-    // A word that isn't a flag or a flag's value: the session's id or a first message.
-    if (a.startsWith("-")) out.push(a);
-  }
-  return resumed ? out.filter((x) => x !== undefined) : null;
-}
-
-// How to start the chosen agent: { argv, resume } (resume: argv already continues the session).
-// `session`: the old conversation's id when it can be resumed (same agent only).
-export function argvFor(pick, old) {
-  const same = pick.agent === old.agent;
-  const flags = same ? kept(pick.agent, old.argv ?? []) : [];
-  if (pick.agent === "claude") {
-    const a = ["claude", ...flags];
-    if (pick.model) a.push("--model", pick.model);
-    if (pick.effort) a.push("--effort", pick.effort);
-    a.push("--settings", JSON.stringify({ fastMode: Boolean(pick.fast) }));
-    if (pick.perm === "bypassPermissions") a.push("--dangerously-skip-permissions");
-    else if (pick.perm) a.push("--permission-mode", pick.perm === "manual" ? "default" : pick.perm);
-    if (same && old.session) return { argv: [...a, "--resume", old.session], resume: true, base: a };
-    return { argv: a, resume: false, base: a };
-  }
-  // Codex runs its commands outside hc without --no-daemon (as herdr-task and restart.sh add).
-  const a = [...flags, "--no-daemon"];
-  if (pick.model) a.push("-m", pick.model);
-  if (pick.effort) a.push("-c", `model_reasoning_effort="${pick.effort}"`);
-  // always said, so Fast off wins over a service_tier in config.toml (default: the standard tier)
-  a.push("-c", `service_tier="${pick.fast ? "fast" : "default"}"`);
-  if (pick.perm === "full") a.push("--dangerously-bypass-approvals-and-sandbox");
-  else if (pick.perm === "read-only") a.push("-s", "read-only", "-a", "on-request");
-  else if (pick.perm) a.push("-s", "workspace-write", "-a", "on-request");
-  if (same && old.session) return { argv: ["codex", "resume", ...a, old.session], resume: true, base: ["codex", ...a] };
-  return { argv: ["codex", ...a], resume: false, base: ["codex", ...a] };
-}
-
-// The conversation's id, from its log's file name.
-export function sessionOf(kind, path) {
-  const m = kind === "claude" ? /([0-9a-f-]{36})\.jsonl$/.exec(path ?? "") : /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/.exec(path ?? "");
-  return m ? m[1] : null;
-}
-
-// A copy of the conversation in a new tab beside this one, through the CLI's own fork (shepherdr's forkArgv).
-export function forkArgv(kind, argv, session) {
-  argv = argv ?? [];
-  // The same model, effort and speed as the original.
-  const same = kind === "claude"
-    ? ["--model", "--effort", "--settings"].flatMap((f) => { const v = flag(argv, f); return v ? [f, v] : []; })
-    : (() => {
-      const m = flag(argv, "-m", "--model"), o = overrides(argv);
-      return [...(m ? ["-m", m] : []), "--no-daemon",
-        ...["model_reasoning_effort", "service_tier"].flatMap((k) => (o[k] ? ["-c", `${k}="${o[k]}"`] : []))];
-    })();
-  const flags = [...kept(kind, argv), ...same];
-  return kind === "claude" ? ["claude", ...flags, "--resume", session, "--fork-session"] : ["codex", "fork", ...flags, session];
-}
-
-// ---- what the agent runs on, and what the picker offers --------------------------------------
-
-export const NAMES = { claude: "Claude Code", codex: "Codex" };
-
-// Claude Code's current models, as its /model menu offers them (`id` is what --model gets).
-const CLAUDE_MODELS = [
-  { id: "opus", name: "Opus 5.5" },
-  { id: "opus[1m]", name: "Opus 5.5 · 1M" },
-  { id: "claude-fable-5-1", name: "Fable 5.1" },
-  { id: "sonnet", name: "Sonnet 5.5" },
-  { id: "haiku", name: "Haiku 5.5" },
-];
-const CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
-const CODEX_EFFORTS = ["low", "medium", "high", "xhigh"];
-
-// Permission modes as each CLI has them (Claude: --permission-mode, or --dangerously-skip-permissions for full
-// access; Codex: its sandbox and approvals). `short` is the picker's one-word form.
-export const PERMS = {
-  claude: [{ id: "manual", label: "Ask", short: "Ask" }, { id: "auto", label: "Auto", short: "Auto" },
-    { id: "acceptEdits", label: "Accept edits", short: "Edits" }, { id: "plan", label: "Plan", short: "Plan" },
-    { id: "bypassPermissions", label: "Full access", short: "Full" }],
-  codex: [{ id: "read-only", label: "Read only", short: "Read" }, { id: "auto", label: "Auto", short: "Auto" },
-    { id: "full", label: "Full access", short: "Full" }],
-};
-
-// An effort level as the person reads it: "xhigh" -> "Extra high". The CLIs still get the raw value.
-const LEVELS = { minimal: "Minimal", low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max", ultra: "Ultra", none: "None" };
-export const levelName = (e) => (e ? LEVELS[e] ?? e[0].toUpperCase() + e.slice(1) : null);
-// The picker's segmented control has one row: an effort's short word.
-const SHORT = { minimal: "Min", low: "Low", medium: "Med", high: "High", xhigh: "X-high", max: "Max", ultra: "Ultra", none: "None" };
-export const effortShort = (e) => SHORT[e] ?? levelName(e) ?? e;
-
-// What a model id says, in words: "claude-opus-5-5" -> "Opus 5.5", "opus[1m]" -> "Opus 1M".
-export function modelName(id) {
-  if (!id) return null;
-  const m = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?/.exec(id);
-  if (m) return `${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2]}${m[3] ? "." + m[3] : ""}`;
-  const a = /^([a-z]+)(\[1m\])?$/.exec(id);
-  if (a) return `${a[1][0].toUpperCase()}${a[1].slice(1)}${a[2] ? " 1M" : ""}`;
-  return id;
-}
-
-// The agent's own settings on its machine: Claude's settings.json, Codex's config.toml and model list. Read once per
-// menu (mods/collie-chat/picker.js runs it there).
+// The agent's own settings on its machine: Claude's settings.json, Codex's config.toml and
+// model list. Read once per agent process.
 export const DEFAULTS = `
 if [ "$1" = claude ]; then
   f="$HOME/.claude/settings.json"
@@ -222,137 +97,273 @@ export function parseDefaults(kind, stdout) {
       sandbox: out.sandbox_mode || null, approval: out.approval_policy || null, models };
 }
 
-// What the agent runs on now: { agent, model, effort, fast, perm }. `argv` is its arguments, `meta` what its log says.
+// What the agent runs on now: { agent, model, effort, fast, used, window, alias }.
 export function current(kind, argv, meta, dflt) {
   argv = argv ?? [];
   meta = meta ?? {};
   dflt = dflt ?? {};
   if (kind === "claude") {
-    let fast = Boolean(dflt.fast);
+    const alias = flag(argv, "--model") ?? dflt.model;
+    let fast = dflt.fast;
     const s = flag(argv, "--settings");
     if (s && /"fastMode"\s*:\s*(true|false)/.test(s)) fast = /"fastMode"\s*:\s*true/.test(s);
     if (meta.speed) fast = meta.speed === "fast";
+    const big = /\[1m\]/.test(alias ?? "") || (meta.used ?? 0) > 200000;
+    // Claude keeps an effort per model (modelSettings), known once the log names the model.
+    const per = meta.model ? dflt.per?.[meta.model] ?? dflt.per?.[meta.model.replace(/-\d+$/, "")] : null;
     const perm = argv.includes("--dangerously-skip-permissions") ? "bypassPermissions" : flag(argv, "--permission-mode") ?? dflt.mode ?? "manual";
-    return { agent: "claude", model: meta.model ?? flag(argv, "--model") ?? dflt.model ?? null,
-      effort: meta.effort ?? flag(argv, "--effort") ?? dflt.effort ?? null, fast, perm: perm === "default" ? "manual" : perm };
+    return { agent: "claude", model: meta.model ?? alias, alias, effort: meta.effort ?? flag(argv, "--effort") ?? per ?? dflt.effort,
+      fast: Boolean(fast), perm: perm === "default" ? "manual" : perm, used: meta.used ?? null, window: meta.window ?? (big ? 1000000 : 200000) };
   }
   const o = overrides(argv);
   const tier = o.service_tier;
-  const model = meta.model ?? flag(argv, "-m", "--model") ?? o.model ?? dflt.model ?? null;
+  const model = meta.model ?? flag(argv, "-m", "--model") ?? o.model ?? dflt.model;
   const sandbox = flag(argv, "-s", "--sandbox") ?? o.sandbox_mode ?? dflt.sandbox;
   const perm = argv.includes("--dangerously-bypass-approvals-and-sandbox") || sandbox === "danger-full-access" ? "full"
     : sandbox === "read-only" ? "read-only" : "auto";
-  return { agent: "codex", model, perm,
-    effort: meta.effort ?? o.model_reasoning_effort ?? dflt.effort ?? null,
-    fast: tier ? ["fast", "priority"].includes(tier) : Boolean(dflt.fast) };
+  return { agent: "codex", model, label: dflt.models?.find((m) => m.id === model)?.label ?? null, perm,
+    effort: meta.effort ?? o.model_reasoning_effort ?? dflt.effort,
+    fast: tier ? ["fast", "priority"].includes(tier) : Boolean(dflt.fast), used: meta.used ?? null, window: meta.window ?? null };
 }
 
-// "Claude Code · Opus 5.5 · High · Fast · Plan" — what a chat's pick button says.
-export function line(c, menus = null) {
+// An effort level as the person reads it: "xhigh" -> "Extra high". The CLIs still get the raw value.
+const LEVELS = { minimal: "Minimal", low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max", ultra: "Ultra", none: "None" };
+export function levelName(e) {
+  return e ? LEVELS[e] ?? e[0].toUpperCase() + e.slice(1) : null;
+}
+
+// "Claude Code · Opus 5.5 · High · Fast"
+export function line(c) {
   if (!c) return "";
-  const model = menus?.[c.agent]?.models?.find((m) => (m.id ?? null) === (c.model ?? null));
-  const perm = menus?.[c.agent]?.perms?.find((x) => x.id === c.perm) ?? PERMS[c.agent]?.find((x) => x.id === c.perm);
-  return [NAMES[c.agent] ?? c.agent, model?.name ?? modelName(c.model) ?? "Default", levelName(c.effort), c.fast ? "Fast" : null, perm?.label]
-    .filter(Boolean).join(" · ");
+  return [NAMES[c.agent], c.label ?? modelName(c.model), levelName(c.effort), c.fast ? "Fast" : null].filter(Boolean).join(" · ");
 }
 
-// What the model picker shows for one agent: { name, models, perms }. Every model the CLI offers (Codex: its own
-// models_cache.json; Claude Code: its /model menu), each with the effort levels it takes, whether it has Fast, and
-// (Claude) the level it runs at by default. A null id is the agent's own default: no model flag. `currentModel` (the
-// model it runs on, or the chosen one) stays in the list even when the CLI doesn't name it.
-export function menuFor(agent, dflt, currentModel = null) {
-  dflt = dflt ?? {};
+// How full the context window is: "38% context", or null.
+export function contextWords(c) {
+  if (!c?.used || !c.window) return null;
+  return `${Math.min(100, Math.round((c.used / c.window) * 100))}% context`;
+}
+
+// What the model picker (mods/collie-chat-models, the web's restart.tsx) shows for one agent, as plain data:
+// { name, models: [{ id, name, efforts, defaultEffort, fast }], perms }: every model the CLI
+// offers (Codex: its own models_cache.json; Claude Code: its /model menu), the picker searches them.
+// `dflt` is that agent's settings (defaults()); `current` its running model, kept in the list.
+export function menuFor(agent, dflt, current = null) {
   if (agent === "claude") {
     const models = CLAUDE_MODELS.map((m) => ({ id: m.id, name: m.name, efforts: CLAUDE_EFFORTS,
-      defaultEffort: dflt.per?.[m.id.replace(/\[1m\]$/, "")] ?? dflt.effort ?? null, fast: m.id.startsWith("opus") }));
-    if (currentModel && !models.some((m) => m.id === currentModel)) models.unshift({ id: currentModel, name: modelName(currentModel), efforts: CLAUDE_EFFORTS, defaultEffort: dflt.effort ?? null, fast: false });
-    return { name: NAMES.claude, perms: PERMS.claude,
-      models: [{ id: null, name: "Claude's own model", efforts: CLAUDE_EFFORTS, defaultEffort: dflt.effort ?? null, fast: true }, ...models] };
+      defaultEffort: dflt?.per?.[m.match[1].replace(/\[1m\]$/, "")] ?? dflt?.effort ?? null, fast: m.id.startsWith("opus") }));
+    // a model typed by id (an older one it still takes) stays in the list while it runs
+    if (current && !models.some((m) => m.id === current)) models.unshift({ id: current, name: modelName(current), efforts: CLAUDE_EFFORTS, defaultEffort: dflt?.effort ?? null, fast: false });
+    return { name: NAMES.claude, perms: PERMS.claude, models };
   }
-  const models = (dflt.models ?? []).map((m) => ({ id: m.id, name: m.label, efforts: m.efforts?.length ? m.efforts : CODEX_EFFORTS,
-    defaultEffort: m.defaultEffort ?? dflt.effort ?? null, fast: m.fast }));
-  if (currentModel && !models.some((m) => m.id === currentModel)) models.unshift({ id: currentModel, name: currentModel, efforts: CODEX_EFFORTS, defaultEffort: dflt.effort ?? null, fast: false });
-  return { name: NAMES.codex, perms: PERMS.codex,
-    models: [{ id: null, name: "Codex's own model", efforts: CODEX_EFFORTS, defaultEffort: dflt.effort ?? null, fast: true }, ...models] };
+  const all = (dflt?.models ?? []).map((m) => ({ id: m.id, name: m.label, efforts: m.efforts?.length ? m.efforts : ["low", "medium", "high", "xhigh"],
+    defaultEffort: m.defaultEffort ?? dflt?.effort ?? null, fast: m.fast }));
+  if (current && !all.some((m) => m.id === current)) all.unshift({ id: current, name: current, efforts: ["low", "medium", "high", "xhigh"], defaultEffort: dflt?.effort ?? null, fast: false });
+  return { name: NAMES.codex, perms: PERMS.codex, models: all };
 }
 
-// What the agents offer, from each CLI's own settings and which are installed:
-// { menus, permDefault, defaults } (defaults: the first installed CLI's own, what an unset chat starts on).
-// `currentModels`: each agent's running/chosen model, kept in its list.
-export function choicesFrom(dflts = {}, installed = { claude: true, codex: true }, currentModels = {}) {
-  const menus = Object.fromEntries(["claude", "codex"].filter((k) => installed[k])
-    .map((k) => [k, menuFor(k, dflts[k], currentModels[k] ?? null)]));
-  const permDefault = { claude: dflts.claude?.mode ?? "manual", codex: "auto" };
-  const first = menus.claude ? "claude" : menus.codex ? "codex" : "claude";
-  const c = current(first, [], {}, dflts[first] ?? {});
-  const model = menus[first]?.models.find((m) => m.id)?.id ?? null;
-  return { menus, permDefault, defaults: { agent: first, model, effort: c.effort ?? null, fast: false, perm: permDefault[first] } };
+// The levels a model typed by id gets: its agent's usual ones.
+export function typedModel(agent, id) {
+  return { id, name: agent === "claude" ? modelName(id) : id, efforts: agent === "claude" ? CLAUDE_EFFORTS : ["low", "medium", "high", "xhigh"], defaultEffort: null, fast: false, typed: true };
 }
 
-// A pick that fits what the menus offer: an unknown agent or model falls back to the first offered one, an effort the
-// model doesn't take is cleared, another agent's permission mode goes back to that agent's default.
-export function fitPick(menus, pick, permDefault = {}) {
-  const agent = menus?.[pick?.agent] ? pick.agent : Object.keys(menus ?? {})[0] ?? "claude";
-  const menu = menus?.[agent];
-  const known = (id) => menu?.models?.find((m) => (m.id ?? null) === (id ?? null)) ?? null;
-  let model = pick?.model ?? null;
-  let m = known(model);
-  if (!m) { model = menu?.models?.[0]?.id ?? null; m = known(model); }
-  const effort = pick?.effort && (m?.efforts ?? []).includes(pick.effort) ? pick.effort : null;
-  const perm = menu?.perms?.some((x) => x.id === pick?.perm) ? pick.perm : (permDefault?.[agent] ?? menu?.perms?.[0]?.id ?? null);
-  return { agent, model, effort, fast: Boolean(m?.fast && pick?.fast), perm };
+// The person's picks in the model menus (the window's and the web's alike), in PICKS_FILE under the
+// home of the machine the menu runs on: { pinned: ["codex:gpt-6-sol"], recent: [...] }, recent newest first.
+export const PICKS_FILE = ".herdr/model-picks.json";
+const RECENT = 5;
+export const pickKey = (agent, id) => `${agent}:${id}`;
+export function parsePicks(text) {
+  let d = {};
+  try { d = JSON.parse(text || "{}") ?? {}; } catch {}
+  const list = (x) => (Array.isArray(x) ? x.filter((k) => typeof k === "string" && k.includes(":")) : []);
+  return { pinned: list(d.pinned), recent: list(d.recent).slice(0, RECENT) };
+}
+// Restarted on it: first among the recent ones.
+export function withRecent(picks, key) {
+  return { ...picks, recent: [key, ...picks.recent.filter((k) => k !== key)].slice(0, RECENT) };
+}
+// The star: pinned to the top of its agent's list, or not any more.
+export function withPin(picks, key) {
+  return { ...picks, pinned: picks.pinned.includes(key) ? picks.pinned.filter((k) => k !== key) : [...picks.pinned, key] };
 }
 
-// A model picked in the menu: the effort and speed stay where it has them; another agent brings its own permission
-// modes (full access staying full access).
-export function chooseModel(menus, permDefault, sel, agent, id) {
-  const m = menus?.[agent]?.models?.find((x) => (x.id ?? null) === (id ?? null));
-  if (!m) return sel;
-  const next = { ...sel, agent, model: m.id ?? null };
-  if (next.effort && !m.efforts.includes(next.effort)) next.effort = null;
-  if (!m.fast) next.fast = false;
-  if (agent !== sel.agent) {
-    const full = sel.perm === "bypassPermissions" || sel.perm === "full";
-    next.perm = full ? (agent === "claude" ? "bypassPermissions" : "full") : permDefault?.[agent] ?? null;
-    next.fast = false;
+// Every word typed is in the model's name or id somewhere, any case ("op 1m" finds Opus 5.5 · 1M).
+export function modelMatches(m, q) {
+  const hay = `${m.name ?? ""} ${m.id}`.toLowerCase().replace(/[^a-z0-9.\[\] ]+/g, " ");
+  return String(q ?? "").toLowerCase().split(/[^a-z0-9.\[\]]+/).filter(Boolean).every((w) => hay.includes(w));
+}
+
+// The model list as the picker shows it: sections of rows, at most CAP rows each (`more` counts the rest).
+// Nothing typed: the agent shown (`agent`), its pinned models, then its recent ones, then all the rest in the
+// CLI's order. Typed: every agent's matches, an agent to a section (its pinned and recent first), and, for one
+// word no model of an agent has as its id, a row per such agent to start it on that id (`typed`).
+// Each row: { agent, ...model, pinned }; a section: { key, title, agent, rows, more }.
+export const CAP = 200;
+export function modelSections(menus, agent, picks, q) {
+  picks = picks ?? { pinned: [], recent: [] };
+  const query = String(q ?? "").trim();
+  const order = (k, models) => {
+    const rank = (m) => {
+      const key = pickKey(k, m.id), p = picks.pinned.indexOf(key), r = picks.recent.indexOf(key);
+      return p >= 0 ? p : r >= 0 ? 1000 + r : 2000;
+    };
+    return models.map((m, i) => ({ m, i, r: rank(m) })).sort((a, b) => a.r - b.r || a.i - b.i)
+      .map(({ m }) => ({ agent: k, ...m, pinned: picks.pinned.includes(pickKey(k, m.id)) }));
+  };
+  // a pinned or recent model typed by id (no CLI lists it) stays on offer
+  const saved = (k) => {
+    const models = menus?.[k]?.models ?? [], known = new Set(models.map((m) => m.id));
+    const ids = [...new Set([...picks.pinned, ...picks.recent].filter((x) => x.startsWith(`${k}:`)).map((x) => x.slice(k.length + 1)))];
+    return [...models, ...ids.filter((id) => !known.has(id)).map((id) => ({ ...typedModel(k, id), typed: false }))];
+  };
+  const capped = (key, title, k, rows) => ({ key, title, agent: k, rows: rows.slice(0, CAP), more: Math.max(0, rows.length - CAP) });
+  if (!query) {
+    const rows = order(agent, saved(agent));
+    const pinned = rows.filter((r) => r.pinned);
+    const recent = rows.filter((r) => !r.pinned && picks.recent.includes(pickKey(agent, r.id)));
+    const rest = rows.filter((r) => !r.pinned && !picks.recent.includes(pickKey(agent, r.id)));
+    return [
+      ...(pinned.length ? [capped("pinned", "Pinned", agent, pinned)] : []),
+      ...(recent.length ? [capped("recent", "Recent", agent, recent)] : []),
+      ...(rest.length ? [capped("all", pinned.length || recent.length ? "All models" : "Models", agent, rest)] : []),
+    ];
   }
-  return next;
-}
-
-// The level that applies: the chosen one, else the model's default.
-export function pickLevel(menus, sel) {
-  const m = menus?.[sel?.agent]?.models?.find((x) => (x.id ?? null) === (sel?.model ?? null));
-  return sel?.effort ?? m?.defaultEffort ?? null;
-}
-
-// What would change, in words, or [] when nothing would.
-export function pickChanges(menus, sel, was) {
-  if (!sel || !was) return [];
-  const row = (s) => menus?.[s?.agent]?.models?.find((x) => (x.id ?? null) === (s?.model ?? null));
-  const level = (s) => pickLevel(menus, s);
   const out = [];
-  if (sel.agent !== was.agent) out.push(menus?.[sel.agent]?.name ?? NAMES[sel.agent] ?? sel.agent);
-  if (sel.agent !== was.agent || (sel.model ?? null) !== (was.model ?? null)) out.push(row(sel)?.name ?? modelName(sel.model) ?? "Default");
-  if (level(sel) && level(sel) !== level(was)) out.push(levelName(level(sel)));
-  if (Boolean(sel.fast) !== Boolean(was.fast)) out.push(sel.fast ? "Fast" : "Standard");
-  if ((sel.perm ?? null) !== (was.perm ?? null)) {
-    const p = menus?.[sel.agent]?.perms?.find((x) => x.id === sel.perm) ?? PERMS[sel.agent]?.find((x) => x.id === sel.perm);
-    out.push(p?.label ?? sel.perm);
+  // the agent shown first, then the others in their usual order
+  for (const k of [agent, ...Object.keys(menus ?? {}).filter((x) => x !== agent)]) {
+    const m = menus?.[k];
+    if (!m) continue;
+    const rows = order(k, saved(k).filter((x) => modelMatches(x, query)));
+    if (rows.length) out.push(capped(k, m.name, k, rows));
+  }
+  // one word that could be an id, and no model has it: start any agent on it as typed
+  if (/^[\w.\[\]-]{2,60}$/.test(query)) {
+    const rows = [agent, ...Object.keys(menus ?? {}).filter((x) => x !== agent)]
+      .filter((k) => menus?.[k] && !saved(k).some((m) => m.id === query)).map((k) => ({ agent: k, ...typedModel(k, query), pinned: false }));
+    if (rows.length) out.push({ key: "typed", title: "Use the id typed", agent, rows, more: 0 });
   }
   return out;
 }
 
-// The same pick, field for field (null and undefined the same).
-export function samePick(a, b) {
-  const one = (s) => [s?.agent ?? null, s?.model ?? null, s?.effort ?? null, Boolean(s?.fast), s?.perm ?? null].join("|");
-  return one(a) === one(b);
+// The picker row that is what runs now (`c` from current()), or the model as it is.
+export function rowFor(agent, c) {
+  if (agent !== "claude") return c?.model ?? null;
+  const has = (m, x) => (m.match ?? [m.id]).includes(x);
+  // What runs (the log's model) wins; the alias it was started with only tells which row of
+  // that model (Opus or Opus 1M), since the log names both alike.
+  const byAlias = c?.alias ? CLAUDE_MODELS.find((m) => has(m, c.alias)) : null;
+  const byModel = c?.model ? CLAUDE_MODELS.find((m) => has(m, c.model)) : null;
+  const same = byAlias && (!c?.model || (byAlias.match ?? [byAlias.id]).some((x) => x.replace(/\[1m\]$/, "") === c.model));
+  return (same ? byAlias : byModel ?? byAlias)?.id ?? c?.model ?? null;
 }
 
-// A saved or given choice as a pick: { agent, model, effort, fast, perm }, with "default" (the settings' word for "the
-// CLI's own") as null. Anything unknown is dropped; fitPick then keeps what the menus offer.
-export function asPick(settings) {
-  if (!settings || !["claude", "codex"].includes(settings.agent)) return null;
-  const word = (v) => (v && v !== "default" ? String(v) : null);
-  return { agent: settings.agent, model: word(settings.model), effort: word(settings.effort),
-    fast: Boolean(settings.fast), perm: settings.perm ? String(settings.perm) : (settings.agent === "claude" ? "manual" : "auto") };
+// Flags that are about what to resume, which model, effort or speed: set again by a restart.
+const CLAUDE_DROP = new Set(["--model", "--effort", "--settings", "--session-id", "--resume", "-r", "--permission-mode"]);
+const CLAUDE_BARE = new Set(["--continue", "-c", "--fork-session", "--dangerously-skip-permissions"]);
+// Flags whose next word is their value (so it isn't taken for a first message).
+const CLAUDE_VALUE = new Set(["--add-dir", "--mcp-config", "--append-system-prompt", "--system-prompt",
+  "--allowedTools", "--allowed-tools", "--disallowedTools", "--disallowed-tools", "--agent", "--agents", "--plugin-dir",
+  "--fallback-model", "--output-format", "--input-format", "--name", "--setting-sources", "--betas", "--debug-file"]);
+const CODEX_VALUE = new Set(["-c", "--config", "-m", "--model", "-p", "--profile", "-s", "--sandbox", "-a", "--ask-for-approval",
+  "-C", "--cd", "--add-dir", "-i", "--image", "--enable", "--disable", "--local-provider", "--oss"]);
+
+// The old agent's flags worth keeping (permissions, folders, ...), without what is chosen again
+// or a first message.
+function kept(kind, argv) {
+  const out = [];
+  const rest = argv.slice(1);
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i];
+    if (kind === "claude") {
+      if (CLAUDE_BARE.has(a)) continue;
+      if (CLAUDE_DROP.has(a)) { if (rest[i + 1] && !rest[i + 1].startsWith("-")) i++; continue; }
+      if ([...CLAUDE_DROP].some((f) => a.startsWith(f + "="))) continue;
+      if (CLAUDE_VALUE.has(a)) { out.push(a, rest[++i]); continue; }
+      if (a.startsWith("-")) out.push(a);
+    } else {
+      if (i === 0 && (a === "resume" || a === "fork")) { if (rest[1] && !rest[1].startsWith("-")) i++; continue; }
+      if (a === "--no-daemon" || a === "--dangerously-bypass-approvals-and-sandbox" || a === "--full-auto") continue;
+      if (["-m", "--model", "-s", "--sandbox", "-a", "--ask-for-approval"].includes(a)) { i++; continue; }
+      if ((a === "-c" || a === "--config") && /^(model|model_reasoning_effort|service_tier)=/.test(rest[i + 1] ?? "")) { i++; continue; }
+      if (CODEX_VALUE.has(a)) { out.push(a, rest[++i]); continue; }
+      if (a.startsWith("-")) out.push(a);
+    }
+  }
+  return out.filter((x) => x !== undefined);
+}
+
+// The same agent, model and flags as `argv`, without what resumed a conversation (and without a
+// first message), or null when argv resumed none: for a fresh start once that session is gone.
+export function freshArgv(kind, argv) {
+  argv = argv ?? [];
+  const at = argv.findIndex((a, i) => (i === 0 || !a.startsWith("-")) && /^(claude|codex)$/.test(String(a).split("/").pop()));
+  if (at < 0) return null;
+  const rest = argv.slice(at + 1), out = [argv[at]];
+  let resumed = false;
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i];
+    if (kind === "claude") {
+      if (a === "--resume" || a === "-r" || a === "--session-id") { resumed ||= a !== "--session-id"; if (rest[i + 1] && !rest[i + 1].startsWith("-")) i++; continue; }
+      if (/^--(resume|session-id)=/.test(a)) { resumed ||= a.startsWith("--resume"); continue; }
+      if (a === "--continue" || a === "-c") { resumed = true; continue; }
+      if (a === "--fork-session") continue;
+      if (CLAUDE_VALUE.has(a) || ["--model", "--effort", "--settings", "--permission-mode"].includes(a)) { out.push(a, rest[++i]); continue; }
+    } else {
+      if (i === 0 && (a === "resume" || a === "fork")) { resumed = true; continue; }
+      if (a === "--last") continue;
+      if (CODEX_VALUE.has(a)) { out.push(a, rest[++i]); continue; }
+    }
+    // A word that isn't a flag or a flag's value: the session's id or a first message.
+    if (a.startsWith("-")) out.push(a);
+  }
+  return resumed ? out.filter((x) => x !== undefined) : null;
+}
+
+// How to start the chosen agent: { argv, resume } (resume: argv already continues the session).
+// `session`: the old conversation's id when it can be resumed (same agent only).
+export function argvFor(pick, old) {
+  const same = pick.agent === old.agent;
+  const flags = same ? kept(pick.agent, old.argv ?? []) : [];
+  if (pick.agent === "claude") {
+    const a = ["claude", ...flags];
+    if (pick.model) a.push("--model", pick.model);
+    if (pick.effort) a.push("--effort", pick.effort);
+    a.push("--settings", JSON.stringify({ fastMode: Boolean(pick.fast) }));
+    if (pick.perm === "bypassPermissions") a.push("--dangerously-skip-permissions");
+    else if (pick.perm) a.push("--permission-mode", pick.perm === "manual" ? "default" : pick.perm);
+    if (same && old.session) return { argv: [...a, "--resume", old.session], resume: true, base: a };
+    return { argv: a, resume: false, base: a };
+  }
+  // Codex runs its commands outside hc without --no-daemon (as collie-task and restart.sh add).
+  const a = [...flags, "--no-daemon"];
+  if (pick.model) a.push("-m", pick.model);
+  if (pick.effort) a.push("-c", `model_reasoning_effort="${pick.effort}"`);
+  // always said, so Fast off wins over a service_tier in config.toml (default: the standard tier)
+  a.push("-c", `service_tier="${pick.fast ? "fast" : "default"}"`);
+  if (pick.perm === "full") a.push("--dangerously-bypass-approvals-and-sandbox");
+  else if (pick.perm === "read-only") a.push("-s", "read-only", "-a", "on-request");
+  else if (pick.perm) a.push("-s", "workspace-write", "-a", "on-request");
+  if (same && old.session) return { argv: ["codex", "resume", ...a, old.session], resume: true, base: ["codex", ...a] };
+  return { argv: ["codex", ...a], resume: false, base: ["codex", ...a] };
+}
+
+// The conversation's id, from its log's file name.
+export function sessionOf(kind, path) {
+  const m = kind === "claude" ? /([0-9a-f-]{36})\.jsonl$/.exec(path ?? "") : /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/.exec(path ?? "");
+  return m ? m[1] : null;
+}
+
+// A copy of the conversation in a new tab beside this one, through the CLI's own fork.
+export function forkArgv(kind, argv, session) {
+  argv = argv ?? [];
+  // The same model, effort and speed as the original.
+  const same = kind === "claude"
+    ? ["--model", "--effort", "--settings"].flatMap((f) => { const v = flag(argv, f); return v ? [f, v] : []; })
+    : (() => {
+      const m = flag(argv, "-m", "--model"), o = overrides(argv);
+      return [...(m ? ["-m", m] : []), "--no-daemon",
+        ...["model_reasoning_effort", "service_tier"].flatMap((k) => (o[k] ? ["-c", `${k}="${o[k]}"`] : []))];
+    })();
+  const flags = [...kept(kind, argv), ...same];
+  return kind === "claude" ? ["claude", ...flags, "--resume", session, "--fork-session"] : ["codex", "fork", ...flags, session];
 }

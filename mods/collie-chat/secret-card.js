@@ -1,50 +1,46 @@
-// The card for a secret an agent asked for (its terminal's label collie.secret.ask.NAME, core/secrets.js asksIn()):
-// "Secret: NAME", the reason, a masked box, Save and Decline. Save writes Collie's vault here directly (core/secrets.js
-// kept()); the agent is told by name only. The value never goes through hc send, the conversation, a log or an
-// artifact. For a few seconds after, the card says "Kept: NAME". Ported from shepherdr's secret-card.js for #22,
-// drawn as ordinary rows of this chat's message list (strips.js): every control carries its own handler, so there is
-// no keyboard sink or hit testing. The host does the rest: host.readVault()/host.writeVault(text) keep the vault on
-// this machine, host.say(line, cx) sends the agent the words it hears (never the value).
+// The card for a secret an agent asked for (herdr-secret ask NAME --why …: a label on its
+// terminal, secrets.js asksOf()): "Secret: NAME", the reason, a masked box, where to keep it
+// (its space, its machine, Everywhere; the most specific first), Save and Decline. Save writes
+// the vault here directly (secrets.js keep()); the agent is told by name only. The value never
+// goes through hc send, the conversation, a log or an artifact. For a few seconds after, the
+// card says "Kept: NAME". Shown in the agent's own chat where it asked, and in its Assistant's
+// chat for a task's worker (main.js workerAsks()), as strips of the timeline (strips.js).
 
 import { InputState } from "gpui-base";
-import * as secrets from "./core/secrets.js";
-import { hc } from "herdr";
+import * as secrets from "./secrets.js";
 import { terminals } from "./live.js";
 import { headStrip } from "./cards.js";
-import { green } from "./lib/ui.js";
+import { green } from "./ui.js";
 
 const KEPT_FOR = 6000;
 const key = (address, name) => `${address}|${name}`;
 
 export class SecretCards {
-  // host: { readVault() -> Promise<string | null>, writeVault(text) -> Promise<void>, say(line, cx), where (where the
-  // vault is kept, in the agent's words: "This computer", or the honest one for an agent on another machine) }.
-  constructor(host) {
-    this.host = host;
-    // Per ask: { box, err, busy }; and asks answered a moment ago: { address, name, why, how, at }.
+  constructor() {
+    // Per ask: { box, level (scope key), err, busy }; and asks kept a moment ago: { name, why, where, at }.
     this.states = new Map();
     this.kept = new Map();
     // Told when an ask is kept or declined here: (ask, how), for its quiet line (main.js).
     this.onEnd = null;
   }
 
-  // What to show for a terminal: its asks, then those just kept or declined.
+  // What to show for a terminal: its asks, then those just kept.
   items(address) {
-    const now = Date.now(), out = secrets.asksIn(terminals().find((x) => x.address === address)?.labels).map((a) => ({ address, ...a }));
+    const now = Date.now(), out = secrets.asksOf(address, terminals()).map((a) => ({ address, ...a }));
     for (const [k, v] of this.kept) {
       if (now - v.at > KEPT_FOR) { this.kept.delete(k); continue; }
-      if (v.address === address && !out.some((a) => a.name === v.name)) out.push({ address, name: v.name, why: v.why, how: v.how });
+      if (v.address === address && !out.some((a) => a.name === v.name)) out.push({ address, name: v.name, why: v.why, kept: v.where });
     }
     return out;
   }
 
-  // From render: boxes for asks that have none yet (made right after, never in render), and those of asks gone let go.
+  // From render: boxes for asks that have none yet (made right after, never in render), and
+  // those of asks gone let go.
   prepare(list, cx) {
-    const want = new Set(list.filter((a) => !a.how).map((a) => key(a.address, a.name)));
+    const want = new Set(list.filter((a) => !a.kept).map((a) => key(a.address, a.name)));
     for (const [k, st] of this.states) if (!want.has(k) && !st.busy) { st.box?.release(); this.states.delete(k); }
     const missing = [...want].filter((k) => !this.states.has(k));
-    for (const k of missing) this.states.set(k, { box: null, err: "", busy: false });
-    // A box made in render would make Herdr render again mid-render: right after.
+    for (const k of missing) this.states.set(k, { box: null, level: null, err: "", busy: false });
     if (missing.length) cx.timer.after(0, (cx) => {
       for (const k of missing) {
         const st = this.states.get(k);
@@ -67,17 +63,15 @@ export class SecretCards {
     const value = st?.box?.value() ?? "";
     if (!st || st.busy) return;
     if (!value) { st.err = "Paste the value first."; cx.notify(); return; }
+    const lv = this.level(ask, st);
     st.busy = true;
     cx.notify();
     cx.spawn(async (cx) => {
       try {
-        const text = await this.host.readVault().catch(() => null);
-        await this.host.writeVault(secrets.kept(text, ask.name, value, ask.why ?? ""));
+        await secrets.keep(ask.name, lv, value);
         st.box?.set_value("");
-        this.kept.set(key(ask.address, ask.name), { address: ask.address, name: ask.name, why: ask.why, how: "Kept", at: Date.now() });
-        this.host.say(secrets.keptLine(ask.name, this.host.where), cx);
-        hc(["label", ask.address, `collie.secret.ask.${ask.name}=`]).catch(() => {});
-        this.onEnd?.(ask, "Kept");
+        this.kept.set(key(ask.address, ask.name), { address: ask.address, name: ask.name, why: ask.why, where: lv.label, at: Date.now() });
+        this.onEnd?.(ask, `Kept for ${lv.label}`);
       } catch (e) { st.err = String(e?.message ?? e); }
       st.busy = false;
       cx.notify();
@@ -95,34 +89,30 @@ export class SecretCards {
 
   decline(ask, cx) {
     const st = this.states.get(key(ask.address, ask.name));
-    if (st?.busy) return;
     if (st) st.busy = true;
-    cx.spawn(async (cx) => {
-      // A refused ask never had a value here; one kept before is taken back out of the vault.
-      try {
-        const text = await this.host.readVault().catch(() => null);
-        if (text && secrets.has(text, ask.name)) await this.host.writeVault(secrets.declined(text, ask.name));
-      } catch {}
-      if (st) st.busy = false;
-      this.kept.set(key(ask.address, ask.name), { address: ask.address, name: ask.name, why: ask.why, how: "Declined", at: Date.now() });
-      this.host.say(secrets.declinedLine(ask.name), cx);
-      hc(["label", ask.address, `collie.secret.ask.${ask.name}=`]).catch(() => {});
-      this.onEnd?.(ask, "Declined");
-      cx.notify();
-    });
+    cx.spawn(async (cx) => { await secrets.decline(ask.address, ask.name); if (st) st.busy = false; this.onEnd?.(ask, "Declined"); cx.notify(); });
   }
 
-  // The card's strips. opts: { who (whose ask: "Claude"), links ([ctl] at the header's right) }.
+  level(ask, st) {
+    const lv = secrets.levels(ask.address);
+    return lv.find((l) => secrets.scopeKey(l) === st?.level) ?? lv[0];
+  }
+
+  // The card's strips. opts: { who (whose ask: "Claude", "HERD-12"), links ([ctl] at the
+  // header's right) }.
   strips(ask, opts = {}) {
     const id = `${ask.address}-${ask.name}`.replace(/[^\w-]/g, "_");
     const st = this.states.get(key(ask.address, ask.name));
-    if (ask.how) return [headStrip({ who: ask.how === "Kept" ? "Kept" : "Declined", asks: false, dot: ask.how === "Kept" ? green() : undefined, links: opts.links }),
+    if (ask.kept) return [headStrip({ who: "Kept", asks: false, dot: green(), links: opts.links }),
       { key: "title", kind: "title", text: `Secret: ${ask.name}` },
-      { key: "kept", kind: "text", tone: "dim", text: ask.how === "Kept" ? "The agent was told its name, never the value." : "The agent was told you won't give it now." }];
+      { key: "kept", kind: "text", tone: "dim", text: `For ${ask.kept}. The agent was told its name, never the value.` }];
+    const lv = secrets.levels(ask.address), cur = this.level(ask, st);
     const has = Boolean(st?.box?.value());
     const out = [headStrip({ who: opts.who, links: opts.links }), { key: "title", kind: "title", text: `Secret: ${ask.name}` }];
     if (ask.why) out.push({ key: "why", kind: "text", tone: "muted", text: ask.why });
-    out.push({ key: "box", kind: "input", state: st?.box ?? null, placeholder: "Paste the value" });
+    out.push({ key: "box", kind: "input", state: st?.box ?? null, placeholder: "Paste the value", focus: () => st?.box?.focus() });
+    if (lv.length > 1) out.push({ key: "for", kind: "controls", align: "start", lead: "For", ctls: lv.map((l) => ({ id: `slevel-${id}-${l.scope}`, label: l.label, look: "pill",
+      on: secrets.scopeKey(l) === secrets.scopeKey(cur), fn: () => { if (st) st.level = secrets.scopeKey(l); } })) });
     out.push({ key: "note", kind: "text", tone: st?.err ? "red" : "dim", text: st?.err || "Agents use it by name, never seeing it." });
     const live = has && !st?.busy;
     out.push({ key: "actions", kind: "controls", align: "end", ctls: [

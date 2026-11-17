@@ -1,9 +1,7 @@
-// Slash commands for the "/" list above the Coordinator chat's message box: the CLI's own, the ones that open a menu in
-// the CLI, and the script that finds the person's own commands and skills on the agent's machine. Whatever the person
-// types goes to the agent as typed; this only suggests.
-// Ported from shepherdr's core/slash.js with the Coordinator chat's scope only: it names the CLIs' commands (the agent
-// behind the box is one of them), never the web app's or a task's. /model is not intercepted here: Collie's model menu
-// (picker.js) restarts the agent, so the CLI's own /model is the one that applies.
+// Slash commands for the "/" list above the message box, the window's chat's and the web app's: the CLIs' own, the
+// ones that open a menu in the CLI, and the script that finds the person's own commands and skills on the agent's
+// machine. Whatever the person types goes to the agent as typed; this only suggests.
+// Shared core: the source is core/slash.js; bin/sync-shared copies it into the mods in lib/COPIES.
 
 export const CLAUDE = [
   ["add-dir", "Add a working folder"], ["agents", "Manage subagents"], ["clear", "Start a new conversation"],
@@ -63,14 +61,14 @@ export function typing(text) {
 
 // Suggestions for what is typed: names that start with it first, then names that contain it.
 export function match(list, word) {
-  const w = String(word ?? "").toLowerCase();
+  const w = word.toLowerCase();
   const starts = list.filter((c) => c.name.toLowerCase().startsWith(w));
   const has = list.filter((c) => !c.name.toLowerCase().startsWith(w) && c.name.toLowerCase().includes(w));
   return [...starts, ...has].slice(0, 8);
 }
 
 export function opensMenu(kind, text) {
-  const m = /^\/([\w:-]+)\s*$/.exec(String(text ?? "").trim());
+  const m = /^\/([\w:-]+)\s*$/.exec(text.trim());
   if (!m) return null;
   if (MENU[kind]?.has(m[1])) return m[1];
   // The CLI completes a prefix to its first match ("/mo" runs /model).

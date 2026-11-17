@@ -1,22 +1,13 @@
-// Finding an agent's own session log and reading it as a conversation (ported from shepherdr's core/chat-log.js;
-// mods/collie-chat only, so this is its one source).
+// Shared core: the source is core/chat-log.js (was mods/collie-chat/log.js); the chat mod, the service and the web
+// app read agents' logs with it. bin/sync-shared copies it into mods/collie-chat/core/. Edit it here, never a copy.
+// Finding an agent's own session log and reading it as a conversation.
 // Claude Code: ~/.claude/sessions/<pid>.json names the session its process writes, so the
 // log is ~/.claude/projects/*/<sessionId>.jsonl. Codex keeps its rollout file open, so the
 // file is whatever rollout-*.jsonl its process (or a child) holds. Both are exact: no
 // guessing by folder or time, so two agents in one folder never get mixed up.
 
-// Codex's own questions from its request_user_input call (ported from shepherdr's core/asks.js: the card that
-// answers them on screen is Slice 2 of #7; the log still reads them, so a transcript shows what was asked).
-export function codexQuestions(args) {
-  let a = args;
-  try { a = typeof a === "string" ? JSON.parse(a) : a; } catch { return []; }
-  return (Array.isArray(a?.questions) ? a.questions : []).map((q) => ({
-    text: String(q?.question ?? ""), header: String(q?.header ?? ""),
-    choices: (Array.isArray(q?.options) ? q.options : []).map((o) => (typeof o === "string" ? { label: o } : { label: String(o?.label ?? ""), ...(o?.description ? { description: String(o.description) } : {}) })).filter((o) => o.label),
-  })).filter((q) => q.text);
-}
-
 // Prints the log's path on the agent's machine, or nothing. Args: kind, pid.
+import { codexQuestions } from "./asks.js";
 
 export const FIND = `
 kind="$1"; pid="$2"
@@ -181,9 +172,9 @@ const CODEX_INJECTED = /^\s*(# AGENTS\.md instructions|<(environment_context|use
 //   the agent   <hc react="👀" to="first words of the person's message"/>   on a line of its own
 //               <hc no-reply/>   a reply that is only this shows nothing (<no-reply> too); on an Autopilot
 //               wake <hc no-reply why="Waiting on your Accept of TG-2"/> puts its why on the wake's line
-// Task news Herdr sends an Assistant (herdr-task's news_pass) is one <herdr-news> tag per line:
+// Task news Herdr sends an Assistant (collie-task's news_pass) is one <herdr-news> tag per line:
 // each is a news item of its own ({ kind: "news", ref, event, text }), shown as a slim line in
-// an Assistant's chat (mods/chat newsLines()); the tags themselves never show.
+// an Assistant's chat (mods/collie-chat newsLines()); the tags themselves never show.
 // None of these lines show in the chat; the reactions show on the messages they name.
 // A value ends at the quote before the next attribute or the tag's end, so a quote inside it
 // (an agent quoting the person's "words" in to=) doesn't break the line (SHEP-47).
@@ -267,7 +258,7 @@ function newsOf(t) {
     ref: unattr(/\btask="([^"]*)"/.exec(a)?.[1]), event: unattr(/\bevent="([^"]*)"/.exec(a)?.[1]), text: text.trim() })).filter((n) => n.ref && n.event);
 }
 
-// An Autopilot wake (herdr-task's <herdr-autopilot reason=…>): { reason }, else null. Its words never show; the chat
+// An Autopilot wake (collie-task's <herdr-autopilot reason=…>): { reason }, else null. Its words never show; the chat
 // shows one quiet line for it (pilotLine()).
 // Only a message that is the wake itself (the CLI may wrap it as pasted): an Assistant's brief shows the tag as an example.
 function pilotOf(t) {
@@ -283,7 +274,7 @@ function cleanUser(t) {
   return pilot ? { ...(out ?? { text: "" }), pilot } : out;
 }
 
-// Why Autopilot woke, in words: "on schedule", "Run now", "switched on", "HAT-4 is ready" (herdr-task's reasons).
+// Why Autopilot woke, in words: "on schedule", "Run now", "switched on", "HAT-4 is ready" (collie-task's reasons).
 const EVENT_WORDS = { added: "was added", ready: "is ready", failed: "failed", "needs-you": "needs you", merged: "was merged", stalled: "stalled" };
 export function pilotWhy(reason) {
   const r = String(reason ?? "").trim();
@@ -321,7 +312,7 @@ function cleanWords(t) {
   }
   if (INJECTED.test(t)) return null;
   t = t.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "").replace(/<\/?pasted_content\b[^>]*>\n?/g, "");
-  // Another Assistant's message (herdr-task tell-assistant): <herdr-assistant from="mac/t13" machine="mac"
+  // Another Assistant's message (collie-task tell-assistant): <herdr-assistant from="mac/t13" machine="mac"
   // space="Home" can-reply="no">text</herdr-assistant>, the whole message (the CLI may wrap it as pasted).
   const peer = /^\s*<herdr-assistant\b([^>]*)>([\s\S]*?)<\/herdr-assistant\s*>\s*$/.exec(t);
   if (peer) {
@@ -389,20 +380,18 @@ const short = (p) => {
 };
 const clip = (s, n = 90) => { s = String(s ?? "").replace(/\s+/g, " ").trim(); return s.length > n ? s.slice(0, n - 1) + "…" : s; };
 
-// A command that publishes an artifact (mods/collie-artifacts; herdr-artifact in an older
-// transcript): the chat shows a card for it, found in the artifacts' registry by who published it
-// and when.
-const ARTIFACT = /\b(?:collie|herdr)-artifact\b[^\n|;&]*\b(publish|update)\b/;
+// A command that publishes an artifact (mods/collie-artifacts): the chat shows a card for it, found in
+// the artifacts' registry by who published it and when.
+const ARTIFACT = /\bcollie-artifact\b[^\n|;&]*\b(publish|update)\b/;
 
 // The messages a shell command sends other agents: [{ to, text, how }], how "hc" (`hc send [flags] <terminal>
-// <text>`, to a terminal) or "assistant" (`collie-task tell-assistant <address or space> <text>`; herdr-task in an
-// older transcript). Read with a small shell lexer: quotes, escapes, `;` `&&` `||` `|` and new lines between
-// commands, heredoc bodies skipped, and a text given as "$VAR" taken from a VAR=… set earlier in the
-// same command. A text it can't know is left out.
+// <text>`, to a terminal) or "assistant" (`collie-task tell-assistant <address or space> <text>`). Read with a small
+// shell lexer: quotes, escapes, `;` `&&` `||` `|` and new lines between commands, heredoc bodies skipped, and a text
+// given as "$VAR" taken from a VAR=… set earlier in the same command. A text it can't know is left out.
 const VALUED = new Set(["--if", "--timeout", "--on"]);
 export function sendsOf(command) {
   const s = String(command ?? "");
-  if (!/\b(hc|collie-task|herdr-task)\b/.test(s) || !/\b(send|tell-assistant)\b/.test(s)) return [];
+  if (!/\b(hc|collie-task)\b/.test(s) || !/\b(send|tell-assistant)\b/.test(s)) return [];
   const cmds = [], vars = new Map();
   let words = [], w = null, i = 0, heredocs = [];
   // w: { text, var? (the word was only $NAME) }
@@ -464,7 +453,7 @@ export function sendsOf(command) {
     const prog = String(a[0] ?? "").split("/").pop();
     let rest = null, how = null;
     if (prog === "hc" && a[1] === "send") { rest = a.slice(2); how = "hc"; }
-    else if ((prog === "collie-task" || prog === "herdr-task") && a.includes("tell-assistant")) { rest = a.slice(a.indexOf("tell-assistant") + 1); how = "assistant"; }
+    else if (prog === "collie-task" && a.includes("tell-assistant")) { rest = a.slice(a.indexOf("tell-assistant") + 1); how = "assistant"; }
     if (!rest) continue;
     const args = [];
     for (let j = 0; j < rest.length; j++) {
@@ -758,7 +747,7 @@ export class Conversation {
 
   // What the person wrote to answer the agent, as their own message right after its question:
   // a question's answer in their words (an option picked on the card is not a message), or the
-  // words that declined a request (mods/chat cards.js replyWith()).
+  // words that declined a request (mods/collie-chat cards.js replyWith()).
   answers(l, off) {
     const at = time(l.timestamp);
     const said = [];

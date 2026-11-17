@@ -1,9 +1,9 @@
-// A task's artifacts (SHEP-60): every artifact its agent (and its helpers) made or updated, for the Artifacts tab of
-// its view, in the web app (service/compat.ts) and the window (mods/task-artifacts, mods/chat/panel.js) alike.
-// Found from herdr-artifact's own records: an artifact names its task (herdr-artifact publish keeps it, from the
+// Ported chat copy (not collie-sync managed): a task's artifacts (SHEP-60): every artifact its agent (and its helpers) made or updated, for the Artifacts tab of
+// its view, in the web app (service/compat.ts) and the window (mods/task-artifacts, mods/collie-chat/panel.js) alike.
+// Found from collie-artifact's own records: an artifact names its task (collie-artifact publish keeps it, from the
 // publishing terminal's herdr.task label), else one of its versions was published by one of the task's own agent
 // terminals while that agent ran; an older one with neither is found by its id in the task's chat log ("Published <id>
-// v<n>", publish's words). Its proof (herdr-task ready --proof) always counts, and comes first; the rest newest first.
+// v<n>", publish's words). Its proof (collie-task ready --proof) always counts, and comes first; the rest newest first.
 
 const ID = "[a-z0-9][a-z0-9-]*-[0-9a-f]{4}";
 // publish's words ("Published <id> v2: ..."), and its --json answer ("mod": "art-<id>"), as a chat log keeps them
@@ -25,7 +25,7 @@ const byAgent = (agents, v) => agents.some((g) => g?.address && v?.publisher ===
 
 /**
  * The ids of a task's artifacts, its proof first, then newest first.
- * arts: herdr-artifact's records ({ id, task, folder, at, machine?, versions: [{ publisher, at }] }).
+ * arts: collie-artifact's records ({ id, task, folder, at, machine?, versions: [{ publisher, at }] }).
  * task: { ref ("SHEP-60"), folder (its list's), machine (null: here), agents: [{ address, at, ended }], proof (its id) }.
  * logIds: ids its chat logs say were published (publishedIds()).
  */

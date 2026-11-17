@@ -4,7 +4,7 @@
 // herdr-core's terminal.send with no caller lands as plain input from the person, here and on any machine; the
 // service does the same through its own link (service/hub.ts send()). From the window it goes through `hc connect`
 // (one JSON-RPC line in, its answer out), the documented way in that names nobody.
-// Ported from shepherdr's core/person.js into mods/collie-chat (#7 Slice 1).
+// Shared core: the source is core/person.js; bin/sync-shared copies it into the mods in lib/COPIES.
 
 // The one request line: terminal.send for addr with text, no caller.
 export const personRequest = (addr, text) => JSON.stringify({ jsonrpc: "2.0", id: 1, method: "terminal.send", params: { terminal: addr, text } });

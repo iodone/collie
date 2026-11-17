@@ -1,10 +1,11 @@
+// Shared core: the source is core/screens.js; bin/sync-shared copies it into mods/collie-chat/core/. Edit it here.
 // A CLI's own screens before its session starts (trust this folder, theme, sign in, an update prompt, whatever a later
-// version adds), read from the agent's screen as cards with choices. Ported from shepherdr's core/screens.js for the
-// coordinator chat (#7 Slice 2): mods/collie-chat/screens.js watches this chat's agent, its cards in shared
-// "collie-chat.screens". No hook reports these, so the screen is read: two matching reads a poll apart put a card up,
-// and one press on a choice presses it in the terminal, only if the screen still shows what the card was drawn from.
-// A screen with nothing to choose makes no card (it may be a slow start), unless a card came before and this one holds
-// a link (a sign-in). An agent that reports a status (its session started) or took a turn never gets one.
+// version adds), read from the agent's screen as cards with choices, and watched the same way by the window's chat
+// (mods/collie-chat/screens.js, its cards in shared "collie-chat.screens") and by the service for the web app (service/screens.ts).
+// No hook reports these, so the screen is read: two matching reads a poll apart put a card up, and one press on a
+// choice presses it in the terminal, only if the screen still shows what the card was drawn from. A screen with
+// nothing to choose makes no card (it may be a slow start), unless a card came before and this one holds a link (a
+// sign-in). An agent that reports a status (its session started) or took a turn never gets one.
 // A card: { id, addr, cli, words, choices: [{ label, description? }], at (the cursor's choice), all (screenText),
 // seen (sameScreen), state: "open" | "answered" | "closed", how, opened, changed }.
 
