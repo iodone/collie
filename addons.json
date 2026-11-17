@@ -13,7 +13,8 @@
     "collie-settings",
     "collie-files",
     "collie-space",
-    "collie-close"
+    "collie-close",
+    "collie-menu"
   ],
   "needs": {},
   "helpers": [
