@@ -12,7 +12,7 @@ import { sendAsPerson } from "./core/person.js";
 export { NAME };
 
 const bin = () => `${appHome()}/bin/collie-secret`;
-const vaultDir = () => process.env.COLLIE_SECRETS_HOME || `${home()}/.local/share/collie/secrets`;
+const vaultDir = () => (globalThis.process?.env?.COLLIE_SECRETS_HOME) || `${home()}/.local/share/collie/secrets`;
 const vault = () => `${vaultDir()}/vault.json`;
 
 // ---- scopes: collie keeps one vault, on this machine ----

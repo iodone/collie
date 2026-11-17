@@ -62,6 +62,10 @@ def cmd_list(args):
                 if mine:
                     refresh_sessions(s, t, mine)
                 v = view(s, t, [detail(k) for k in mine] if mine else [])
+                if getattr(args, "slim", False):
+                    v = {k: v[k] for k in ("id", "key", "ref", "title", "state", "worktree", "branch", "base", "start", "pr",
+                                           "base_set", "agents", "live", "after", "after_ext", "waiting_for", "waiting_ext",
+                                           "progress", "proof", "space") if k in v}
                 if t["state"] == "queued":
                     v["reason"] = queue_reason(s, t)
                 out.append(v)

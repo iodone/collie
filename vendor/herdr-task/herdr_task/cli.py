@@ -159,6 +159,7 @@ def main():
     c = cmd("list", cmd_list, "list tasks", id=False)
     c.add_argument("--all", action="store_true", help="every folder's tasks on this machine")
     c.add_argument("--archived", action="store_true", help="the archived tasks instead (Done ones archive themselves after a week), latest first")
+    c.add_argument("--slim", action="store_true", help="task fields only, no briefs or summaries (for navigation)")
     c = cmd("add", cmd_add, "add a task; prints its id", id=False)
     c.add_argument("title")
     c.add_argument("--prompt")

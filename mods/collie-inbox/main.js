@@ -18,7 +18,7 @@ import { RADIUS, TEXT, plainError, segmented, toast } from "./lib/ui.js";
 
 const v = () => div().flex().flex_col();
 const h = () => div().flex().flex_row();
-const CLI = () => process.env.COLLIE_TASK_CLI ?? `${appHome()}/bin/collie-task`;
+const CLI = () => (globalThis.process?.env?.COLLIE_TASK_CLI) ?? `${appHome()}/bin/collie-task`;
 const selected = () => shared("inbox.selected") ?? null;
 const ticket = () => shared("collie.ticket") ?? null;
 
@@ -158,7 +158,7 @@ async function navigation(decisions) {
   }));
   let groups = [];
   try {
-    const result = await exec(CLI(), ["list", "--all", "--json"]);
+    const result = await exec(CLI(), ["list", "--all", "--json", "--slim"]);
     if (result.code === 0) groups = JSON.parse(result.stdout || "[]");
   } catch { groups = []; }
   const entries = await Promise.all(linked.map(async (decision, i) => {

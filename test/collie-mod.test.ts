@@ -375,6 +375,15 @@ describe("mods/collie-inbox navigation targets", () => {
     });
   });
 
+  test("open decision 没有 receipt 时用 run.task_ref 找到同一个 task", () => {
+    const open = { ...decision, state: "open", run: { task_ref: "hat#42" } };
+    expect(taskTarget(open, null, groups)).toMatchObject({
+      ref: "HAT-42", folder: "/repo/collie", state: "running", terminal: "t88",
+    });
+    const byRef = { ...open, run: { task_ref: "HAT-42" } };
+    expect(taskTarget(byRef, null, groups)?.ref).toBe("HAT-42");
+  });
+
   test("已结束 task 用最后 agent 的 log；远端地址补 machine", () => {
     const remote = [{
       folder: "/repo",
@@ -503,5 +512,14 @@ describe("chrome / tabs / settings / toasts 自包含（#8）", () => {
   test("service unit 的 PATH 包含 collie helper 目录", () => {
     const source = file("bin/collie");
     expect(source).toContain("{root}/.local/bin:{root}/.config/herdr-app/bin:");
+  });
+
+  test("mod runtime 不直接读 process.env（Herdr 全局没有 process）", () => {
+    for (const path of [
+      "mods/collie-inbox/main.js",
+      "mods/collie-tabs/inbox-engine.js",
+      "mods/collie-tabs/tick.js",
+      "mods/collie-chat/secrets.js",
+    ]) expect([path, file(path).includes("process.env")]).toEqual([path, false]);
   });
 });
