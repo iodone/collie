@@ -11,25 +11,21 @@ import { coordinatorTab } from "./coordinator.js";
 import { serviceRuns } from "./service.js";
 import { SH } from "./core/paths.js";
 
-const CLI = () => `${appHome()}/mods/tasks/bin/herdr-task`;
-let running = false, soon = false, seen = null, rounds = 0;
+const CLI = () => process.env.COLLIE_TASK_CLI ?? `${appHome()}/bin/collie-task`;
+let running = false, soon = false, seen = null;
 
 async function tick() {
-  // Shepherdr's service ticks while it runs (lib/service.js).
+  // Collie's service may take the tick over later; until then the window owns it.
   if (running || serviceRuns()) return;
   running = true;
   try {
-    // About once a minute: the automations scheduler (herdr-automations) runs where automations are.
-    const ensure = rounds++ % 4 === 0;
     await exec(CLI(), ["tick", "--json"]).catch(() => {});
-    if (ensure) await exec(CLI(), ["scheduler", "--ensure", "--json"]).catch(() => {});
     const r = await exec("sh", ["-c", SH + 'ls "$SHEP_TASKS/.remote" 2>/dev/null; true']).catch(() => null);
-    // And each machine running an Assistant: its tick brings it back after a crash (herdr-task revive.py).
+    // And each machine running an Assistant: its tick brings it back after a crash (revive.py).
     const assisted = terminals().filter((k) => k.state === "live" && k.address.includes("/") && (k.labels?.["herdr.role"] === "coordinator" || k.labels?.["herdr.resume"]))
       .map((k) => k.address.split("/")[0]);
     for (const machine of new Set([...(r?.stdout ?? "").split("\n").filter((x) => x && !x.endsWith(".secret")), ...assisted])) {
       await exec(CLI(), ["--on", machine, "tick", "--json"]).catch(() => {});
-      if (ensure) await exec(CLI(), ["--on", machine, "scheduler", "--ensure", "--json"]).catch(() => {});
     }
   } finally {
     running = false;

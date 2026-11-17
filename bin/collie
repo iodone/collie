@@ -97,19 +97,20 @@ def source_files(source: Path, root: Path) -> dict[str, Path]:
 
     for directory in ("layouts", "mods", "lib", "core"):
         add_tree(directory, APP / directory)
-    for directory in ("kernel", "plugins", "service", "protocol"):
+    for directory in ("kernel", "plugins", "service", "protocol", "vendor"):
         add_tree(directory, RUNTIME / directory)
     add_tree("templates", CORE / "templates")
     ruleset = source / "protocol/fixtures/ruleset.json"
     if ruleset.is_file():
         files[(STATE / "ruleset.json").as_posix()] = ruleset
-    for name in ("collie", "collie-sync", "collie-answer", "collie-request"):
+    for name in ("collie", "collie-sync", "collie-answer", "collie-request", "collie-task"):
         path = source / "bin" / name
         if path.is_file():
             files[(APP / "bin" / name).as_posix()] = path
-    sync = source / "bin/collie-sync"
-    if sync.is_file():
-        files[(HELPERS / "collie-sync").as_posix()] = sync
+    for name in ("collie-sync", "collie-task"):
+        helper = source / "bin" / name
+        if helper.is_file():
+            files[(HELPERS / name).as_posix()] = helper
     addon = source / "addons.json"
     if not addon.is_file():
         raise InstallError(f"missing {addon}")
@@ -225,9 +226,14 @@ def shepherdr_version(root: Path) -> str | None:
 
 def dependency_errors(root: Path, source: Path) -> list[str]:
     errors = []
-    for command in ("herdr-task", "bun", "git"):
+    for command in ("bun", "git"):
         if not shutil.which(command):
-            errors.append(f"missing dependency `{command}`; install shepherdr/herdr and bun first")
+            errors.append(f"missing dependency `{command}`; install bun and git first")
+    bundled = source / "vendor/herdr-task"
+    if not (bundled / "herdr_task/cli.py").is_file():
+        errors.append(f"missing dependency `collie-task`; no vendored herdr_task package at {bundled}")
+    if not (source / "bin/collie-task").is_file():
+        errors.append(f"missing dependency `collie-task`; no wrapper at {source / 'bin/collie-task'}")
     addons = read_json(source / "addons.json")
     needs = addons.get("needs", {})
     if isinstance(needs, list):
@@ -451,11 +457,15 @@ def doctor(args) -> int:
     for error in dependency_failures:
         check(False, error)
     if not dependency_failures:
-        check(True, "herdr-task, bun, git and shepherdr dependencies")
+        check(True, "bundled collie-task, bun, git and shepherdr dependencies")
     source = Path(manifest.get("source", ""))
     check(source.is_dir(), f"source checkout exists: {source}")
     check((root / STATE).is_dir(), f"state directory exists: {root / STATE}")
     check(target_path(root, RUNTIME / "service/main.ts").is_file(), "background service entry is installed")
+    check(
+        target_path(root, RUNTIME / "vendor/herdr-task/herdr_task/cli.py").is_file(),
+        "vendored task package is installed",
+    )
     try:
         read_json(target_path(root, STATE / "ruleset.json"))
         check(True, "initial ruleset is valid JSON")

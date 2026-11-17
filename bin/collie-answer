@@ -35,7 +35,7 @@ if (option === "accept" || option === "rework") {
   const workspaces = existsSync(workspacesPath) ? JSON.parse(readFileSync(workspacesPath, "utf8")) : {};
   const folder = workspaces[decision.space]?.folder;
   if (!folder) throw new Error(`no workspace configured for ${decision.space}`);
-  const { stdout } = await execFileAsync("herdr-task", ["assistants", "--json"]);
+  const { stdout } = await execFileAsync(process.env.COLLIE_TASK_CLI ?? "collie-task", ["assistants", "--json"]);
   const assistants = JSON.parse(stdout);
   const matches = assistants.filter((item: any) => item.folder === folder);
   if (matches.length !== 1) throw new Error(`expected one coordinator for ${decision.space}, got ${matches.length}`);

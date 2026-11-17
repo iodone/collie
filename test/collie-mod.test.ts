@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -380,5 +380,85 @@ describe("mods/collie navigation targets", () => {
     expect(taskTarget(decision, { ...receipt, decision_ref: "dc_other" }, groups)).toBeNull();
     expect(taskTarget(decision, receipt, [...groups, ...groups])).toBeNull();
     expect(diffTarget(taskTarget(decision, receipt, groups))).toBeNull();
+  });
+});
+
+describe("chrome / tabs / settings / toasts 自包含（#8）", () => {
+  const file = (path: string): string => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+  // The files #8 rewrote: no shep asset, no shep shared key, no shep settings read.
+  const files = [
+    "mods/collie-chrome/main.js",
+    "mods/collie-tabs/main.js",
+    "mods/collie-tabs/coordinator.js",
+    "mods/collie-tabs/inbox.js",
+    "mods/collie-tabs/core/spaces.js",
+    "mods/collie-settings/main.js",
+    "lib/ui.js",
+    "mods/collie/lib/ui.js",
+    "mods/collie-tabs/lib/ui.js",
+    "mods/collie-chrome/lib/ui.js",
+    "mods/collie-settings/lib/ui.js",
+    "layouts/collie.json",
+  ];
+
+  test("不再引用 shep 资产、shep shared key 或 tabs-tasks 动作", () => {
+    const banned = [
+      "workspace-chrome-shepherdr",
+      "shepherdr-settings",
+      "mods/toasts",
+      '"toasts"',
+      "chat.calls",
+      "chat.callreq",
+      "voice.startreq",
+      "tabs-tasks.",
+      "counts.red",
+      "counts.green",
+      "tabbar.tabs",
+      "openSettings",
+      "hasToasts",
+    ];
+    for (const path of files) {
+      const source = file(path);
+      for (const word of banned) expect([path, word, source.includes(word)]).toEqual([path, word, false]);
+      // The sidebar mod (#7) is only named where the layout mounts it.
+      if (path !== "layouts/collie.json") expect([path, source.includes("spaces-chat")]).toEqual([path, false]);
+    }
+  });
+
+  test("每个引用的 mods/<mod>/<file>.svg 都存在", () => {
+    const root = new URL("../", import.meta.url);
+    for (const path of files) {
+      for (const [svg] of file(path).matchAll(/mods\/[\w./-]+\.svg/g)) {
+        expect([path, svg, existsSync(new URL(svg, root))]).toEqual([path, svg, true]);
+      }
+    }
+  });
+
+  test("toast() 交给 herdr 的 notify()，alert 变 error", () => {
+    const source = file("lib/ui.js");
+    expect(source).toContain("return notify({ ...n, level: n.level === \"alert\" ? \"error\" : n.level ?? \"info\" });");
+    expect(source).not.toContain("setShared");
+  });
+
+  test("layout 用 herdr 的 workspace-status，不再挂 shep 的 toasts", () => {
+    const layout: unknown = JSON.parse(file("layouts/collie.json"));
+    const mods: string[] = [];
+    const ids: string[] = [];
+    const visit = (value: unknown): void => {
+      if (Array.isArray(value)) return value.forEach(visit);
+      if (!value || typeof value !== "object") return;
+      const node = value as { id?: string; content?: { mod?: string }; children?: unknown[] };
+      if (node.id) ids.push(node.id);
+      if (node.content?.mod) mods.push(node.content.mod);
+      Object.values(node).forEach(visit);
+    };
+    visit(layout);
+    expect(mods).not.toContain("toasts");
+    expect(mods).toContain("workspace-status");
+    expect(mods).not.toContain("workspace-status-chat");
+    expect(ids).not.toContain("toasts");
+    // #6/#7 own these: still there until they land.
+    expect(mods).toContain("spaces-chat");
+    expect(mods).toContain("task-artifacts");
   });
 });

@@ -14,8 +14,15 @@ lock, so one agent never comes back twice."""
 
 import json
 import os
+from pathlib import Path
 import re
 import shlex
+import sys
+
+# The vendored package beside plugins/ (source: ../vendor; installed: collie/vendor).
+VENDOR = Path(__file__).resolve().parents[2] / "vendor/herdr-task"
+if (VENDOR / "herdr_task").is_dir():
+    sys.path.insert(0, str(VENDOR))
 
 from herdr_task.base import HOME, hc_json, now, run, SHELLS
 from herdr_task.agents import agent_running, status_word

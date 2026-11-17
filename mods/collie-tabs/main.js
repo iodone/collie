@@ -1,18 +1,16 @@
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { panes, run, openOverlay, theme, window, shared, setShared, layout, settings, nextCommand, readTextFile, appHome, home } from "herdr";
+import { panes, run, openOverlay, theme, window, shared, layout, settings, nextCommand, readTextFile, appHome } from "herdr";
 import { spacesWithChats as spaces, sweep } from "./parked.js";
 import { agentIn, isCoordinatorTab, closeTab, watchNewSpaces, newSpace, openCoordinator, renameTab, renameSpace } from "./coordinator.js";
 import { startTick, tickOnChange } from "./tick.js";
 import { startInbox, countsByTab, readyByTab, showInbox, toAlert } from "./inbox.js";
 import { serveRemote } from "./secrets.js";
-import { startBridge } from "./bridge.js";
 import { countBadge, H, TEXT, RADIUS } from "./lib/ui.js";
 import { watchViews } from "./usage.js";
 // A tab's name (what runs in it while Herdr named it): core/menus.js, as the web app's tab bar names it.
 import { tabName } from "./core/menus.js";
 import { inRender } from "./live.js";
-import { dirsReady } from "./dirs.js";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -30,21 +28,12 @@ export default class Tabs extends View {
     cx.timer.every(5000, () => sweep());
     this.pressed = null;
     this.panels = JSON.parse(localStorage.getItem("panels") ?? "{}");
-    // The person's pins, sidebar sections, icons and Notify, in step with the web app (lib/bridge.js).
-    startBridge(cx);
     // Tasks' queue and merge watcher (mods/tasks owns it): left to the service while it runs.
     startTick(cx);
     // What needs the person, for Tasks' "Needs you" and the red counts (inbox.js).
     startInbox(cx);
     // Usage insights (lib/usage.js, the insights add-on): the space and tab shown, and the time on each.
     watchViews(cx);
-    // The add-ons switched off (lib/addons.js): Everywhere's "off" in ~/.config/shepherdr/settings.json, as
-    // the settings window last saved it (or pushed it here), into shared state the mods read.
-    dirsReady().then((d) => readTextFile(d.settings)).then((s) => {
-      const list = JSON.parse(s ?? "{}")?.everywhere?.off;
-      const want = Array.isArray(list) ? list : [];
-      if (JSON.stringify(want) !== JSON.stringify(shared("addons.off") ?? [])) setShared("addons.off", want);
-    }).catch(() => {});
     // Ctrl+Shift+W comes here so a coordinator with live workers asks first, like its x.
     // At most 5 s per wait (one pending nextCommand), so a reload's old build ends at its next
     // cx use instead of staying in memory.
@@ -140,13 +129,8 @@ export default class Tabs extends View {
     const button = (id, label, action) => div().id(id).size(H.sm).flex_none().flex().items_center().justify_center().rounded(RADIUS.control).cursor_pointer().text_color(t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
       .on_mouse_down("left", stop).on_click(action).child(label);
     // What needs the person, per tab (the Inbox's items), and Tasks' Ready: a red and a green
-    // count on the tab. Shepherdr settings' "Red counts" off (shared "counts.red" false): none
-    // here, nor on Tasks.
-    const counts = shared("counts.red") !== false, greens = shared("counts.green") !== false;
-    const needs = counts ? countsByTab() : new Map(), readies = greens ? readyByTab() : new Map();
-    // Its "Tab bar" off (shared "tabbar.tabs" false): the bar keeps +, the panels and the window's
-    // buttons (and its background work), without the tabs.
-    const tabsShown = shared("tabbar.tabs") !== false;
+    // count on the tab.
+    const needs = countsByTab(), readies = readyByTab();
     const item = (c, i) => {
       const program = panes().find(p => p.tab === c.id && p.program?.agent)?.program ?? panes().find(p => p.tab === c.id)?.program;
       const name = tabName(c.name, program?.name);
@@ -162,10 +146,10 @@ export default class Tabs extends View {
         .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "menu-tasks", kind: "popup", width: 236, height: menuHeight(c.id), props: { tab: "tab", target: { id: c.id, space: space.id }, right: this.right } }); })
         .when(Boolean(program?.icon), el => el.child(program.tint ? svg(program.icon).size(14).text_color(t.muted) : image(program.icon).size(14)))
         .child(div().max_w(170).truncate().child(c.zoomed ? `${name} Z` : name))
-        .when(c.status === "working", el => el.child(svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900)))
+        .when(c.status === "working", el => el.child(svg("mods/collie-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900)))
         .when(needs.get(c.id) > 0 || readies.get(c.id) > 0, el => el.child(countBadge(needs.get(c.id), readies.get(c.id), c.active ? t.raised : t.chrome)))
         .when(!(needs.get(c.id) > 0 || readies.get(c.id) > 0) && (c.status === "blocked" || c.status === "done"), el => el.child(div().size(6).rounded(3).bg(t[c.status])))
-        .when(c.active, el => el.child(div().id(`close-${c.id}`).cursor_pointer().text_color(t.dim).on_mouse_down("left", stop).on_click((_e, cx) => { cx.stop_propagation(); closeTab(c.id); }).child(svg("mods/pane/close.svg").size(12))));
+        .when(c.active, el => el.child(div().id(`close-${c.id}`).cursor_pointer().text_color(t.dim).on_mouse_down("left", stop).on_click((_e, cx) => { cx.stop_propagation(); closeTab(c.id); }).child(svg("mods/collie-tabs/win-close.svg").size(12))));
     };
     const root = layout(), sidebar = find(root, "sidebar"), w = window();
     // Old saved rails and a dragged-narrow sidebar can be smaller than the window buttons.
@@ -199,11 +183,11 @@ export default class Tabs extends View {
       // The bar runs to the window's right edge: menus opened from it place their submenus by it.
       .on_mouse_move((e) => { this.right = e.position.x - e.local_position.x + e.bounds.width; })
       .on_scroll_wheel(e => { if (Math.abs(e.delta.y) >= 1) run(e.delta.y > 0 ? "tab.prev" : "tab.next"); })
-      .child(h_flex().id("tab-scroll").flex_1().min_w(0).h_full().items_center().gap(3).overflow_x_scrollbar().children(tabsShown ? shown.map(item) : []))
+      .child(h_flex().id("tab-scroll").flex_1().min_w(0).h_full().items_center().gap(3).overflow_x_scrollbar().children(shown.map(item)))
       .child(button("tab-new", "+", () => openOverlay({ mod: "new-menu-tasks", kind: "popup", width: 250, height: 543, props: { right: this.right } })))
-      .child(panelButton("collie", "Inbox", "mods/tasks/tasks.svg", [shared("inbox.queue")?.waiting ?? 0, 0]))
-      .when(w?.buttons, el => el.child(button("minimize", w.platform === "windows" ? svg("mods/tabs-tasks/win-min.svg").size(16) : "−", () => run("window.minimize")))
-        .child(button("maximize", w.platform === "windows" ? svg(`mods/tabs-tasks/${w.maximized ? "win-restore" : "win-max"}.svg`).size(16) : "□", () => run("window.maximize")))
-        .child(button("close-window", w.platform === "windows" ? svg("mods/tabs-tasks/win-close.svg").size(16) : svg("mods/pane/close.svg").size(13), () => run("window.close"))));
+      .child(panelButton("collie", "Inbox", "mods/collie-chrome/files.svg", [shared("inbox.queue")?.waiting ?? 0, 0]))
+      .when(w?.buttons, el => el.child(button("minimize", w.platform === "windows" ? svg("mods/collie-tabs/win-min.svg").size(16) : "−", () => run("window.minimize")))
+        .child(button("maximize", w.platform === "windows" ? svg(`mods/collie-tabs/${w.maximized ? "win-restore" : "win-max"}.svg`).size(16) : "□", () => run("window.maximize")))
+        .child(button("close-window", w.platform === "windows" ? svg("mods/collie-tabs/win-close.svg").size(16) : svg("mods/collie-tabs/win-close.svg").size(13), () => run("window.close"))));
   }
 }

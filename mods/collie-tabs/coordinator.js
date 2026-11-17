@@ -10,7 +10,6 @@
 // Edit lib/coordinator.js, never a mod's copy, then run bin/sync-shared.
 
 import { appHome, exec, hc, run, openOverlay, shared, setShared, home, machines, focused, readTextFile } from "herdr";
-import { dirs } from "./dirs.js";
 import { isWorktreePath } from "./core/paths.js";
 import { terminals, panes, spaces as allSpaces } from "./live.js";
 import { chatPane, chatLabel } from "./core/spaces.js";
@@ -109,47 +108,9 @@ function folderOf(space) {
   return p?.cwd || agent?.cwd || space.folder || home();
 }
 
-// Shepherdr settings (mods/shepherdr-settings writes them; herdr-task reads them too):
-// Shepherdr's settings file (~/.config/shepherdr/settings.json) = { version, everywhere: SETTINGS, machines: { <machine>: SETTINGS },
-//   spaces: { <space id>: { folder, name, machine, ...SETTINGS } } }
-// with SETTINGS = { coordinator, worker, reviewer: { agent, model, effort, fast, perm },
-//   tasks: { merge: "auto"|"checks"|"ask", review_rounds, must_fix: "blocker"|"major"|"minor", max_running,
-//            archive_after (days Done tasks stay in the lists; 0: never archived) },
-//   automations: { enabled }, agents: { reactions, feedback, feedback_repo } }, every key optional. A machine is "local" (this computer) or its
-// name; a space on another machine is "<machine>/<id>". The settings window pushes each other
-// machine its share (with "here": its name) for its herdr-task. Settings edits only Everywhere and
-// spaces now; a machine's layer holds its machine-only rows (machine, home) and is still read for
-// anything it set for all its spaces before machine scope went.
-export const SHEPHERDR_FILE = () => dirs().settings;   // ~/.config/shepherdr/settings.json (lib/dirs.js)
-export const SHEPHERDR_DEFAULTS = { tasks: { merge: "ask", review_rounds: 0, must_fix: "major", max_running: 10, archive_after: 7 }, automations: { enabled: true },
-  agents: { reactions: true, suggestions: true, feedback: true, feedback_repo: "" } };
 export const LOCAL_MACHINE = "local";
-export async function readShepherdr() {
-  try { return JSON.parse((await readTextFile(SHEPHERDR_FILE())) ?? "{}") ?? {}; } catch { return {}; }
-}
-// A scope: null (Everywhere), "m:<machine>" (a machine), or a space id.
+// A scope's machine (null: this computer).
 export const machineOfSpace = (id) => (String(id).includes("/") ? String(id).split("/")[0] : LOCAL_MACHINE);
-// The layers a scope reads, most specific first: [{ level: "space"|"machine"|"everywhere", key, obj }].
-export function shepherdrLayers(cfg, scope = null) {
-  const out = [];
-  let machine = null;
-  if (scope && scope.startsWith("m:")) machine = scope.slice(2);
-  else if (scope) { out.push({ level: "space", key: scope, obj: cfg?.spaces?.[scope] || {} }); machine = machineOfSpace(scope); }
-  if (machine) out.push({ level: "machine", key: machine, obj: cfg?.machines?.[machine] || {} });
-  out.push({ level: "everywhere", key: null, obj: cfg?.everywhere || {} });
-  return out;
-}
-// What applies in a scope: the most specific layer that sets it wins, else the defaults.
-// Agents are whole choices; tasks and automations merge key by key.
-export function shepherdrFor(cfg, scope = null) {
-  const layers = shepherdrLayers(cfg, scope).reverse();
-  const out = {};
-  for (const role of ["coordinator", "worker", "reviewer"]) out[role] = layers.reduce((v, l) => l.obj[role] ?? v, null);
-  // agents: Reactions set before they were for every agent (SHEP-42's assistant.reactions) count where a layer has no agents'
-  const own = (l, k) => (k === "agents" && typeof l.obj.assistant?.reactions === "boolean" ? { reactions: l.obj.assistant.reactions, ...l.obj.agents } : l.obj[k] ?? {});
-  for (const k of ["tasks", "automations", "agents"]) out[k] = Object.assign({ ...SHEPHERDR_DEFAULTS[k] }, ...layers.map((l) => own(l, k)));
-  return out;
-}
 
 // One app command, waited for, with what it made ({ tab, pane, ... }).
 async function app(name, args) {
@@ -286,8 +247,8 @@ export async function recentFolders(machine = null) {
 
 // Makes a space at `folder` (New space dialog), on `machine` (null: this computer), and, unless
 // `settings` is null, its Coordinator tab, started with those settings on the first message; lands
-// in it. `icon`: the emoji the dialog picked (null: "#"), kept as the sidebar's Rename keeps it
-// (mods/spaces-chat sections.js setIcon). Resolves with the space id.
+// in it. `icon`: the emoji the dialog picked (null: "#"), kept in shared "collie.spaceIcons"
+// ({ [space id]: emoji }), as the sidebar's Rename keeps a space's. Resolves with the space id.
 // With a coordinator, the space has only its Coordinator tab: Herdr's first shell tab goes, while
 // it is still a fresh shell nobody used.
 export async function createSpace(folder, settings, machine = null, icon = null) {
@@ -302,10 +263,7 @@ export async function createSpace(folder, settings, machine = null, icon = null)
     logSpace("rename", out.space, "coordinator.js createSpace (New space)", { to: name });
     await app("space.rename", { id: out.space, name }).catch(() => {});
   }
-  if (icon) {
-    const d = shared("spaces-chat") ?? {};
-    setShared("spaces-chat", { ...d, icons: { ...(d.icons ?? {}), [out.space]: icon } });
-  }
+  if (icon) setShared("collie.spaceIcons", { ...(shared("collie.spaceIcons") ?? {}), [out.space]: icon });
   if (settings === null) return out.space;
   await openCoordinator({ id: out.space, tabs: [], active: true, folder }, true, settings);
   if (out.terminal && out.tab && (await freshShell(out.terminal)))
@@ -521,10 +479,13 @@ export function renameTab(tab) {
     value: tab?.named ? tab.name : "", placeholder: tab?.name ?? "", command: { name: "tab.rename", args: { id: tab?.id } } } });
 }
 
-// A space's Rename and Close, as its sidebar menu does them (mods/spaces-chat): the Rename dialog
-// (name and icon), and our confirm (mods/confirm-chat) before Herdr's close.
+// A space's Rename: our prompt (mods/prompt-chat, as Rename tab uses), its field holding the name
+// given (empty when nobody named it: the name stays). Close asks our confirm (mods/confirm-chat)
+// before Herdr's close.
 export function renameSpace(id) {
-  openOverlay({ mod: "spaces-chat", kind: "dialog", frame: "none", width: 380, height: 172, props: { view: "rename", space: id } });
+  const space = allSpaces().find((s) => s.id === id);
+  openOverlay({ mod: "prompt-chat", kind: "dialog", width: 400, height: 196, props: { title: "Rename space",
+    value: space?.named ? space.name : "", placeholder: space?.name ?? "", command: { name: "space.rename", args: { id } } } });
 }
 export function closeSpace(id) {
   const name = allSpaces().find((s) => s.id === id)?.name;

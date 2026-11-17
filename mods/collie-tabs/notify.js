@@ -1,8 +1,7 @@
-// Notify in the window: the rules are core/notify.js (shared with the service and the web app); the setting
-// is shared "notify" here. A space row's menu sets the space's (mods/spaces-chat), Shepherdr settings' Notify
-// any of them (mods/shepherdr-settings). Picking what it would get anyway goes back to following.
-// Shared: the source is lib/notify.js; bin/sync-shared copies it into each mod in lib/COPIES.
-// Edit lib/notify.js, never a mod's copy, then run bin/sync-shared.
+// Notify in the window: the rules are core/notify.js; the setting is shared "notify" here.
+// A space's menu sets that space's value; Collie settings sets any of them. Picking what it
+// would get anyway goes back to following.
+// This copy is maintained in collie-tabs until its source moves to lib/ (#11 follow-up).
 
 import { shared, setShared } from "herdr";
 import { everywhereOf, machineLevel, machineOwn, spaceLevel, spaceOwn, withSpace, withMachine, withEverywhere, notifiesBy } from "./core/notify.js";

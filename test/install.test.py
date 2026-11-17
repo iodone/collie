@@ -44,7 +44,7 @@ class InstallTest(unittest.TestCase):
 
     def make_source(self):
         self.source.mkdir()
-        for directory in ("bin", "layouts", "templates", "lib", "core", "mods", "kernel", "plugins", "service", "protocol"):
+        for directory in ("bin", "layouts", "templates", "lib", "core", "mods", "kernel", "plugins", "service", "protocol", "vendor"):
             if (REPO / directory).exists():
                 shutil.copytree(REPO / directory, self.source / directory)
         shutil.copy2(REPO / "addons.json", self.source / "addons.json")
@@ -223,7 +223,7 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(json.loads(keys.read_text())["ctrl-shift-l"], "layout inbox")
 
     def test_missing_dependency_stops_before_writes(self):
-        (self.fake_bin / "herdr-task").unlink()
+        (self.fake_bin / "bun").unlink()
         result = self.install(expected=2)
         self.assertIn("missing dependency", result.stderr)
         self.assertFalse((self.root / ".config/herdr-app/installed.collie.json").exists())

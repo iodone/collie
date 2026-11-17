@@ -1,0 +1,16 @@
+herdr-task
+==========
+
+Vendored, unmodified copy of the shepherdr tasks CLI. Source, commit and paths are
+recorded in UPSTREAM; the MIT license text is in LICENSE and applies to every file
+in this directory.
+
+Run it through bin/collie-task, which puts this directory first on sys.path. The
+package keeps its upstream name `herdr_task` so a diff against upstream stays small;
+it does not import anything from shepherdr's mods/tasks tree.
+
+No compiled artifacts (bytecode, binaries) are vendored: the launcher and
+bin/collie-task both set sys.dont_write_bytecode = True.
+
+Local patches: none yet. Any future patch must be listed here with the file and the
+reason, and UPSTREAM stays pinned to the commit the base copy came from.

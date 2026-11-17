@@ -16,7 +16,8 @@
     "artifacts": ">=3.1.0 <4"
   },
   "helpers": [
-    "collie-sync"
+    "collie-sync",
+    "collie-task"
   ],
   "templates": [
     "coordinator.md",

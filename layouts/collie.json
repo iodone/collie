@@ -217,14 +217,6 @@
               },
               "edge": "top",
               "align": "center"
-            },
-            {
-              "id": "toasts",
-              "content": {
-                "mod": "toasts"
-              },
-              "edge": "bottom",
-              "align": "end"
             }
           ]
         },
@@ -232,7 +224,7 @@
           "id": "status",
           "type": "block",
           "content": {
-            "mod": "workspace-status-chat"
+            "mod": "workspace-status"
           },
           "size": {
             "px": 28

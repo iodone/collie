@@ -4,7 +4,7 @@ import { closeOverlay, home, props, readTextFile, theme, writeTextFile } from "h
 import { coordinatorPath, mergeCoordinator } from "./lib/inbox-settings.js";
 import { TEXT, RADIUS, H, button, segmented } from "./lib/ui.js";
 
-const sectionIcon = "mods/shepherdr-settings/bot.svg";
+const sectionIcon = "mods/collie-chrome/network.svg";
 
 export default class InboxSettings extends View {
   init(_props, cx) {

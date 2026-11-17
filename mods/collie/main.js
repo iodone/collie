@@ -17,7 +17,7 @@ import { RADIUS, TEXT, plainError, segmented, toast } from "./lib/ui.js";
 
 const v = () => div().flex().flex_col();
 const h = () => div().flex().flex_row();
-const CLI = () => `${appHome()}/mods/tasks/bin/herdr-task`;
+const CLI = () => process.env.COLLIE_TASK_CLI ?? `${appHome()}/bin/collie-task`;
 const selected = () => shared("inbox.selected") ?? null;
 const ticket = () => shared("collie.ticket") ?? null;
 

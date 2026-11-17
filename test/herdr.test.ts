@@ -112,7 +112,7 @@ describe("plugins/agent/herdr", () => {
     const bad = structuredClone(decision);
     bad.actions[0].spawn.title = "--force";
     const fake = fakeRunner([]);
-    await expect(spawnHerdrTask(bad, rule, { run: fake.run })).rejects.toThrow("safe herdr-task title");
+    await expect(spawnHerdrTask(bad, rule, { run: fake.run })).rejects.toThrow("safe collie-task title");
     expect(fake.calls).toEqual([]);
   });
 

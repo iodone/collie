@@ -34,14 +34,14 @@
 
 import { LINE_MAX, REASONS, fit, reqReason, reportReason } from "./core/needs.js";
 import { SH } from "./core/paths.js";
-import { dirsReady } from "./dirs.js";
 import { notifies, spaceOfTerminal } from "./notify.js";
 import { toast, toastWho as whoOf } from "./lib/ui.js";
 import { exec, appHome, home, focused, shared, setShared, watchFolder, readTextFile, writeTextFile, playSound, settings, run, layout } from "herdr";
 import { terminals, agents, panes, spaces } from "./live.js";
 import { chatPane } from "./core/spaces.js";
 
-const CLI = () => `${appHome()}/mods/tasks/bin/herdr-task`;
+const CLI = () => process.env.COLLIE_TASK_CLI ?? `${appHome()}/bin/collie-task`;
+const taskStore = () => process.env.COLLIE_TASK_STORE ?? `${home()}/.local/state/collie/tasks`;
 export const ASKS = () => `${appHome()}/data/chat-asks`;
 const pre = (machine, id) => (machine && id && !String(id).includes("/") ? `${machine}/${id}` : id ?? null);
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -150,7 +150,7 @@ async function alert(a) {
   if (settings()?.sounds?.enabled !== false) playSound("blocked");
   const k = terminals().find((x) => x.address === a.terminal);
   toast({ title: `${whoOf(k)} · Needs you`, body: req ? reqReason(req) : REASONS.question, level: "alert",
-    action: { name: "tabs-tasks.inbox", args: {} } });
+    action: { name: "collie", args: {} } });
 }
 
 // ---- agents' alerts --------------------------------------------------------------------------
@@ -178,7 +178,7 @@ function agentAlerts() {
     if (!(Number(a.at) >= alertsFrom) || !(a.about || notifies(k, "need"))) continue;
     if (settings()?.sounds?.enabled !== false) playSound("blocked");
     toast({ title: clip(`${whoOf(k, a.task)} · ${String(a.title ?? "")}`, 60), body: clip(String(a.body ?? ""), 300), level: "alert",
-      action: { name: `tabs-tasks.alert-${k.address.replace(/\//g, "~")}` } });
+      action: { name: `alert-${k.address.replace(/\//g, "~")}` } });
   }
 }
 
@@ -266,7 +266,7 @@ async function readTasksNow() {
 const told = new Set();
 async function readRetries() {
   let rows = {};
-  try { rows = JSON.parse(await readTextFile(`${(await dirsReady()).tasks}/.retries.json`) ?? "{}") ?? {}; } catch {}
+  try { rows = JSON.parse(await readTextFile(`${taskStore()}/.retries.json`) ?? "{}") ?? {}; } catch {}
   const over = Object.values(rows).filter((r) => r?.role === "coordinator" && r.over && r.reason && !r.stale
     && terminals().some((k) => k.address === r.address && k.state === "live"))
     .map((r) => ({ terminal: r.address, why: r.reason, cut: r.cut, at: r.at ?? 0 }));
@@ -274,7 +274,7 @@ async function readRetries() {
     told.add(`${r.terminal}:${r.cut}`);
     if (settings()?.sounds?.enabled !== false) playSound("blocked");
     toast({ title: `${whoOf(terminals().find((k) => k.address === r.terminal))} · ${r.why}`, body: "Write to it to carry on, or restart it.", level: "alert",
-      action: { name: "tabs-tasks.inbox", args: {} } });
+      action: { name: "collie", args: {} } });
   }
   put("inbox.provider", over);
 }

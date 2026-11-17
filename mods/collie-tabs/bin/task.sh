@@ -5,4 +5,4 @@
 # Usage: task.sh <task key> <folder> <parent address or ""> [agent key]
 set -u
 key=$1 folder=$2 parent=${3:-} agent=${4:-}
-herdr-task switch "$key" --folder "$folder" ${parent:+--parent "$parent"} ${agent:+--agent "$agent"} --json >/dev/null
+${COLLIE_TASK_CLI:-collie-task} switch "$key" --folder "$folder" ${parent:+--parent "$parent"} ${agent:+--agent "$agent"} --json >/dev/null
