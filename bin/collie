@@ -344,6 +344,69 @@ def print_plan(root: Path, plans: list[dict]) -> None:
         print(f"{item['action']:15} {target_path(root, item['rel'])}{suffix}")
 
 
+
+HOOK_FILES = (".claude/settings.json", ".codex/hooks.json")
+
+
+def add_hooks(root: Path) -> list[list[str]]:
+    """Point Claude/Codex PermissionRequest at collie-chat's ask hook, once."""
+    command = f"sh '{app_root(root)}/mods/collie-chat/ask-hook.sh'"
+    done: list[list[str]] = []
+    for relative in HOOK_FILES:
+        path = target_path(root, relative)
+        if not path.parent.is_dir():
+            continue
+        try:
+            data = json.loads(path.read_text()) if path.exists() else {}
+        except ValueError:
+            print(f"hooks: {path} is not valid JSON; left alone", file=sys.stderr)
+            continue
+        event = "PermissionRequest"
+        entries = data.setdefault("hooks", {}).setdefault(event, [])
+        if any("ask-hook.sh" in hook.get("command", "") for entry in entries for hook in entry.get("hooks", [])):
+            done.append([relative, event, command])
+            continue
+        entries.append({"hooks": [{"type": "command", "command": command, "timeout": 1800}]})
+        if path.exists():
+            Backups(root, False).save(root, relative)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write(path, (json.dumps(data, indent=2) + "\n").encode())
+        done.append([relative, event, command])
+        if relative.startswith(".codex"):
+            print("hooks: Codex asks once to trust its new hook; approve it in its Hooks screen")
+    return done
+
+
+def remove_hooks(root: Path, dry_run: bool) -> None:
+    command = f"{app_root(root)}/mods/collie-chat/ask-hook.sh"
+    for relative in HOOK_FILES:
+        path = target_path(root, relative)
+        if not path.exists():
+            continue
+        try:
+            data = json.loads(path.read_text())
+        except ValueError:
+            continue
+        changed = False
+        for event, entries in list((data.get("hooks") or {}).items()):
+            kept = [entry for entry in entries
+                    if not any(command in hook.get("command", "") for hook in entry.get("hooks", []))]
+            if len(kept) != len(entries):
+                changed = True
+                if kept:
+                    data["hooks"][event] = kept
+                else:
+                    del data["hooks"][event]
+        if changed:
+            print(f"remove hook     {path}")
+            if not dry_run:
+                Backups(root, False).save(root, relative)
+                if data.get("hooks"):
+                    atomic_write(path, (json.dumps(data, indent=2) + "\n").encode())
+                else:
+                    path.unlink()
+
+
 def install(args, source_override: Path | None = None) -> int:
     root = args.root.expanduser().resolve()
     validate_root(root)
@@ -401,6 +464,7 @@ def install(args, source_override: Path | None = None) -> int:
     if keys_changed:
         backups.save(root, (APP / "keys.json").as_posix())
         write_json(app_root(root) / "keys.json", merged_keys)
+    manifest["hooks"] = add_hooks(root)
     if manifest_path(root).exists():
         backups.save(root, manifest_path(root).relative_to(root).as_posix())
     target_path(root, STATE).mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -725,6 +789,7 @@ def uninstall(args) -> int:
             if not args.dry_run:
                 del keys[key]
                 keys_changed = True
+    remove_hooks(root, args.dry_run)
     if args.dry_run:
         print("dry-run: no files changed")
         return 0
