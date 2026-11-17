@@ -55,7 +55,7 @@ Decision 只有三个状态：
 
 ## 委派
 
-需要交付代码时使用 `herdr-task add` 和 `start`，保持每 folder 的并发限制。任务必须包含：
+需要交付代码时使用 `collie-task add` 和 `start`，保持每 folder 的并发限制。任务必须包含：
 
 - 清晰的 title、base 和 brief 文件引用；
 - `access`、`review`、`merge`、`tells` 等明确设置；
@@ -63,7 +63,7 @@ Decision 只有三个状态：
 
 review 事件（如 `merge_request.review_requested`）派出的任务写 `run.kind: "review"`，它在 Working 里显示为审阅工作；其余任务写 `run.kind: "build"`（或省略）。
 
-worker 与 reviewer 在同一任务闭环内完成实现和复核。你只看 `herdr-task` 的任务事实与 ready 回执，不复制任务状态，不把中间状态当成完成。
+worker 与 reviewer 在同一任务闭环内完成实现和复核。你只看 `collie-task` 的任务事实与 ready 回执，不复制任务状态，不把中间状态当成完成。
 
 ## 人的否决权
 

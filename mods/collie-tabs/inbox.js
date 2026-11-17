@@ -41,7 +41,7 @@ import { terminals, agents, panes, spaces } from "./live.js";
 import { chatPane } from "./core/spaces.js";
 
 const CLI = () => process.env.COLLIE_TASK_CLI ?? `${appHome()}/bin/collie-task`;
-const taskStore = () => process.env.COLLIE_TASK_STORE ?? `${home()}/.local/state/collie/tasks`;
+const taskStore = () => process.env.COLLIE_TASK_STORE ?? process.env.HERDR_TASK_STORE ?? `${home()}/.herdr/tasks`;
 export const ASKS = () => `${appHome()}/data/chat-asks`;
 const pre = (machine, id) => (machine && id && !String(id).includes("/") ? `${machine}/${id}` : id ?? null);
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);

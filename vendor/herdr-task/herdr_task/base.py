@@ -13,8 +13,8 @@ import zipfile
 VERSION = "1"
 HOME = os.path.expanduser("~")
 # HERDR_TASK_STORE: another task list (a test's own), as HERDR_TASK_SETTINGS for settings.
-STORE = os.environ.get("HERDR_TASK_STORE") or os.path.join(HOME, ".herdr", "tasks")
-WORKTREES = os.path.join(HOME, ".herdr", "worktrees")
+STORE = os.environ.get("COLLIE_TASK_STORE") or os.environ.get("HERDR_TASK_STORE") or os.path.join(HOME, ".herdr", "tasks")
+WORKTREES = os.environ.get("COLLIE_WORKTREES") or os.path.join(HOME, ".herdr", "worktrees")
 LEGACY = os.path.join(HOME, ".config", "herdr-app", "data", "tasks")
 SHELLS = {"bash", "zsh", "fish", "sh", "dash", "ksh", "tcsh", "csh", "nu", "xonsh", "pwsh", "powershell", "elvish"}
 RANK = {"blocked": 4, "done": 3, "working": 2, "idle": 1}

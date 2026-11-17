@@ -10,7 +10,7 @@ import re
 from .base import Fail, HOME, git
 from .github import BAD, PENDING, pr_view
 
-ARTIFACTS = os.path.join(HOME, ".herdr", "artifacts")
+ARTIFACTS = os.environ.get("COLLIE_ARTIFACTS") or os.path.join(HOME, ".herdr", "artifacts")
 # Files named on the card, and commits.
 FEW = 3
 

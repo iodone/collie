@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Restarts a task's agent through herdr-task (same folder, with a handoff; no
+# Restarts a task's agent through collie-task (same folder, with a handoff; no
 # tab, as every task agent now), optionally as another agent. A worker keeps its
 # coordinator as parent, so it stays nested under it.
 # Usage: task.sh <task key> <folder> <parent address or ""> [agent key]

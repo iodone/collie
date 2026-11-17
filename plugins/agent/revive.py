@@ -110,7 +110,7 @@ def lost_message(ref=None, template=None):
     """A new agent's first message once its session is gone (core/chat-view.js lostMessage)."""
     msg = f"<restart>{FRESH}</restart>"
     if ref:
-        msg += f"\n\nYou work on task {ref}: read its brief with `herdr-task show {ref}` and carry on from what is already done."
+        msg += f"\n\nYou work on task {ref}: read its brief with `collie-task show {ref}` and carry on from what is already done."
     body = "---".join(re.split(r"^---[ \t]*$", template or "", flags=re.M)[2:]).strip()
     if body:
         msg += f"\n\n{body}"
