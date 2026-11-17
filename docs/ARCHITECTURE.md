@@ -389,8 +389,8 @@ Inbox 不是第二个操作台。每行右侧只有一个 **回复** 按钮：
 | 来源插件 | autoloop `plugins/github/source.ts`、`plugins/gitlab/source.ts` | 验签、归一、发 Event；来源自己连进来 | 按 type 直接匹配规则 |
 | 通道 / 卡片 / 投递 | autoloop `plugins/feishu/channel.ts`、`plugins/delivery/*` | 卡片发送、回答回调、投递重试与版本 | 把人的回答做成 Event |
 | 执行进程监督 | autoloop `worker/run.ts`、`worker/contract.ts` | 进程组、超时、退出判定、结果回交 | 10 态 run 状态机 |
-| Work 执行 | shepherdr `mods/tasks/bin/herdr-task`、`templates/{worker,reviewer}.md` | 调 CLI；worktree、worker/reviewer、label、ready 三件套 | 不改 herdr-task 状态；不接她的 Accept |
-| Coordinator 会话与恢复 | collie `plugins/agent/revive.py`（源自 shepherdr）、`~/.local/share/shepherdr/bin/shepherdr` 的会话逻辑 | 原会话恢复、label、handover | 不复制 herdr 的 Assistant 交互 |
+| Work 执行 | `vendor/herdr-task` + collie templates | 调 CLI；worktree、worker/reviewer、label、ready 三件套 | 不改任务状态；不接 shep Accept |
+| Coordinator 会话与恢复 | `vendor/herdr-task/herdr_task/revive.py` + `collie-task tick` | 原会话恢复、label、handover | 不复制 herdr 的 Assistant 交互 |
 | Task 头部与状态点 | shepherdr `mods/chat/panel.js`、`lib/dot.js`、`lib/ui.js` | 头部布局、segmented、task dot、光晕 | 不移植 Chat/Files/Changes/Browser |
 | 产物 | shepherdr `mods/task-artifacts/*`、`lib/artview.js`、`core/task-artifacts.js` | 列表、筛选、viewer、版本 | 不依赖任务聊天 |
 | 安装器 | `~/.local/share/shepherdr/bin/shepherdr` | manifest、hash、备份、`.new`、doctor、key 合并 | 不装 herdr 的 web app / 语音 / 浏览器 |
