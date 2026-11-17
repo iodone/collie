@@ -13,7 +13,7 @@ export interface ChannelOptions {
 }
 
 const defaultRunner: ChannelRunner = async (args) => {
-  const { stdout } = await execFileAsync("herdr-task", args, { maxBuffer: 4 * 1024 * 1024 });
+  const { stdout } = await execFileAsync(process.env.COLLIE_TASK_CLI ?? "collie-task", args, { maxBuffer: 4 * 1024 * 1024 });
   return stdout;
 };
 

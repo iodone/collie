@@ -78,6 +78,6 @@ flowchart TB
 
 ## 依赖
 
-herdr-app（含 herdr-core）、shepherdr 3.1.x 的 `herdr-task`、shepherdr 的 `tasks` / `chat` / `artifacts` add-on、bun、git、至少一个已登录的 CLI agent。
+herdr-app（含 herdr-core）、bun、git、至少一个已登录的 CLI agent。执行层与 artifacts 都由 collie vendored 源码提供（`collie-task` / `collie-artifact`），不再需要 shepherdr 的 `tasks` / `chat` / `artifacts` add-on。
 
 Event / Ingress 的机制参照 [agent-autoloop](https://github.com/KKKKhazix/agent-autoloop)：来源自己连进来、`source + key` 去重、同对象归并、hops 熔断。

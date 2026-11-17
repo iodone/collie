@@ -2,9 +2,9 @@ import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, Scrollbar, InputState, Input } from "gpui-base";
 import { closeOverlay, home, props, readTextFile, theme, writeTextFile } from "herdr";
 import { coordinatorPath, mergeCoordinator } from "./lib/inbox-settings.js";
-import { TEXT, RADIUS, H, button, segmented } from "./ui.js";
+import { TEXT, RADIUS, H, button, segmented } from "./lib/ui.js";
 
-const sectionIcon = "mods/shepherdr-settings/bot.svg";
+const sectionIcon = "mods/collie-chrome/network.svg";
 
 export default class InboxSettings extends View {
   init(_props, cx) {

@@ -44,7 +44,7 @@ class InstallTest(unittest.TestCase):
 
     def make_source(self):
         self.source.mkdir()
-        for directory in ("bin", "layouts", "templates", "lib", "mods", "kernel", "plugins", "service", "protocol"):
+        for directory in ("bin", "layouts", "templates", "lib", "core", "mods", "kernel", "plugins", "service", "protocol", "vendor"):
             if (REPO / directory).exists():
                 shutil.copytree(REPO / directory, self.source / directory)
         shutil.copy2(REPO / "addons.json", self.source / "addons.json")
@@ -107,6 +107,10 @@ class InstallTest(unittest.TestCase):
         helper = self.root / ".local/bin/collie-sync"
         self.assertTrue(helper.is_file())
         self.assertTrue(os.access(helper, os.X_OK))
+        secret = self.root / ".local/bin/collie-secret"
+        self.assertTrue(secret.is_file())
+        self.assertTrue(os.access(secret, os.X_OK))
+        self.assertTrue((self.root / ".config/herdr-app/bin/collie-secret").is_file())
         self.assertTrue((self.root / ".local/share/collie/service/main.ts").is_file())
         self.assertTrue((self.root / ".local/share/collie/protocol/invariants.mjs").is_file())
         self.assertEqual(
@@ -223,7 +227,7 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(json.loads(keys.read_text())["ctrl-shift-l"], "layout inbox")
 
     def test_missing_dependency_stops_before_writes(self):
-        (self.fake_bin / "herdr-task").unlink()
+        (self.fake_bin / "bun").unlink()
         result = self.install(expected=2)
         self.assertIn("missing dependency", result.stderr)
         self.assertFalse((self.root / ".config/herdr-app/installed.collie.json").exists())
@@ -243,10 +247,26 @@ class InstallTest(unittest.TestCase):
         self.assertIn(".config/herdr-core/templates/collie-coordinator.md", manifest["files"])
         self.assertTrue((self.root / ".local/state/collie").exists())
 
+    def test_install_replaces_old_shep_chat_hooks(self):
+        path = self.root / ".claude/settings.json"
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({"hooks": {"SessionStart": [{"hooks": [
+            {"type": "command", "command": "sh '/Users/x/.config/herdr-app/mods/chat/session-note.sh'", "timeout": 10},
+            {"type": "command", "command": "echo keep", "timeout": 1},
+        ]}]}}))
+        self.install()
+        data = json.loads(path.read_text())
+        commands = [h.get("command", "") for e in data["hooks"]["SessionStart"] for h in e.get("hooks", [])]
+        self.assertFalse(any("/mods/chat/session-note.sh" in c for c in commands))
+        self.assertTrue(any("/mods/collie-chat/session-note.sh" in c for c in commands))
+        self.assertIn("echo keep", commands)
+
     def test_sync_check_dry_run_and_copy(self):
         library = self.source / "lib/shared.js"
         library.parent.mkdir(exist_ok=True)
         library.write_text("export const value = 1;\n")
+        copies = self.source / "lib/COPIES"
+        copies.write_text(copies.read_text() + "shared.js: collie-inbox\n")
         environment = os.environ.copy()
         environment["HOME"] = str(self.home)
         command = [sys.executable, str(self.source / "bin/collie-sync"), "--root", str(self.source)]
@@ -254,7 +274,7 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(check.returncode, 1)
         dry = subprocess.run(command + ["--dry-run"], capture_output=True, env=environment, check=False)
         self.assertEqual(dry.returncode, 0)
-        copied = self.source / "mods/collie/lib/shared.js"
+        copied = self.source / "mods/collie-inbox/lib/shared.js"
         self.assertFalse(copied.exists())
         subprocess.run(command, capture_output=True, env=environment, check=True)
         self.assertEqual(copied.read_text(), library.read_text())

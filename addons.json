@@ -3,24 +3,33 @@
   "version": "0.0.0",
   "layout": "collie",
   "mods": [
-    "collie",
+    "collie-inbox",
+    "collie-artifacts",
+    "collie-chat",
+    "collie-chat-image",
+    "collie-chat-models",
+    "collie-chat-react",
+    "collie-pane-chat",
     "collie-rail",
     "collie-rules",
     "collie-tabs",
     "collie-chrome",
     "collie-settings",
-    "collie-chat"
+    "collie-files",
+    "collie-space",
+    "collie-close",
+    "collie-menu"
   ],
-  "needs": {
-    "tasks": ">=3.1.0 <4",
-    "chat": ">=3.1.0 <4",
-    "artifacts": ">=3.1.0 <4"
-  },
+  "needs": {},
   "helpers": [
-    "collie-sync"
+    "collie-sync",
+    "collie-task",
+    "collie-ticket",
+    "collie-secret",
+    "collie-artifact"
   ],
   "templates": [
-    "coordinator.md",
+    "collie-coordinator.md",
     "dev/worker.md"
   ],
   "keys": {},

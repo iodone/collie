@@ -1,0 +1,14 @@
+collie-files — attribution
+
+Source: Herdr's shipped `files` mod, the `files` folder under herdr-app's `mods/`
+(herdr-app is the platform, not Shepherdr). `main.js` and `mod.json` are ported
+from that mod: the folder tree, lazy directory loading, git status letters,
+bounded read-only preview, back-to-list, watchFolder and machine (`on`) support.
+Upstream quoted its own icons as "mods/" + the mod's name; here they are drawn
+from this mod's folder instead. Nothing else in `main.js` changed, and
+`mod.json` is `{ "place": "none" }` as upstream.
+
+Icons `chevron-down.svg`, `chevron-right.svg`, `file.svg`, `folder.svg` are
+Lucide icons (https://lucide.dev), ISC License, Copyright (c) 2026 Lucide Icons
+and Contributors. The full Lucide/Feather notice ships with herdr-app as
+`icons/LICENSE-Lucide.txt`.

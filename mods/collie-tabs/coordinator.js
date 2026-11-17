@@ -1,7 +1,7 @@
 // Coordinators: an agent started from the `coordinator` template (herdr-core), at most one per
 // space, in a tab of its own pinned first. Its workers are agents it started in tabs of their own:
 // its children, or terminals labelled herdr.coordinator=<its tab> (they survive its restart).
-// A coordinator tab can also have no agent yet: a chat pane (mods/chat, props.role "coordinator")
+// A coordinator tab can also have no agent yet: a chat pane (mods/collie-chat, props.role "coordinator")
 // that starts the coordinator on the person's first message. Those are recorded in shared
 // "coordinator.slots" = { [slot]: { space, tab, pane, folder } }. New spaces get one, on this
 // computer and on other machines alike (it runs on the space's machine), unless shared
@@ -10,12 +10,11 @@
 // Edit lib/coordinator.js, never a mod's copy, then run bin/sync-shared.
 
 import { appHome, exec, hc, run, openOverlay, shared, setShared, home, machines, focused, readTextFile } from "herdr";
-import { dirs } from "./dirs.js";
 import { isWorktreePath } from "./core/paths.js";
 import { terminals, panes, spaces as allSpaces } from "./live.js";
 import { chatPane, chatLabel } from "./core/spaces.js";
 import { logSpace } from "./spacelog.js";
-import { toast, plainError } from "./ui.js";
+import { toast, plainError } from "./lib/ui.js";
 
 // "vm/tb12" -> ["vm", "tb12"]; this machine's ids have no prefix.
 const split = (id) => (id?.includes("/") ? [id.split("/")[0], id.split("/").slice(1).join("/")] : ["", id]);
@@ -31,7 +30,7 @@ export function coordinatorIn(tabId, all = terminals(), ps = null) {
   const direct = all.find((k) => isCoordinator(k) && k.labels?.["herdr.tab"] === tab && split(k.address)[0] === machine);
   if (direct) return direct;
   // In Chat mode the agent has no pane and no tab label: its chat pane (herdr.chat) says where it is.
-  const chats = new Set((ps ?? panes()).filter((p) => p.mod === "chat" && p.tab === tabId).map((p) => p.pane));
+  const chats = new Set((ps ?? panes()).filter((p) => p.mod === "collie-chat" && p.tab === tabId).map((p) => p.pane));
   return chats.size ? all.find((k) => isCoordinator(k) && chats.has(chatPane(k))) ?? null : null;
 }
 
@@ -96,7 +95,7 @@ export function entryFor(k, known) {
 // script runs in a job of its own (set -m) under nohup, so it outlives the menu all the same.
 export const DETACH = 'if command -v setsid >/dev/null 2>&1; then setsid -f bash "$0" "$@"; else set -m; nohup bash "$0" "$@" & fi >/dev/null 2>&1 </dev/null';
 function script(name, args) {
-  return exec("bash", ["-c", DETACH, `${appHome()}/mods/coordinator/${name}.sh`, ...args]);
+  return exec("bash", ["-c", DETACH, `${appHome()}/mods/collie-tabs/bin/${name}.sh`, ...args]);
 }
 
 // Where a space's coordinator works: its focused (else first) terminal's folder.
@@ -104,52 +103,14 @@ function folderOf(space) {
   const mine = new Set(space.tabs.map((t) => t.id));
   const p = panes().find((p) => mine.has(p.tab) && p.focused && p.cwd) ?? panes().find((p) => mine.has(p.tab) && p.cwd);
   // A pane in Chat mode isn't a terminal pane: its agent's folder stands in for it.
-  const chat = !p && panes().find((q) => mine.has(q.tab) && q.mod === "chat");
+  const chat = !p && panes().find((q) => mine.has(q.tab) && q.mod === "collie-chat");
   const agent = chat && terminals().find((k) => chatPane(k) === chat.pane);
   return p?.cwd || agent?.cwd || space.folder || home();
 }
 
-// Shepherdr settings (mods/shepherdr-settings writes them; herdr-task reads them too):
-// Shepherdr's settings file (~/.config/shepherdr/settings.json) = { version, everywhere: SETTINGS, machines: { <machine>: SETTINGS },
-//   spaces: { <space id>: { folder, name, machine, ...SETTINGS } } }
-// with SETTINGS = { coordinator, worker, reviewer: { agent, model, effort, fast, perm },
-//   tasks: { merge: "auto"|"checks"|"ask", review_rounds, must_fix: "blocker"|"major"|"minor", max_running,
-//            archive_after (days Done tasks stay in the lists; 0: never archived) },
-//   automations: { enabled }, agents: { reactions, feedback, feedback_repo } }, every key optional. A machine is "local" (this computer) or its
-// name; a space on another machine is "<machine>/<id>". The settings window pushes each other
-// machine its share (with "here": its name) for its herdr-task. Settings edits only Everywhere and
-// spaces now; a machine's layer holds its machine-only rows (machine, home) and is still read for
-// anything it set for all its spaces before machine scope went.
-export const SHEPHERDR_FILE = () => dirs().settings;   // ~/.config/shepherdr/settings.json (lib/dirs.js)
-export const SHEPHERDR_DEFAULTS = { tasks: { merge: "ask", review_rounds: 0, must_fix: "major", max_running: 10, archive_after: 7 }, automations: { enabled: true },
-  agents: { reactions: true, suggestions: true, feedback: true, feedback_repo: "" } };
 export const LOCAL_MACHINE = "local";
-export async function readShepherdr() {
-  try { return JSON.parse((await readTextFile(SHEPHERDR_FILE())) ?? "{}") ?? {}; } catch { return {}; }
-}
-// A scope: null (Everywhere), "m:<machine>" (a machine), or a space id.
+// A scope's machine (null: this computer).
 export const machineOfSpace = (id) => (String(id).includes("/") ? String(id).split("/")[0] : LOCAL_MACHINE);
-// The layers a scope reads, most specific first: [{ level: "space"|"machine"|"everywhere", key, obj }].
-export function shepherdrLayers(cfg, scope = null) {
-  const out = [];
-  let machine = null;
-  if (scope && scope.startsWith("m:")) machine = scope.slice(2);
-  else if (scope) { out.push({ level: "space", key: scope, obj: cfg?.spaces?.[scope] || {} }); machine = machineOfSpace(scope); }
-  if (machine) out.push({ level: "machine", key: machine, obj: cfg?.machines?.[machine] || {} });
-  out.push({ level: "everywhere", key: null, obj: cfg?.everywhere || {} });
-  return out;
-}
-// What applies in a scope: the most specific layer that sets it wins, else the defaults.
-// Agents are whole choices; tasks and automations merge key by key.
-export function shepherdrFor(cfg, scope = null) {
-  const layers = shepherdrLayers(cfg, scope).reverse();
-  const out = {};
-  for (const role of ["coordinator", "worker", "reviewer"]) out[role] = layers.reduce((v, l) => l.obj[role] ?? v, null);
-  // agents: Reactions set before they were for every agent (SHEP-42's assistant.reactions) count where a layer has no agents'
-  const own = (l, k) => (k === "agents" && typeof l.obj.assistant?.reactions === "boolean" ? { reactions: l.obj.assistant.reactions, ...l.obj.agents } : l.obj[k] ?? {});
-  for (const k of ["tasks", "automations", "agents"]) out[k] = Object.assign({ ...SHEPHERDR_DEFAULTS[k] }, ...layers.map((l) => own(l, k)));
-  return out;
-}
 
 // One app command, waited for, with what it made ({ tab, pane, ... }).
 async function app(name, args) {
@@ -167,13 +128,13 @@ const machineReady = (name) => machines().find((m) => (m.name ?? null) === (name
 // the web app, or its tab closed while it ran on): the new tab takes it instead of starting another.
 function runningAssistant(space, ps = panes()) {
   const id = String(space.id).split("/").pop(), machine = space.machine ?? "";
-  const shown = (k) => ps.some((p) => p.terminal === k.address || (p.mod === "chat" && p.pane === chatPane(k)));
+  const shown = (k) => ps.some((p) => p.terminal === k.address || (p.mod === "collie-chat" && p.pane === chatPane(k)));
   return terminals().find((k) => isCoordinator(k) && split(k.address)[0] === machine && !shown(k)
     && [k.labels?.["herdr.coordinator.space"], k.labels?.["herdr.space"]].includes(id)) ?? null;
 }
 
 // Opens a space's coordinator tab, first in the space: a chat with no agent yet, which starts
-// the coordinator on the person's first message (mods/chat), on the space's machine. show: go to
+// the coordinator on the person's first message (mods/collie-chat), on the space's machine. show: go to
 // it; else the view stays. settings ({ agent, model, effort, fast, perm }, from the New space
 // dialog): what it starts with. A machine that's offline gets it once it's back (watchNewSpaces).
 export async function openCoordinator(space, show = true, settings = null) {
@@ -197,16 +158,25 @@ export async function openCoordinator(space, show = true, settings = null) {
     settings = { agent: selected.cli, model: selected.model ?? "default", effort: selected.effort ?? "high" };
   }
   const slot = `coord-${space.id}-${Math.random().toString(36).slice(2, 10)}`;
+  settings = settings.agent
+    ? { ...settings, perm: settings.perm ?? (settings.agent === "claude" ? "plan" : "read-only") }
+    : null;
+  if (!settings) {
+    toast({ title: "Configure Inbox Coordinator first", body: "Open Collie settings and choose Codex or Claude.", level: "error" });
+    return;
+  }
   const was = focused();
   const running = runningAssistant(space);
   try {
-    await exec(`${appHome()}/bin/collie-supervisor`, ["ensure", "--space", space.id]);
-    const listing = await exec("herdr-app", ["ls"]);
-    const current = JSON.parse(listing.stdout || "{}").spaces?.find((item) => item.id === space.id);
-    const out = { tab: current?.tabs?.find((tab) => tab.name === "Coordinator")?.id };
-    const pane = null;
+    const out = await app("tab.new", {
+      space: space.id,
+      name: "Coordinator",
+      mod: "collie-chat",
+      props: { role: "coordinator", template: "collie-coordinator", space: space.id, folder, slot, settings },
+    });
+    const pane = out.pane ?? panes().find((p) => p.tab === out.tab && p.mod === "collie-chat")?.pane ?? null;
     setShared("coordinator.slots", { ...liveSlots(), [slot]: { space: space.id, tab: out.tab, pane, folder } });
-    // The chat follows the agent its slot names (mods/chat adoptSlot).
+    // The chat follows the agent its slot names (mods/collie-chat adoptSlot).
     if (running && pane) await hc(["label", running.address, `herdr.chat=${chatLabel(pane)}`, `herdr.chat.slot=${slot}`, `herdr.chat.origin=slot:${slot}`,
       `herdr.coordinator.tab=${String(out.tab).split("/").pop()}`]).catch(() => {});
     await app("tab.move", { id: out.tab, index: 1 });
@@ -219,20 +189,19 @@ export async function openCoordinator(space, show = true, settings = null) {
   }
 }
 
-// New space: the New space dialog (mods/newspace), on the space's machine (none: this computer).
+// New space: the New space dialog (mods/collie-space), on the space's machine (none: this computer).
 // It finds that machine's recent folders and home first, so the dialog opens at the height its
 // content needs, its paths shown from that home.
 export async function newSpace(space) {
-  // The machine asked for, else (it can't be reached) this computer, as core/newspace.js startMachine: the dialog's
-  // Machine choice offers the rest, shown while another machine is connected.
+  // The machine asked for, else (it can't be reached) this computer: the dialog's Machine choice
+  // offers the rest, shown while another machine is connected.
   const asked = space?.machine ?? null;
   const machine = asked && !machineReady(asked) ? null : asked;
   const choosing = machines().some((m) => m.name && m.layout === "ready");
   const [recent, at] = await Promise.all([recentFolders(machine).catch(() => []), homeOf(machine).catch(() => null)]);
   if (!at) return toast({ title: `Couldn't reach ${machine}`, body: "Try New space again once it's connected.", level: "error" });
-  // The dialog draws its own panel (frame "none"), centered and as tall as what it shows now:
-  // the overlay is the panel at its tallest.
-  openOverlay({ mod: "newspace", kind: "dialog", frame: "none", width: 460, height: newSpaceHeight(recent.length, choosing), props: { recent, machine, home: at } });
+  // The dialog draws its own panel (frame "none"), centered as tall as what it shows now.
+  openOverlay({ mod: "collie-space", kind: "dialog", frame: "none", width: 460, height: newSpaceHeight(recent.length, choosing), props: { recent, machine, home: at } });
 }
 
 // A machine's home folder (null: this computer's).
@@ -242,18 +211,17 @@ export async function homeOf(machine = null) {
   return r.code === 0 && r.stdout.startsWith("/") ? r.stdout : null;
 }
 
-// The New space dialog's parts, in px (mods/newspace draws them at these sizes): its padding,
-// title, the Folder label and field (gap apart), list rows (a typed path's Use row, at most
-// NEWSPACE_SHOWN folders, then Choose folder…), the Coordinator row and, while it's on, its two
-// rows (Task ID, Agent), the buttons, and the space between sections. The overlay is the dialog
-// with the coordinator on; off, the dialog draws itself shorter in its middle.
-export const NEWSPACE = { pad: 18, title: 20, label: 16, gap: 4, field: 32, row: 31, line: 32, buttons: 32, section: 16 };
+// The New space dialog's parts, in px (mods/collie-space draws them at these sizes): its padding,
+// title, the Machine label and field (gap apart, a section after), the Folder label and field (gap
+// apart), the recent folder rows (at most NEWSPACE_SHOWN, then Choose folder…), the note under the
+// field, and the buttons, with a section before them.
+export const NEWSPACE = { pad: 18, title: 20, label: 16, gap: 4, field: 32, row: 31, buttons: 32, section: 16, note: 24 };
 export const NEWSPACE_SHOWN = 5;
-// choosing: the Machine choice shows (its label, field and the space under it), and another machine's folders may be
-// more, so the rows are at their most.
+// choosing: the Machine choice shows (its label, field and the space under it).
 export function newSpaceHeight(n, choosing = false) {
-  const k = NEWSPACE, rows = 1 + Math.min(choosing ? NEWSPACE_SHOWN : n, NEWSPACE_SHOWN) + 1;
-  return (choosing ? k.label + k.gap + k.field + k.section : 0) + 2 * k.pad + k.title + k.section + k.label + k.gap + k.field + k.gap + rows * k.row + k.section + 3 * k.line + k.section + k.buttons;
+  const k = NEWSPACE, rows = Math.min(NEWSPACE_SHOWN, n) + 1;
+  return (choosing ? k.label + k.gap + k.field + k.section : 0) + 2 * k.pad + k.title + k.section + k.label + k.gap + k.field + k.gap
+    + rows * k.row + k.note + k.section + k.buttons;
 }
 
 // A machine's folders people worked in (null: this computer's), newest first, at most 8: its spaces'
@@ -275,10 +243,11 @@ export async function recentFolders(machine = null) {
   return out;
 }
 
-// Makes a space at `folder` (New space dialog), on `machine` (null: this computer), and, unless
-// `settings` is null, its Coordinator tab, started with those settings on the first message; lands
-// in it. `icon`: the emoji the dialog picked (null: "#"), kept as the sidebar's Rename keeps it
-// (mods/spaces-chat sections.js setIcon). Resolves with the space id.
+// Makes a space at `folder` (New space dialog), on `machine` (null: this computer), and its
+// Coordinator tab, started with `settings` on the first message (undefined: Collie settings'
+// choice, as openCoordinator reads it); settings null leaves the space without one. Lands in it.
+// `icon`: the emoji the dialog picked (null: "#"), kept in shared "collie.spaceIcons"
+// ({ [space id]: emoji }), as the sidebar's Rename keeps a space's. Resolves with the space id.
 // With a coordinator, the space has only its Coordinator tab: Herdr's first shell tab goes, while
 // it is still a fresh shell nobody used.
 export async function createSpace(folder, settings, machine = null, icon = null) {
@@ -293,10 +262,7 @@ export async function createSpace(folder, settings, machine = null, icon = null)
     logSpace("rename", out.space, "coordinator.js createSpace (New space)", { to: name });
     await app("space.rename", { id: out.space, name }).catch(() => {});
   }
-  if (icon) {
-    const d = shared("spaces-chat") ?? {};
-    setShared("spaces-chat", { ...d, icons: { ...(d.icons ?? {}), [out.space]: icon } });
-  }
+  if (icon) setShared("collie.spaceIcons", { ...(shared("collie.spaceIcons") ?? {}), [out.space]: icon });
   if (settings === null) return out.space;
   await openCoordinator({ id: out.space, tabs: [], active: true, folder }, true, settings);
   if (out.terminal && out.tab && (await freshShell(out.terminal)))
@@ -305,7 +271,7 @@ export async function createSpace(folder, settings, machine = null, icon = null)
 }
 
 // A machine's home space (HERD-51): the space at its home folder, whose Assistant also looks after
-// the machine (herdr-task's home round). Made when missing, with its Assistant tab, and the view
+// the machine (collie-task's home round). Made when missing, with its Assistant tab, and the view
 // goes back to where the person was: Herdr's space.new shows the new space.
 export async function makeHomeSpace(machine = null) {
   const at = await homeOf(machine);
@@ -396,14 +362,6 @@ const wasReady = new Set();
 // first ran, made while it was off, or made on a machine while it was away, are left alone.
 export function watchNewSpaces(spaces) {
   if (machines().find((m) => m.name == null)?.layout !== "ready") return;
-  const active = spaces.find((space) => space.active);
-  if (active) {
-    const checked = shared("coordinator.ensureAt") ?? {};
-    if ((checked[active.id] ?? 0) + 15000 < Date.now()) {
-      setShared("coordinator.ensureAt", { ...checked, [active.id]: Date.now() });
-      exec(`${appHome()}/bin/collie-supervisor`, ["ensure", "--space", active.id]).catch(() => {});
-    }
-  }
   // A menu that closes at once (the + menu, a space's Start Assistant) asks the tab bar to open a
   // coordinator tab for it.
   const req = shared("coordinator.openreq");
@@ -427,10 +385,10 @@ export function watchNewSpaces(spaces) {
   }
   // The New space dialog closes as soon as it asks: the space is made here (createSpace), where
   // the work isn't cut short by the dialog going when the view moves to the new space.
-  const make = shared("newspace.createreq");
+  const make = shared("collie.spacereq");
   if (make) {
-    setShared("newspace.createreq", null);
-    if (Date.now() - make.at < 10000) createSpace(make.folder, make.settings ?? null, make.machine ?? null, make.icon ?? null)
+    setShared("collie.spacereq", null);
+    if (Date.now() - make.at < 10000) createSpace(make.folder, make.settings, make.machine ?? null, make.icon ?? null)
       .catch((e) => toast({ title: "Space wasn't made", body: plainError(e), level: "error" }));
   }
   // Settings > Machines turned a machine's Home Assistant on: its home space, made if missing.
@@ -489,10 +447,10 @@ function watchRemoteSpaces(spaces) {
   return fresh;
 }
 
-// The task (herdr-task) an agent works on: its key, or null.
+// The task (collie-task) an agent works on: its key, or null.
 export const taskOf = (k) => k?.labels?.["herdr.task"] ?? null;
 
-// Restarts a task's agent in its tab through herdr-task, as `agentKey` or as it was.
+// Restarts a task's agent in its tab through collie-task, as `agentKey` or as it was.
 export const switchTask = (k, agentKey) =>
   script("task", [taskOf(k), k.foreground?.cwd ?? k.cwd, parentOf(k) ?? "", ...(agentKey ? [agentKey] : [])]);
 
@@ -500,16 +458,12 @@ export const switchTask = (k, agentKey) =>
 // (a coordinator from the template again, so edited instructions apply).
 export const restartAgent = (k, argv) => script("restart", argv ? [k.address, JSON.stringify(argv)] : [k.address]);
 
-// Closes a tab. A coordinator with live workers asks first; a space's last tab closes the space,
-// so it asks as Close space does (our confirm, not Herdr's).
+// Closes a tab. A coordinator always asks first (stop/keep workers); a space's last tab closes
+// the space, so it asks as Close space does (our confirm, not Herdr's).
 export function closeTab(tabId) {
   const c = coordinatorIn(tabId);
   if (c) {
-    run("tab.settle", { id: tabId });
-    return;
-  }
-  if (c && workersOf(c).length) {
-    openOverlay({ mod: "coordinator", kind: "dialog", width: 440, height: 336, props: { view: "close", tab: tabId } });
+    openOverlay({ mod: "collie-close", kind: "dialog", width: 440, height: 336, props: { tab: tabId, coord: c.address } });
     return;
   }
   const space = allSpaces().find((s) => s.tabs.some((x) => x.id === tabId));
@@ -517,25 +471,28 @@ export function closeTab(tabId) {
   run("tab.close", { id: tabId });
 }
 
-// Rename a tab: our prompt (mods/prompt-chat, the app's one dialog footer), its field holding the
-// name given (empty when nobody named it: it keeps its number).
+// Rename a tab: Herdr's prompt (mods/prompt), its field holding the name given (empty when nobody
+// named it: it keeps its number), its hint showing the name it has.
 export function renameTab(tab) {
-  openOverlay({ mod: "prompt-chat", kind: "dialog", width: 400, height: 196, props: { title: "Rename tab",
-    value: tab?.named ? tab.name : "", placeholder: tab?.name ?? "", command: { name: "tab.rename", args: { id: tab?.id } } } });
+  openOverlay({ mod: "prompt", kind: "dialog", width: 400, props: { title: "Rename tab",
+    value: tab?.named ? tab.name : "", hint: `Now: ${tab?.name ?? "Tab"}`, command: { name: "tab.rename", args: { id: tab?.id } } } });
 }
 
-// A space's Rename and Close, as its sidebar menu does them (mods/spaces-chat): the Rename dialog
-// (name and icon), and our confirm (mods/confirm-chat) before Herdr's close.
+// A space's Rename: Herdr's prompt (as Rename tab uses), its field holding the name given (empty
+// when nobody named it: the name stays). Close asks Herdr's confirm (mods/confirm) before
+// Herdr's close.
 export function renameSpace(id) {
-  openOverlay({ mod: "spaces-chat", kind: "dialog", frame: "none", width: 380, height: 172, props: { view: "rename", space: id } });
+  const space = allSpaces().find((s) => s.id === id);
+  openOverlay({ mod: "prompt", kind: "dialog", width: 400, props: { title: "Rename space",
+    value: space?.named ? space.name : "", hint: `Now: ${space?.name ?? "Space"}`, command: { name: "space.rename", args: { id } } } });
 }
 export function closeSpace(id) {
   const name = allSpaces().find((s) => s.id === id)?.name;
-  openOverlay({ mod: "confirm-chat", kind: "dialog", width: 400, height: 168, props: {
+  openOverlay({ mod: "confirm", kind: "dialog", width: 400, height: 168, props: {
     title: name && name !== "~" ? `Close \u201c${name}\u201d?` : "Close this space?",
-    detail: "Its tabs close and every program in them ends.", verb: "Close space",
+    detail: "Its tabs close and every program in them ends.",
     command: { name: "space.close", args: { id, confirmed: true } } } });
-  logSpace("close", id, "coordinator.js closeSpace (asks in confirm-chat)");
+  logSpace("close", id, "coordinator.js closeSpace (asks in mods/confirm)");
 }
 
 // An element's place in the window, from a mouse event on it: { x, y, width, height }.

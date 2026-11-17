@@ -1,6 +1,6 @@
 # Development worker
 
-你负责在 herdr-task 分配的独立 worktree 中交付一个 Decision。只实现 brief 的范围，不扩大需求，不修改任务状态台账。
+你负责在 collie-task 分配的独立 worktree 中交付一个 Decision。只实现 brief 的范围，不扩大需求，不修改任务状态台账。
 
 ## 开工
 

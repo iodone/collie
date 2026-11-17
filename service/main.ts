@@ -14,10 +14,6 @@ import type { DeliveryRunner } from "../plugins/delivery/common.ts";
 import { startAnswerServer } from "./answer-server.ts";
 import { coordinatorConfig, runCoordinator, type CoordinatorRunner } from "../plugins/agent/coordinator.ts";
 import { createHash } from "node:crypto";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-
-const execFileAsync = promisify(execFile);
 
 type Json = Record<string, any>;
 
@@ -163,6 +159,63 @@ export class InboxService {
     return this.#executeSpawn(decision, dispatch);
   }
 
+  /**
+   * Narrow ticket entry: a human (or its coordinator) names space/title/brief and the
+   * kernel builds the Decision itself. No second LLM round, so a chat turn cannot
+   * double-judge; the Decision still goes through `coordinate` for schema + guard checks.
+   */
+  async createTicket(input: { space?: string; title?: string; brief?: string; kind?: string }): Promise<Json> {
+    const space = input.space;
+    if (typeof space !== "string" || !/^[a-z0-9][a-z0-9_-]{1,63}$/.test(space)) throw new Error("invalid space");
+    const title = input.title;
+    if (typeof title !== "string" || !/^(?![\s-])[^{}\r\n]{1,200}$/.test(title)) throw new Error("invalid title");
+    const brief = input.brief;
+    if (typeof brief !== "string" || !brief.trim() || brief.length > 200_000) throw new Error("brief must be 1–200000 chars");
+    const kind = input.kind ?? "build";
+    if (kind !== "build" && kind !== "review") throw new Error("kind must be build or review");
+    if (!this.#options.workspaces?.[space]?.folder) throw new Error(`no worker workspace configured for space ${space}`);
+
+    const at = (this.#options.now ?? (() => new Date()))().toISOString();
+    const id = ledgerId("ev");
+    const directory = join(this.stateDir, "tickets");
+    mkdirSync(directory, { recursive: true });
+    const dataRef = join(directory, `${id}.md`);
+    writeFileSync(dataRef, brief, { mode: 0o600 });
+    const event = {
+      id, source: "im", key: `human:ticket:${id}`, type: "human.ticket_requested",
+      object: { kind: "none", id }, title,
+      data_ref: dataRef, data_digest: `sha256:${createHash("sha256").update(brief).digest("hex")}`,
+      hops: 0, received_at: at,
+      merge: { lane_key: `coordinator:none:${id}`, object_key: `none:${id}`, first_seen_at: at, occurrences: 1 },
+      space_candidates: [space],
+    };
+    const dispatch: Dispatch = { kind: "coordinator", laneKey: event.merge.lane_key, space, event };
+    const briefRef = join(this.stateDir, "briefs", `${event.id}.md`);
+    const decision = await coordinate(dispatch, {
+      ledger: this.ledger, ruleset: this.#options.ruleset, stream: "chat_turn",
+      policy: this.#policy(space),
+      onDecision: () => this.#projectQueue(),
+      spaceNote: `新建 ticket：${title}`,
+      decide: () => ({
+        state: "open",
+        why: `新建 ticket：${title}`.slice(0, 140),
+        actions: [{
+          kind: "spawn_task", risk_tags: [],
+          spawn: {
+            title, brief_ref: briefRef, base: "current", review: true, merge: false,
+            access: kind === "review" ? "read" : "edit", tells: "needed",
+          },
+        }],
+        run: { kind },
+      }),
+      ...(this.#options.now ? { now: this.#options.now } : {}),
+      ...(this.#options.rolePromptRef ? { rolePromptRef: this.#options.rolePromptRef } : {}),
+    });
+    this.#projectQueue();
+    const executed = await this.#executeSpawn(decision, dispatch);
+    return { decision_id: executed.id, ticket_ref: executed.run?.task_ref ?? null };
+  }
+
   async #dispatch(dispatch: Dispatch): Promise<Json> {
     if (dispatch.kind === "record_only") return this.#recordOnly(dispatch);
     if (dispatch.kind === "coordinator") {
@@ -300,7 +353,7 @@ if (import.meta.main) {
   const service = new InboxService({
     stateDir,
     ruleset: JSON.parse(readFileSync(rulesetPath, "utf8")),
-    rolePromptRef: join(homedir(), ".config", "herdr-core", "templates", "coordinator.md"),
+    rolePromptRef: join(homedir(), ".config", "herdr-core", "templates", "collie-coordinator.md"),
     ...(existsSync(workspacesPath) ? { workspaces: JSON.parse(readFileSync(workspacesPath, "utf8")) } : {}),
     coordinator: { settingsPath: coordinatorPath },
   });
@@ -318,20 +371,5 @@ if (import.meta.main) {
   };
   await drain();
   setInterval(drain, 1000);
-  let supervising = false;
-  setInterval(async () => {
-    if (supervising) return;
-    supervising = true;
-    try {
-      const runtimePath = join(stateDir, "coordinator-runtime.json");
-      if (existsSync(runtimePath)) {
-        const runtime = JSON.parse(readFileSync(runtimePath, "utf8"));
-        for (const [space, record] of Object.entries(runtime.spaces ?? {})) {
-          if ((record as Json).enabled) await execFileAsync(join(homedir(), ".config", "herdr-app", "bin", "collie-supervisor"), ["ensure", "--space", space]);
-        }
-      }
-    } catch (error) { console.error("coordinator supervisor failed:", error instanceof Error ? error.message : error); }
-    finally { supervising = false; }
-  }, 10000);
   console.error(`collie service ready: ${incoming}`);
 }

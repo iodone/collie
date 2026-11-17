@@ -1,58 +1,186 @@
 #!/usr/bin/env python3
-"""Copy the canonical lib/*.js files into every mod's lib directory."""
+"""Keep each mod's copies of shared modules equal to their one source.
 
+A mod can only import files inside its own folder (Herdr refuses symlinks and ../ paths that
+resolve outside it), so a module several mods use is copied into each. `lib/<file>` is the source;
+`lib/COPIES` names the mods that carry a copy. Edit `lib/<file>`, never a copy, then run this.
+A name `core/<file>` is shared headless code: its source is `core/<file>` beside `lib/`, and each
+mod's copy is `mods/<mod>/core/<file>`.
+
+  bin/collie-sync                 copy every listed source into its mods
+  bin/collie-sync --check         change nothing; exit 1 if any copy differs
+  bin/collie-sync --dry-run       print what would change; write nothing
+  bin/collie-sync --from <copy>   a copy was edited by hand: make it the source, then sync
+
+A copy that differs from both its source and what this last wrote there (`lib/.last/`) was edited
+by hand: it is never overwritten; the run fails and names it (keep its change with `--from`, or
+move the change into the source). A fresh checkout has no `lib/.last`: what git last committed of
+the source stands in for it (a copy equal to that is ours, not hand-edited).
+"""
 import argparse
-import hashlib
 import os
-from pathlib import Path
 import shutil
-import tempfile
+import subprocess
+import sys
+from pathlib import Path
+from typing import Dict, List, Optional
 
 
-def digest(path):
-    return hashlib.sha256(path.read_bytes()).digest()
-
-
-def copy(source, target):
-    target.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(prefix=f".{target.name}.", dir=target.parent)
-    try:
-        with os.fdopen(fd, "wb") as stream:
-            stream.write(source.read_bytes())
-        shutil.copymode(source, temporary)
-        os.replace(temporary, target)
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
-
-
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+def default_root() -> Path:
     checkout = Path(__file__).resolve().parent.parent
-    default_root = checkout if (checkout / "lib").is_dir() and (checkout / "mods").is_dir() else Path.home() / ".config/herdr-app"
-    parser.add_argument("--root", type=Path, default=default_root)
+    if (checkout / "lib/COPIES").is_file() and (checkout / "mods").is_dir():
+        return checkout
+    return Path.home() / ".config/herdr-app"
+
+
+def read(path: Path) -> Optional[bytes]:
+    try:
+        return path.read_bytes()
+    except FileNotFoundError:
+        return None
+
+
+def write(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.sync-{os.getpid()}")
+    try:
+        temporary.write_bytes(data)
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+class Sync:
+    def __init__(self, root: Path):
+        self.root = root
+        self.lib = root / "lib"
+        self.mods = root / "mods"
+        self.last = self.lib / ".last"
+
+    def source(self, name: str) -> Path:
+        return self.root / name if name.startswith("core/") else self.lib / name
+
+    def target(self, mod: str, name: str) -> Path:
+        # lib/<file> -> mods/<mod>/lib/<file>; core/<file> -> mods/<mod>/core/<file>.
+        return self.mods / mod / (name if name.startswith("core/") else f"lib/{name}")
+
+    def committed(self, name: str) -> Optional[bytes]:
+        relative = self.source(name).relative_to(self.root)
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(self.root), "show", f"HEAD:{relative}"],
+                capture_output=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return result.stdout if result.returncode == 0 else None
+
+    def copies(self) -> Dict[str, List[str]]:
+        copies: Dict[str, List[str]] = {}
+        with (self.lib / "COPIES").open() as stream:
+            for line in stream:
+                line = line.split("#", 1)[0].strip()
+                if not line:
+                    continue
+                name, mods = line.split(":", 1)
+                copies[name.strip()] = mods.split()
+        return copies
+
+    def promote(self, copy: Path, table: Dict[str, List[str]]) -> None:
+        copy = copy.resolve()
+        try:
+            relative = copy.relative_to(self.root)
+        except ValueError:
+            raise SystemExit(f"collie-sync: {copy} is outside {self.root}")
+        parts = relative.parts
+        if len(parts) < 4 or parts[0] != "mods" or parts[2] not in ("lib", "core"):
+            raise SystemExit(f"collie-sync: {relative} is not a mod lib/ or core/ copy")
+        mod = parts[1]
+        if parts[2] == "core":
+            name = "/".join(parts[2:])
+        else:
+            name = "/".join(parts[3:])
+        if name not in table or mod not in table[name]:
+            raise SystemExit(f"collie-sync: {relative} is not a copy listed in lib/COPIES")
+        shutil.copyfile(copy, self.source(name))
+        print(f"{self.source(name).relative_to(self.root)} <- {relative}")
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--root", type=Path, default=default_root(), help="checkout or installed herdr-app root")
     mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--check", action="store_true", help="report drift without writing")
-    mode.add_argument("--dry-run", action="store_true")
-    args = parser.parse_args()
-    root = args.root.resolve()
-    library = root / "lib"
-    mods = root / "mods"
-    if not library.is_dir() or not mods.is_dir():
-        parser.error("both lib/ and mods/ must exist")
-    sources = sorted(path for path in library.glob("*.js") if path.is_file())
+    mode.add_argument("--check", action="store_true", help="change nothing; exit 1 if a copy differs")
+    mode.add_argument("--dry-run", action="store_true", help="print what would change; write nothing")
+    parser.add_argument("--from", dest="from_copy", type=Path, help="promote a hand-edited copy to the source")
+    args = parser.parse_args(argv)
+
+    root = args.root.expanduser().resolve()
+    sync = Sync(root)
+    if not (sync.lib / "COPIES").is_file():
+        parser.error(f"{sync.lib / 'COPIES'} is missing")
+    if not sync.mods.is_dir():
+        parser.error(f"{sync.mods} is missing")
+    table = sync.copies()
+    if args.from_copy:
+        sync.promote(args.from_copy, table)
+
+    bad: List[str] = []
+    made: List[str] = []
     changed = 0
-    for mod in sorted(path for path in mods.iterdir() if path.is_dir()):
-        for source in sources:
-            target = mod / "lib" / source.name
-            if target.exists() and digest(source) == digest(target):
+    for name, mods in table.items():
+        source = read(sync.source(name))
+        if source is None:
+            bad.append(f"{sync.source(name).relative_to(root)} is missing")
+            continue
+        last = read(sync.last / name)
+        if last is None:
+            last = sync.committed(name)
+        for mod in mods:
+            path = sync.target(mod, name)
+            rel = path.relative_to(root)
+            if not (sync.mods / mod).is_dir():
+                bad.append(f"{rel}: mods/{mod} is gone (remove it from lib/COPIES)")
+                continue
+            have = read(path)
+            if have == source:
                 continue
             changed += 1
-            print(f"{'would sync' if args.check or args.dry_run else 'sync'} {source} -> {target}")
-            if not args.check and not args.dry_run:
-                copy(source, target)
-    print(f"{changed} file(s) {'out of sync' if args.check else 'changed'}")
-    return 1 if args.check and changed else 0
+            if args.check:
+                bad.append(f"{rel} differs from {sync.source(name).relative_to(root)}")
+            elif args.dry_run:
+                print(f"would sync {sync.source(name).relative_to(root)} -> {rel}")
+            elif have is None or have == last:
+                write(path, source)
+                made.append(str(rel))
+            else:
+                bad.append(
+                    f"{rel} was edited by hand: keep it with `bin/collie-sync --from {rel}`, "
+                    f"or move the change into {sync.source(name).relative_to(root)}"
+                )
+        if not args.check and not args.dry_run:
+            write(sync.last / name, source)
+        # A copy in a mod that lib/COPIES does not list, with the same first line, is stale.
+        head = source.split(b"\n", 1)[0]
+        for mod in sorted(p.name for p in sync.mods.iterdir() if p.is_dir()):
+            path = sync.target(mod, name)
+            if mod not in mods and (read(path) or b"").split(b"\n", 1)[0] == head:
+                bad.append(f"{path.relative_to(root)} looks like a copy of {sync.source(name).relative_to(root)}: add {mod} to lib/COPIES")
+
+    for rel in made:
+        print(f"synced {rel}")
+    if bad:
+        print("collie-sync: " + ("copies out of sync" if args.check else "not synced") + ":", file=sys.stderr)
+        for item in bad:
+            print(f"  {item}", file=sys.stderr)
+        return 1
+    if args.check:
+        print(f"collie-sync: all {sum(len(mods) for mods in table.values())} copies match lib/ and core/")
+    elif not args.dry_run:
+        print(f"collie-sync: {changed} change(s)")
+    return 0
 
 
 if __name__ == "__main__":

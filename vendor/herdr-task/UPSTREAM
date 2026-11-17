@@ -1,0 +1,8 @@
+repository: https://github.com/eliasstravik/shepherdr
+commit: 7d183cf76986b679be79561993c5cb32778e824e
+commit-date: 2026-11-08T21:39:36+01:00
+path: mods/tasks/bin/
+launcher: mods/tasks/bin/herdr-task
+package: mods/tasks/bin/herdr_task/
+license: MIT
+vendored-at: 2026-11-17

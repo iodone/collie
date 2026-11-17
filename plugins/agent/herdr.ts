@@ -26,7 +26,7 @@ export interface SpawnedTask {
 }
 
 export const defaultHerdrRunner: TaskRunner = async (args) => {
-  const { stdout } = await execFileAsync("herdr-task", args, { maxBuffer: 4 * 1024 * 1024 });
+  const { stdout } = await execFileAsync(process.env.COLLIE_TASK_CLI ?? "collie-task", args, { maxBuffer: 4 * 1024 * 1024 });
   return JSON.parse(stdout);
 };
 const defaultRunner = defaultHerdrRunner;
@@ -43,7 +43,7 @@ const receiptId = () => `rc_${randomUUID().replaceAll("-", "").slice(0, 16)}`;
 const taskId = (result: Json): string => {
   const id = result.id ?? result.task?.id;
   if ((typeof id !== "string" && typeof id !== "number") || String(id).length === 0) {
-    throw new Error("herdr-task add --json returned no task id");
+    throw new Error("collie-task add --json returned no task id");
   }
   return String(id);
 };
@@ -58,7 +58,7 @@ function spawnAction(decision: Json): Json {
   if (spawn.parallel && spawn.parallel !== 1) throw new Error("M1 dispatches one worker per decision");
   if (spawn.review !== true) throw new Error("ready receipts require a recorded review");
   if (typeof spawn.title !== "string" || !/^(?![\s-])[^{}\r\n]{1,200}$/.test(spawn.title)) {
-    throw new Error("spawn.title is not a safe herdr-task title");
+    throw new Error("spawn.title is not a safe collie-task title");
   }
   if (typeof spawn.brief_ref !== "string" || !/^\/[^\s]+$/.test(spawn.brief_ref)) {
     throw new Error("spawn.brief_ref must be an absolute path");
@@ -114,7 +114,7 @@ export async function waitForHerdrReceipt(
     const state = view.state;
     if (state !== "ready") {
       if (state === "done") throw new Error("task reached done before a ready receipt was collected");
-      if (typeof state !== "string") throw new Error("herdr-task show returned no state");
+      if (typeof state !== "string") throw new Error("collie-task show returned no state");
       previousState = state === "running" ? "working" : state;
       if (poll + 1 < maxPolls) await sleep(interval);
       continue;

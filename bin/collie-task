@@ -1,0 +1,47 @@
+#!/usr/bin/env python3
+"""collie-task: run collie's vendored copy of herdr-task.
+
+The CLI is herdr-task's own; only the source it runs from changes. Resolution order:
+
+  1. $COLLIE_TASK_VENDOR            explicit vendor root (the folder holding herdr_task/)
+  2. ../vendor/herdr-task           beside a source checkout (bin/../vendor/herdr-task)
+  3. ~/.local/share/collie/vendor/herdr-task
+     (installed copy; also what an installed ~/.config/herdr-app/bin/collie-task uses)
+
+The vendor root goes first on sys.path so another installed `herdr_task` package can
+never win, and no bytecode is written into the vendored source.
+"""
+
+import os
+import sys
+from pathlib import Path
+
+
+def vendor_root() -> Path:
+    candidates = []
+    explicit = os.environ.get("COLLIE_TASK_VENDOR")
+    if explicit:
+        candidates.append(Path(explicit).expanduser())
+    candidates.append(Path(__file__).resolve().parent.parent / "vendor/herdr-task")
+    candidates.append(Path.home() / ".local/share/collie/vendor/herdr-task")
+    for candidate in candidates:
+        if (candidate / "herdr_task/cli.py").is_file():
+            return candidate
+    looked = "\n  ".join(str(path) for path in candidates)
+    raise SystemExit(
+        f"collie-task: cannot find the vendored herdr_task package; looked at:\n  {looked}\n"
+        "Set COLLIE_TASK_VENDOR to the folder that contains herdr_task/."
+    )
+
+
+def main() -> int:
+    root = vendor_root()
+    sys.dont_write_bytecode = True
+    sys.path.insert(0, str(root))
+    from herdr_task.cli import main as run  # noqa: E402
+
+    return run()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -7,7 +7,7 @@
 | 内容 | root 下的位置 |
 | :-- | :-- |
 | layout、mods、lib、CLI | `.config/herdr-app/` |
-| `collie-sync` helper | `.local/bin/collie-sync`（herdr-app 的 `bin/` 也保留一份） |
+| helper（`collie-sync` / `collie-task` / `collie-ticket` / `collie-secret`，外加 `collie-artifact`） | `.local/bin/`（herdr-app 的 `bin/` 也保留一份） |
 | 提示词 | `.config/herdr-core/templates/` |
 | 后台 runtime（service / kernel / plugins / protocol） | `.local/share/collie/` |
 | 运行状态与初始 `ruleset.json` | `.local/state/collie/` |
@@ -19,12 +19,13 @@
 ## 前置依赖
 
 - Python 3.10+；
-- herdr / shepherdr，且 `herdr-task` 在 `PATH`；
-- shepherdr 3.1.x 提供的 `herdr-task` 执行层，以及 `tasks` / `chat` / `artifacts` 三个 add-on；
+- herdr-app / herdr-core（hc）在 `PATH`；
 - `bun`、`git` 在 `PATH`；
-- Inbox 使用独立 layout；Ticket 详情的 Terminal 用 herdr 的 terminal block，Artifacts 复用 shepherdr 的 `task-artifacts`。
+- 至少一个已登录的 CLI agent（Claude Code / Codex）；
+- collie 自带 vendored `collie-task` / `collie-artifact`，不要求安装 shepherdr 的 `tasks` / `chat` / `artifacts` add-on；
+- Inbox 使用独立 layout；Ticket 详情的 Terminal 用 herdr 的 terminal block，Artifacts 用 collie 自有的 `collie-artifacts`（列表与 viewer 工具栏同一个 mod）。
 
-版本优先从 `.config/shepherdr/installed.json` 或 herdr-app 的 `data/shepherdr/installed.json` 读取；没有这些文件时依次尝试 add-on 元数据和 `herdr-task --version`。缺依赖时安装会在写入前停止。
+安装器在写入前检查 bundled `collie-task`、`bun`、`git`；不再读取 shepherdr 的 `installed.json` 或 `herdr-task --version`。
 
 ## 安装
 
@@ -54,11 +55,22 @@ bin/collie doctor --root "$ROOT"
 
 ## 启动后台
 
-默认安装后直接运行：
+开发时可直接运行：
 
 ```sh
 bun "$HOME/.local/share/collie/service/main.ts"
 ```
+
+正式安装由 systemd user unit / launchd agent 管理：`RunAtLoad` + `KeepAlive`，开机自动拉起。**每台机器只有一个 collie service**，不是每个 space 一个。
+
+```sh
+collie service install      # 写 unit 并启动（真实 HOME）
+collie service status       # GET /health: pid/uptime/state
+collie service stop
+collie service uninstall
+```
+
+隔离 root 的 `service install` 只写 unit，不调用 launchctl/systemctl。
 
 隔离 root 必须同时隔离进程的 HOME，否则服务会回到真实 HOME 找状态：
 
@@ -84,9 +96,13 @@ bun "$ROOT/.local/share/collie/service/main.ts"
     "collie": {
       "coordinator": { "cli": "claude", "model": "default", "effort": "medium" }
     }
-  }
+  },
+  "chat": { "agent": "claude", "model": null, "effort": null, "fast": false, "perm": "plan" }
 }
 ```
+
+`chat` 是 Coordinator chat 的 picker 记住的选择：下一次空 chat 从这里起步，首条消息按它启动。`model: null` 表示
+用 CLI 自己的默认模型（不加 `--model`）。它只属于聊天，和 headless coordinator 的 `everywhere.coordinator` 相互独立。
 
 space 配置覆盖 Everywhere；未配置有效 `cli` 时不会静默选择另一款 agent。CLI 只返回 Decision JSON，spawn、护栏和 delivery 仍由 service 执行。
 
@@ -117,18 +133,57 @@ space 配置覆盖 Everywhere；未配置有效 `cli` 时不会静默选择另�
 - `drop` 直接 `settled{dropped}`；`later` 保持 `waiting`。
 - 打开/展开只是 `ack`，不会结案；只有 Card answer 的 outcome 才结案。
 
-## Coordinator 常驻与恢复
+## Secrets
 
-每个 space 的 Coordinator 由 `collie-supervisor` 保证：激活 space 时去重接管，后台每 10 秒检查。恢复语义直接复用 shepherdr 的 `revive.py`：
+`collie-secret` 让 agent 按名字用密钥，值不进口语、日志或 artifact。保险库在 `~/.local/share/collie/secrets/vault.json`（目录 0700、文件 0600；`COLLIE_SECRETS_HOME` 可改位置），与 chat 的 ask card 写的是同一个文件。
 
-- live Coordinator 直接接管，不重复启动。
-- 运行中持续记录原 argv、cwd、session 和 log。
+```bash
+# agent（在其 Collie 终端里）
+collie-secret ask GITHUB_TOKEN --why "push the branch"   # 在 chat 里留一张掩码卡，然后结束本轮
+collie-secret list                                       # 能用的名字
+collie-secret run GITHUB_TOKEN -- git push               # 值只在命令环境里，输出中的值被替换成 [GITHUB_TOKEN hidden]
+
+# 人
+printf '%s\n' "$VALUE" | collie-secret set GITHUB_TOKEN --why "push the branch"
+collie-secret names --json                               # 只有名字、why、时间，没有值
+collie-secret rm GITHUB_TOKEN
+```
+
+- `ask` 只把 `collie.secret.ask.NAME=<why>` 留在该终端上；chat 的卡片（`mods/collie-chat/secret-card.js`）保存后回报 agent「Kept: NAME」，agent 再按名字用。
+- 值短于 4 个字符不掩码（否则会把输出里每个字母都替换掉）。
+- 与 shepherdr 的 `herdr-secret` 相比，机器级别（Everywhere / 某台机器 / 某个 space）、远端保管与 FIFO 应答（`serve` / `install --on` / `mark-remote` / `where`）、`env` 子命令都没有移植。
+
+## Coordinator 生命周期与恢复
+
+Coordinator 参考 shepherdr 的 Assistant，但尽量只依赖 herdr-core：
+
+- 每个 space 一个 coordinator，tab 固定在最前。
+- tab 里先是一个 chat pane，没有 agent；第一条消息才启动。
+- agent 是普通 kept terminal：`hc run --bg --no-parent --keep`，停在 chat pane 后面。
+- app 关闭不会杀 coordinator；herdr-core 会保活终端。
+- 电脑关机后，开机由 herdr-core 拉起终端；agent 丢失时由 tick/revive 原地恢复。
+
+恢复语义：
+
+- live coordinator 直接接管，不重复启动。
+- 持续记录原 argv、cwd、session 和 log。
 - kept terminal 退回 shell 时，在同一 terminal 恢复原 session。
-- terminal 已消失时新建 terminal，但仍 resume 同一 session。
 - session log 不存在时新建 session，并带 handover，不伪造恢复成功。
-- 普通关闭 Coordinator Tab 使用 settle；只有 `collie-supervisor stop --space <id>` 才禁止自动拉起。
+- 恢复由 `herdr-task tick` 触发：service 在时由 service 每 15 秒 tick；service 不在时窗口自己 tick。
+- 普通关闭 Coordinator Tab 不能直接 `tab.settle`；有 worker 时问 stop/keep，无 worker 也只会关 tab。
+- 停止就是显式关闭 tab，或 `hc rm` 掉终端；没有 `collie coordinator stop`，因为 service 不做 auto-ensure。
+- 没有 `collie coordinator ensure`；终端被删后不自动重建，人重新打开 coordinator tab。
 
-恢复模块只接管带 `herdr.inbox=true` 的 Coordinator，不处理 shepherdr Assistant 或其他任务。
+运行时观察：
+
+```sh
+collie status
+collie service status
+herdr-app ls
+hc get <coordinator>
+```
+
+`collie doctor` 只检查安装完整性；`collie status` 才看运行状态。`collie-supervisor` 整个删除，不保留公共命令或内部入口。
 
 ## 键位合并
 
@@ -182,26 +237,30 @@ bin/collie uninstall --yes
 
 ## 同步共享 lib
 
-仓库根目录的 `lib/*.js` 是唯一源。修改后同步到每个 mod：
+`lib/<file>` 和 `core/<file>` 是唯一源；`lib/COPIES` 声明哪些 mod 需要副本。不要直接改 `mods/<mod>/lib/` 或 `mods/<mod>/core/` 里的副本。
 
 ```sh
-bin/collie-sync --check
-bin/collie-sync
+bin/collie-sync --check   # 只检查，漂移返回 1
+bin/collie-sync           # 同步
 bin/collie-sync --check
 ```
 
-`--check` 发现差异返回 1，不写文件；`--dry-run` 只打印计划。源码 checkout 与 herdr-app 中的命令自动识别各自 root；`.local/bin` 的 helper 默认使用 `$HOME/.config/herdr-app`。隔离 root 下显式传 `--root "$ROOT/.config/herdr-app"`。
+- `lib/<file>` → `mods/<mod>/lib/<file>`；`core/<file>` → `mods/<mod>/core/<file>`。
+- 手改过的副本不会被静默覆盖；用 `bin/collie-sync --from <copy>` 把它提升为源。
+- `lib/.last/` 记录上次写入内容，已加入 `.gitignore`；安装器不会复制它。
+- `--dry-run` 只打印计划；源码 checkout 和 herdr-app 自动识别 root，`.local/bin` 的 helper 默认使用 `$HOME/.config/herdr-app`。
+- 隔离 root 显式传 `--root "$ROOT/.config/herdr-app"`。
 
 ## 常见故障
 
 | 症状 | 检查 |
 | :-- | :-- |
-| 安装前报缺依赖 | `PATH`、shepherdr 版本、`tasks` / `chat` / `artifacts` / `task-artifacts` mod 是否存在 |
+| 安装前报缺依赖 | `PATH`、shepherdr 版本、`chat` mod 是否存在 |
 | 报 unmanaged file differs | 确认文件归属；需要接管时显式加 `--adopt` |
 | doctor 报 modified | 文件已偏离 manifest；保留修改或人工恢复，不直接重跑覆盖 |
 | doctor 报 pending update | 处理对应 `.new`，不要删除原文件 |
 | update 报 source unavailable | 恢复 manifest 中的源码 checkout；不要另换来源静默更新 |
-| layout mod 缺失 | 安装对应 shepherdr mod（`tasks` / `chat` / `artifacts` / `task-artifacts`），或先修复本包 layout 与 mod 的交付完整性 |
+| layout mod 缺失 | 重装 collie（layout 的 mod 都在 `addons.json` 的 `mods` 里），或先修复本包 layout 与 mod 的交付完整性 |
 | review 工作被当成 build 显示 | coordinator 没写 `Decision.run.kind="review"`；补上后 Work 显示 `kind=review` |
 | Accept 后停在 Working | coordinator 未恢复或没有可用的 coordinator；检查 `collie-answer` 的 assistant 解析与 coordinator 会话 |
 | `Settled` 数量不对 | 检查 Decision 是否真的带 `settled`；`failed` 与 `ack` 都不算 |

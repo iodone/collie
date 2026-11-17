@@ -23,6 +23,8 @@ STATE = Path(".local/state/collie")
 RUNTIME = Path(".local/share/collie")
 HELPERS = Path(".local/bin")
 SOURCE = Path(__file__).resolve().parent.parent
+# Herdr ships these; collie's layout may name them but must not install or doctor them.
+HERDR_MODS = {"pane", "spaces", "workspace-chrome", "workspace-status"}
 
 
 class InstallError(Exception):
@@ -91,25 +93,30 @@ def source_files(source: Path, root: Path) -> dict[str, Path]:
         if not base.is_dir():
             return
         for path in sorted(base.rglob("*")):
-            if path.is_file() and not path.is_symlink() and "__pycache__" not in path.parts and path.suffix != ".pyc":
+            if path.is_file() and not path.is_symlink() and "__pycache__" not in path.parts and ".last" not in path.parts and path.suffix != ".pyc":
                 rel = path.relative_to(base)
                 files[(destination / rel).as_posix()] = path
 
-    for directory in ("layouts", "mods", "lib"):
+    for directory in ("layouts", "mods", "lib", "core"):
         add_tree(directory, APP / directory)
-    for directory in ("kernel", "plugins", "service", "protocol"):
+    for directory in ("kernel", "plugins", "service", "protocol", "vendor"):
         add_tree(directory, RUNTIME / directory)
     add_tree("templates", CORE / "templates")
     ruleset = source / "protocol/fixtures/ruleset.json"
     if ruleset.is_file():
         files[(STATE / "ruleset.json").as_posix()] = ruleset
-    for name in ("collie", "collie-sync", "collie-answer", "collie-request", "collie-terminal", "collie-supervisor"):
+    for name in ("collie", "collie-sync", "collie-answer", "collie-request", "collie-task", "collie-ticket", "collie-secret"):
         path = source / "bin" / name
         if path.is_file():
             files[(APP / "bin" / name).as_posix()] = path
-    sync = source / "bin/collie-sync"
-    if sync.is_file():
-        files[(HELPERS / "collie-sync").as_posix()] = sync
+    for name in ("collie-sync", "collie-task", "collie-ticket", "collie-secret"):
+        helper = source / "bin" / name
+        if helper.is_file():
+            files[(HELPERS / name).as_posix()] = helper
+    artifact = source / "mods/collie-artifacts/bin/collie-artifact"
+    if artifact.is_file():
+        files[(APP / "bin" / "collie-artifact").as_posix()] = artifact
+        files[(HELPERS / "collie-artifact").as_posix()] = artifact
     addon = source / "addons.json"
     if not addon.is_file():
         raise InstallError(f"missing {addon}")
@@ -163,71 +170,16 @@ class Backups:
             shutil.copy2(source, destination)
 
 
-def version_tuple(value: str) -> tuple[int, ...]:
-    match = re.search(r"\d+(?:\.\d+)*", value)
-    if not match:
-        raise InstallError(f"cannot parse version from {value!r}")
-    return tuple(int(part) for part in match.group().split("."))
-
-
-def version_matches(actual: str, requirement: str) -> bool:
-    left = version_tuple(actual)
-    for clause in requirement.split():
-        match = re.fullmatch(r"(>=|<=|==|>|<)?(\d+(?:\.\d+)*)", clause)
-        if not match:
-            raise InstallError(f"unsupported version requirement {requirement!r}")
-        operator = match.group(1) or "=="
-        right = version_tuple(match.group(2))
-        width = max(len(left), len(right))
-        a = left + (0,) * (width - len(left))
-        b = right + (0,) * (width - len(right))
-        if not {
-            ">=": a >= b,
-            "<=": a <= b,
-            ">": a > b,
-            "<": a < b,
-            "==": a == b,
-        }[operator]:
-            return False
-    return True
-
-
-def shepherdr_version(root: Path) -> str | None:
-    candidates = [
-        root / ".config/shepherdr/installed.json",
-        app_root(root) / "data/shepherdr/installed.json",
-        app_root(root) / "lib/addons.json",
-    ]
-    for path in candidates:
-        target_path(root, path.relative_to(root))
-        if not path.is_file():
-            continue
-        try:
-            data = read_json(path)
-        except InstallError:
-            continue
-        value = data.get("version") or data.get("shepherdr_version")
-        if isinstance(value, str):
-            return value
-    command = shutil.which("herdr-task")
-    if command:
-        try:
-            result = subprocess.run(
-                [command, "--version"], capture_output=True, text=True, timeout=5, check=False
-            )
-            match = re.search(r"\d+(?:\.\d+)+", result.stdout + result.stderr)
-            if match:
-                return match.group()
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-    return None
-
-
 def dependency_errors(root: Path, source: Path) -> list[str]:
     errors = []
-    for command in ("herdr-task", "bun", "git"):
+    for command in ("bun", "git"):
         if not shutil.which(command):
-            errors.append(f"missing dependency `{command}`; install shepherdr/herdr and bun first")
+            errors.append(f"missing dependency `{command}`; install bun and git first")
+    bundled = source / "vendor/herdr-task"
+    if not (bundled / "herdr_task/cli.py").is_file():
+        errors.append(f"missing dependency `collie-task`; no vendored herdr_task package at {bundled}")
+    if not (source / "bin/collie-task").is_file():
+        errors.append(f"missing dependency `collie-task`; no wrapper at {source / 'bin/collie-task'}")
     addons = read_json(source / "addons.json")
     needs = addons.get("needs", {})
     if isinstance(needs, list):
@@ -236,15 +188,7 @@ def dependency_errors(root: Path, source: Path) -> list[str]:
         raise InstallError("addons.json `needs` must be an object or list")
     for mod, requirement in needs.items():
         if not (app_root(root) / "mods" / mod).is_dir():
-            errors.append(f"missing shepherdr mod `{mod}` at {app_root(root) / 'mods' / mod}")
-    version = shepherdr_version(root)
-    requirements = {value for value in needs.values() if value}
-    if requirements and not version:
-        errors.append("cannot determine shepherdr version; expected installed.json or `herdr-task --version`")
-    elif version:
-        for requirement in requirements:
-            if not version_matches(version, requirement):
-                errors.append(f"shepherdr {version} does not satisfy {requirement}")
+            errors.append(f"missing required mod `{mod}` at {app_root(root) / 'mods' / mod}")
     return errors
 
 
@@ -338,6 +282,87 @@ def print_plan(root: Path, plans: list[dict]) -> None:
         print(f"{item['action']:15} {target_path(root, item['rel'])}{suffix}")
 
 
+
+HOOK_FILES = (".claude/settings.json", ".codex/hooks.json")
+# collie-chat's hooks: the permission card (a permission, question or plan answered on the agent's
+# chat), and the note a session starts with (how reactions travel, an Assistant's settings).
+CHAT_HOOKS = (("PermissionRequest", "ask-hook.sh", 1800), ("SessionStart", "session-note.sh", 10))
+
+
+def add_hooks(root: Path) -> list[list[str]]:
+    """Point Claude/Codex at collie-chat's hooks, once: its permission card and its session note."""
+    done: list[list[str]] = []
+    for relative in HOOK_FILES:
+        path = target_path(root, relative)
+        if not path.parent.is_dir():
+            continue
+        try:
+            data = json.loads(path.read_text()) if path.exists() else {}
+        except ValueError:
+            print(f"hooks: {path} is not valid JSON; left alone", file=sys.stderr)
+            continue
+        changed = False
+        for event, script, timeout in CHAT_HOOKS:
+            command = f"sh '{app_root(root)}/mods/collie-chat/{script}'"
+            entries = data.setdefault("hooks", {}).setdefault(event, [])
+            done.append([relative, event, command])
+            # Drop the same hook written by an older Shepherdr install (mods/chat/<script>).
+            kept = []
+            for entry in entries:
+                hooks = entry.get("hooks", [])
+                live = [h for h in hooks if f"/mods/chat/{script}" not in h.get("command", "")]
+                if len(live) != len(hooks):
+                    changed = True
+                    if live:
+                        entry["hooks"] = live
+                        kept.append(entry)
+                else:
+                    kept.append(entry)
+            entries[:] = kept
+            if any(script in hook.get("command", "") for entry in entries for hook in entry.get("hooks", [])):
+                continue
+            entries.append({"hooks": [{"type": "command", "command": command, "timeout": timeout}]})
+            changed = True
+        if changed:
+            if path.exists():
+                Backups(root, False).save(root, relative)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write(path, (json.dumps(data, indent=2) + "\n").encode())
+            if relative.startswith(".codex"):
+                print("hooks: Codex asks once to trust its new hook; approve it in its Hooks screen")
+    return done
+
+
+def remove_hooks(root: Path, dry_run: bool) -> None:
+    scripts = [script for _, script, _ in CHAT_HOOKS]
+    for relative in HOOK_FILES:
+        path = target_path(root, relative)
+        if not path.exists():
+            continue
+        try:
+            data = json.loads(path.read_text())
+        except ValueError:
+            continue
+        changed = False
+        for event, entries in list((data.get("hooks") or {}).items()):
+            kept = [entry for entry in entries
+                    if not any(f"/mods/collie-chat/{script}" in hook.get("command", "") for script in scripts for hook in entry.get("hooks", []))]
+            if len(kept) != len(entries):
+                changed = True
+                if kept:
+                    data["hooks"][event] = kept
+                else:
+                    del data["hooks"][event]
+        if changed:
+            print(f"remove hook     {path}")
+            if not dry_run:
+                Backups(root, False).save(root, relative)
+                if data.get("hooks"):
+                    atomic_write(path, (json.dumps(data, indent=2) + "\n").encode())
+                else:
+                    path.unlink()
+
+
 def install(args, source_override: Path | None = None) -> int:
     root = args.root.expanduser().resolve()
     validate_root(root)
@@ -395,6 +420,7 @@ def install(args, source_override: Path | None = None) -> int:
     if keys_changed:
         backups.save(root, (APP / "keys.json").as_posix())
         write_json(app_root(root) / "keys.json", merged_keys)
+    manifest["hooks"] = add_hooks(root)
     if manifest_path(root).exists():
         backups.save(root, manifest_path(root).relative_to(root).as_posix())
     target_path(root, STATE).mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -451,11 +477,15 @@ def doctor(args) -> int:
     for error in dependency_failures:
         check(False, error)
     if not dependency_failures:
-        check(True, "herdr-task, bun, git and shepherdr dependencies")
+        check(True, "bundled collie-task, bun and git")
     source = Path(manifest.get("source", ""))
     check(source.is_dir(), f"source checkout exists: {source}")
     check((root / STATE).is_dir(), f"state directory exists: {root / STATE}")
     check(target_path(root, RUNTIME / "service/main.ts").is_file(), "background service entry is installed")
+    check(
+        target_path(root, RUNTIME / "vendor/herdr-task/herdr_task/cli.py").is_file(),
+        "vendored task package is installed",
+    )
     try:
         read_json(target_path(root, STATE / "ruleset.json"))
         check(True, "initial ruleset is valid JSON")
@@ -481,7 +511,7 @@ def doctor(args) -> int:
         read_json(addons_path)
         check(True, "add-on metadata is valid JSON")
         layout = read_json(app_root(root) / "layouts/collie.json")
-        for mod in sorted(layout_mods(layout)):
+        for mod in sorted(layout_mods(layout) - HERDR_MODS):
             check((app_root(root) / "mods" / mod).is_dir(), f"layout mod `{mod}` is installed")
     except InstallError as exc:
         check(False, str(exc))
@@ -499,6 +529,189 @@ def remove_empty_parents(path: Path, stop: Path, preserve: Path) -> None:
         except OSError:
             break
         path = path.parent
+
+
+
+def service_unit(root: Path, bun: str, main: Path) -> tuple[Path, str]:
+    state = target_path(root, STATE)
+    log = state / "service.log"
+    if sys.platform == "darwin":
+        label = "dev.collie.service"
+        path = Path("Library/LaunchAgents") / f"{label}.plist"
+        path_text = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>{label}</string>
+  <key>ProgramArguments</key><array><string>{bun}</string><string>{main}</string></array>
+  <key>EnvironmentVariables</key><dict>
+    <key>HOME</key><string>{root}</string>
+    <key>HERDR_INBOX_STATE</key><string>{state}</string>
+    <key>PATH</key><string>{root}/.local/bin:{root}/.config/herdr-app/bin:{Path(bun).parent}:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>{log}</string>
+  <key>StandardErrorPath</key><string>{log}</string>
+</dict></plist>
+"""
+    else:
+        path = Path(".config/systemd/user/collie.service")
+        path_text = f"""[Unit]
+Description=Collie background service
+After=network-online.target
+
+[Service]
+ExecStart={bun} {main}
+Environment=HOME={root}
+Environment=HERDR_INBOX_STATE={state}
+Environment=PATH={root}/.local/bin:{root}/.config/herdr-app/bin:{Path(bun).parent}:/usr/local/bin:/usr/bin:/bin
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target
+"""
+    return path, path_text
+
+
+def service_control(root: Path, action: str) -> int:
+    if root != Path.home():
+        print(f"collie service unit belongs to {root}; run {action} in that HOME", file=sys.stderr)
+        return 0
+    if sys.platform == "darwin":
+        label = f"gui/{os.getuid()}/dev.collie.service"
+        command = ["launchctl", "kickstart", "-k", label] if action == "start" else ["launchctl", "bootout", label]
+    else:
+        command = ["systemctl", "--user", action, "collie.service"]
+    result = subprocess.run(command)
+    return result.returncode
+
+
+def service_install(args) -> int:
+    root = args.root.expanduser().resolve()
+    validate_root(root)
+    bun = shutil.which("bun")
+    if not bun:
+        raise InstallError("bun is required for collie service")
+    main = target_path(root, RUNTIME / "service/main.ts")
+    if not main.is_file():
+        raise InstallError(f"missing service entry: {main}")
+    relative, text = service_unit(root, bun, main)
+    path = target_path(root, relative)
+    if args.dry_run:
+        print(f"would write {path}")
+        return 0
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write(path, text.encode(), 0o644)
+    print(path)
+    if root != Path.home():
+        return 0
+    if sys.platform == "darwin":
+        target = f"gui/{os.getuid()}"
+        subprocess.run(["launchctl", "bootout", f"{target}/dev.collie.service"], capture_output=True)
+        return subprocess.run(["launchctl", "bootstrap", target, str(path)]).returncode
+    subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
+    return subprocess.run(["systemctl", "--user", "enable", "--now", "collie.service"]).returncode
+
+
+def service_uninstall(args) -> int:
+    root = args.root.expanduser().resolve()
+    validate_root(root)
+    bun = shutil.which("bun") or "bun"
+    main = target_path(root, RUNTIME / "service/main.ts")
+    relative, _ = service_unit(root, bun, main)
+    path = target_path(root, relative)
+    if root == Path.home():
+        service_control(root, "stop")
+    if path.exists() and not args.dry_run:
+        path.unlink()
+    print(path)
+    return 0
+
+def service_health(root: Path):
+    socket_path = target_path(root, STATE / "service.sock")
+    if not socket_path.exists():
+        return False, {"error": f"collie service is not running (no socket at {socket_path})"}
+    import socket
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    client.settimeout(3)
+    try:
+        client.connect(str(socket_path))
+        client.sendall(b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        chunks = []
+        while True:
+            chunk = client.recv(65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    except OSError as exc:
+        return False, {"error": f"collie service did not answer: {exc}"}
+    finally:
+        client.close()
+    raw = b"".join(chunks)
+    head, _, body = raw.partition(b"\r\n\r\n")
+    if b" 200 " not in head.split(b"\r\n", 1)[0]:
+        return False, {"error": f"collie service health failed: {head.decode(errors='replace')}"}
+    try:
+        return True, json.loads(body or b"{}")
+    except ValueError:
+        return False, {"error": "collie service returned invalid JSON"}
+
+
+def service_start(args) -> int:
+    return service_control(args.root.expanduser().resolve(), "start")
+
+
+def service_stop(args) -> int:
+    return service_control(args.root.expanduser().resolve(), "stop")
+
+
+def service_status(args) -> int:
+    root = args.root.expanduser().resolve()
+    ok, result = service_health(root)
+    if not ok:
+        print(result["error"], file=sys.stderr)
+        return 1
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
+def status(args) -> int:
+    root = args.root.expanduser().resolve()
+    ok, service = service_health(root)
+    try:
+        core_result = subprocess.run(["hc", "server", "status"], capture_output=True, text=True, timeout=10)
+        core = json.loads(core_result.stdout) if core_result.returncode == 0 else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        core = None
+    app = None
+    try:
+        app_result = subprocess.run(["herdr-app", "status"], capture_output=True, text=True, timeout=10)
+        app = json.loads(app_result.stdout) if app_result.returncode == 0 else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        app = None
+    coordinators = []
+    try:
+        listed = subprocess.run(["hc", "ls", "--json"], capture_output=True, text=True, timeout=10)
+        terminals = json.loads(listed.stdout).get("terminals", []) if listed.returncode == 0 else []
+        for terminal in terminals:
+            labels = terminal.get("labels") or {}
+            if labels.get("herdr.role") == "coordinator" or labels.get("herdr.inbox") == "true":
+                coordinators.append({
+                    "address": terminal.get("address"),
+                    "state": terminal.get("state"),
+                    "space": labels.get("herdr.coordinator.space") or labels.get("herdr.space"),
+                })
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    print(json.dumps({
+        "root": str(root),
+        "service": service if ok else {"running": False, **service},
+        "core": core,
+        "app": app,
+        "coordinators": coordinators,
+    }, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0
 
 
 def uninstall(args) -> int:
@@ -532,6 +745,7 @@ def uninstall(args) -> int:
             if not args.dry_run:
                 del keys[key]
                 keys_changed = True
+    remove_hooks(root, args.dry_run)
     if args.dry_run:
         print("dry-run: no files changed")
         return 0
@@ -568,6 +782,20 @@ def parser() -> argparse.ArgumentParser:
     command = sub.add_parser("doctor")
     command.add_argument("--root", type=Path, default=Path.home())
     command.set_defaults(function=doctor)
+    command = sub.add_parser("status")
+    command.add_argument("--root", type=Path, default=Path.home())
+    command.set_defaults(function=status)
+    service = sub.add_parser("service")
+    service_sub = service.add_subparsers(dest="service_command", required=True)
+    status_command = service_sub.add_parser("status")
+    status_command.add_argument("--root", type=Path, default=Path.home())
+    status_command.set_defaults(function=service_status)
+    for name, function in (("install", service_install), ("uninstall", service_uninstall),
+                           ("start", service_start), ("stop", service_stop)):
+        command = service_sub.add_parser(name)
+        command.add_argument("--root", type=Path, default=Path.home())
+        command.add_argument("--dry-run", action="store_true")
+        command.set_defaults(function=function)
     command = sub.add_parser("uninstall")
     common(command)
     command.set_defaults(function=uninstall)

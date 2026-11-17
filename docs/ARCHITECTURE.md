@@ -315,6 +315,20 @@ stateDiagram-v2
 
 ## 8. Inbox 投影
 
+### 模块边界
+
+```text
+mods/collie-inbox/main.js          # Inbox 队列 + Ticket 页面（UI）
+mods/collie-tabs/inbox-engine.js   # 常驻引擎：asks / tasks / alerts
+lib/inbox-queue.js                 # 纯投影：queue / stage
+lib/ticket-dot.js                  # Ticket 状态点
+mods/collie-artifacts/             # Ticket Artifacts + viewer
+```
+
+引擎必须常驻，所以留在 tab bar；Inbox UI 通过 shared `inbox.*` / `collie.ticket` 读它，不跨 mod import。`collie-artifacts` 同时挂在 Ticket 和侧栏，保持独立。
+
+Chat 的 secrets 走 `bin/collie-secret` 和 `~/.local/share/collie/secrets/vault.json`；voice / dictation / call 在 Collie 中关闭（`VOICE=false`），不读 shep 的 secret/service 路径。
+
 ### 过滤器
 
 ```text
@@ -389,18 +403,100 @@ Inbox 不是第二个操作台。每行右侧只有一个 **回复** 按钮：
 | 来源插件 | autoloop `plugins/github/source.ts`、`plugins/gitlab/source.ts` | 验签、归一、发 Event；来源自己连进来 | 按 type 直接匹配规则 |
 | 通道 / 卡片 / 投递 | autoloop `plugins/feishu/channel.ts`、`plugins/delivery/*` | 卡片发送、回答回调、投递重试与版本 | 把人的回答做成 Event |
 | 执行进程监督 | autoloop `worker/run.ts`、`worker/contract.ts` | 进程组、超时、退出判定、结果回交 | 10 态 run 状态机 |
-| Work 执行 | shepherdr `mods/tasks/bin/herdr-task`、`templates/{worker,reviewer}.md` | 调 CLI；worktree、worker/reviewer、label、ready 三件套 | 不改 herdr-task 状态；不接她的 Accept |
-| Coordinator 会话与恢复 | collie `plugins/agent/revive.py`（源自 shepherdr）、`~/.local/share/shepherdr/bin/shepherdr` 的会话逻辑 | 原会话恢复、label、handover | 不复制 herdr 的 Assistant 交互 |
+| Work 执行 | `vendor/herdr-task` + collie templates | 调 CLI；worktree、worker/reviewer、label、ready 三件套 | 不改任务状态；不接 shep Accept |
+| Coordinator 会话与恢复 | `vendor/herdr-task/herdr_task/revive.py` + `collie-task tick` | 原会话恢复、label、handover | 不复制 herdr 的 Assistant 交互 |
 | Task 头部与状态点 | shepherdr `mods/chat/panel.js`、`lib/dot.js`、`lib/ui.js` | 头部布局、segmented、task dot、光晕 | 不移植 Chat/Files/Changes/Browser |
-| 产物 | shepherdr `mods/task-artifacts/*`、`lib/artview.js`、`core/task-artifacts.js` | 列表、筛选、viewer、版本 | 不依赖任务聊天 |
+| 产物 | `mods/collie-artifacts/*`（`main.js` 列表 + `bar.js` viewer 工具栏）、`lib/artview.js`、`core/task-artifacts.js`、vendored `bin/collie-artifact` | 列表、viewer、版本、Mark up | 不需要 shepherdr 的 artifacts / task-artifacts mod |
+| Coordinator chat 的卡片与状态（#22） | shepherdr `mods/chat`（`cards.js`、`strips.js`、`secret-card.js`、`core/secrets.js`、`core/bg-jobs.js`、`core/chat-view.js`）与 `mods/chat-react` | reactions chips 与 emoji picker（`reactions.js`、`emoji-data.js`、本地 `react/` 资产）、secrets 掩码卡与 `~/.local/share/collie/secrets/vault.json`、artifact 卡（`lib/artview.js` 打开）、后台 jobs/subagents 行（可展开/停止） | threads、Tasks panel、voice；shep 的 `~/.herdr/vault.json` 与跨机 secrets 迁移 |
 | 安装器 | `~/.local/share/shepherdr/bin/shepherdr` | manifest、hash、备份、`.new`、doctor、key 合并 | 不装 herdr 的 web app / 语音 / 浏览器 |
 
 现有 Collie 已经按这个方式落过的拷贝：
 
 - `lib/ticket-dot.js` ← shepherdr `lib/dot.js` / `mods/tasks/dot.js`
 - `lib/artview.js` ← shepherdr `lib/artview.js`
-- `mods/collie/core/task-artifacts.js` ← shepherdr `core/task-artifacts.js`
+- `core/task-artifacts.js` ← shepherdr `core/task-artifacts.js`
 - `layouts/collie.json` ← shepherdr layout
 - `bin/collie` 的 manifest / backup / doctor ← `bin/shepherdr`
 
-实现顺序：先沿用这些拷贝与 CLI 调用，再改 Decision 三态、Event/Ingress、Work 四态和 Inbox；不为旧 8 态/route table 留兼容层。
+这些共享源的副本由 `lib/COPIES` 声明，`bin/collie-sync` 生成；改源文件，不改 `mods/*/lib` 或 `mods/*/core` 的副本。
+
+---
+
+## 11. Coordinator 与 Service 的生命周期
+
+这一节是解耦后的目标设计，参考 shepherdr 的 Assistant + service，但 coordinator 尽量只依赖 herdr-core，不自己发明常驻层。
+
+### 11.1 Coordinator = Assistant 模型
+
+- **每个 space 一个 coordinator**，tab 固定在最前。
+- tab 里先是 chat pane，**没有 agent**；第一条消息才启动。
+- 启动走 herdr-core：`hc run --bg --no-parent --keep`，用 coordinator 模板，agent 停在 chat pane 后面。
+- 标签至少包含：
+  - `herdr.role=coordinator`
+  - `herdr.chat=<pane>`
+  - `herdr.chat.slot=<slot>`
+  - `herdr.coordinator.space=<space>`
+  - `herdr.coordinator.tab=<tab>`
+- coordinator 是普通 kept terminal，不是 daemon，不需要 per-space supervisor 常驻轮询。
+- 聊天界面是 Collie 自己的 `mods/collie-chat`（#7 Slice 1/2），不再挂 shepherdr 的 `chat` / `pane-chat` / `spaces-chat` / `chat-call`：
+  - 消息从 agent 自己的 session log 读（`core/chat-log.js`），发送走 `hc send`（`core/send.js`），以“人”的身份不留 caller（`core/person.js`）；
+  - 空 slot 的 chat 每 2s 用 `herdr.chat.slot` 找自己的 agent（`adoptSlot`），reload 后自动跟上；
+  - 首条消息读 `~/.config/herdr-core/templates/collie-coordinator.md`，生成一次性模板（`cleanCommand` + `argvFor`）后 `hc run`，用完即删；
+  - session 丢失时用同一模板的正文重开新 session 并说明（`lostMessage`）。
+  - task news（`<herdr-news>`）走 `core/chat-log.js`，在对话里显示为细行（`newsLine`）；
+  - Claude 的 permission/question/plan 由 `ask-hook.sh` 写入 `data/chat-asks/{open,req,ans,end}`，chat 用 `cards.js` / `strips.js` 显示并回答，`hc interrupt` 仍作 Stop；
+  - session 开始时 `session-note.sh`（`collie install` 写进 `~/.claude/settings.json` / `~/.codex/hooks.json` 的 SessionStart）说明 chat 的标签约定；Assistant 另得 `collie-task _session-note` 给出的 “Your settings” 块；
+  - CLI 启动前的 trust / sign-in 等屏幕由 `screens.js` / `core/screens.js` 读屏成卡片，按下只在该屏幕仍是原样时生效；
+  - composer 的 pick 按钮打开 `picker.js`（移植 shep 的 `chat-models`）：agent / model / reasoning effort / Fast /
+    permissions。空 chat 的选择决定首条消息的 `argvFor`，并存进 Collie 自己的
+    `~/.local/state/collie/coordinator.json` 的 `chat` 字段，下一次空 chat 从它起步（不读 shep settings）；运行中 Restart 走
+    `mods/collie-tabs/bin/restart.sh`，同一 agent 带 `--resume`（`HERDR_RESTART_RESUME=1`），换 agent 则带 handoff，
+    `herdr.chat` / `herdr.chat.slot` / `herdr.role` / `herdr.coordinator.*` 原样保留；
+  - 尚未移植（Slice 3+）：ticket 工具、图片/反应/线程、模型置顶与搜索。
+- Inbox 的“回复”按 `herdr.chat` / `herdr.chat.slot` 找 coordinator 终端；chat pane 没有 terminal，旧写法会把消息静默丢掉。
+- 生命周期：
+  - 空 chat → 第一条消息 → starting → live → working/idle；
+  - 菜单 Restart → 新 agent 在同一 tab 启动，handoff 或 resume，旧 agent 结束；
+  - 关闭 tab → 有 worker 时先问 stop/keep；无 worker 直接关；
+  - 进程丢失 → 终端留为 shell，由 tick/revive 原地恢复；
+  - session 丢失 → 新 session + handover，不伪造恢复成功。
+
+### 11.2 Service = 每台机器一个
+
+- **一台机器只有一个 collie service**，不是每个 space 一个。
+- Bun 进程，跑 `service/main.ts`；由 systemd user unit / launchd agent 管理。
+- 负责 Web/API/WebSocket、`incoming/*.json`、`collie-task tick`、scheduler、远端 tick、coordinator/worker revive。
+- 不拥有 coordinator；coordinator 的生命周期在 herdr-core。
+- unit 负责：`RunAtLoad` / `KeepAlive`（systemd `Restart=always`），开机后自动拉起。
+- 窗口与 service 互备：
+  - service 在：窗口把 tick 让给它；
+  - service 不在：窗口自己 tick，并最多每分钟尝试启动一次 unit；
+  - 两者都不在：任务调度和 revive 暂停，但 coordinator 终端仍由 herdr-core 保活。
+
+### 11.3 三种场景
+
+| 场景 | Coordinator | Service |
+|:--|:--|:--|
+| app 关闭 | 不受影响，herdr-core 保活 | 不受影响，独立进程/unit |
+| 电脑关机 | 进程停止；开机后 core 拉起终端，tick/revive 恢复 | unit 开机拉起 |
+| service 没装/没跑 | 仍可被 herdr-core 保活 | 无；排队任务、scheduler、revive 等窗口打开后继续 |
+
+### 11.4 命令边界
+
+```sh
+collie doctor                         # 安装完整性
+collie status                         # 聚合运行状态（含 coordinator 概览）
+collie service status                 # service: pid / socket / uptime / queue
+```
+
+没有 `collie coordinator ensure` / `stop`：coordinator 的创建、关闭、重启都走 `herdr-app` / `hc`。观察直接用：
+
+```sh
+herdr-app ls
+hc ls
+hc get <coordinator>
+```
+
+停止就是显式关闭 coordinator tab（有 worker 时选 stop/keep），或 `hc rm` 掉终端。service 不做 auto-ensure，所以不需要“阻止自动拉起”的命令。
+
+`collie-supervisor` 整个删除，不保留内部实现。
