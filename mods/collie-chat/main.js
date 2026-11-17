@@ -51,6 +51,12 @@ export default class CoordinatorChat extends View {
     this.readOnly = Boolean(P.terminal);
     this.role = P.role ?? null;
     this.slot = P.slot ?? null;
+    // A restored/opened-elsewhere chat may have lost the shared slot record; rebuild it so the
+    // pane header's Chat/Terminal switch knows this pane.
+    if (this.role === "coordinator" && this.slot && !shared("coordinator.slots")?.[this.slot]) {
+      const own = panes().find((p) => p.mod === "collie-chat" && p.focused) ?? panes().find((p) => p.mod === "collie-chat");
+      if (own) setShared("coordinator.slots", { ...(shared("coordinator.slots") ?? {}), [this.slot]: { space: P.space, tab: own.tab, pane: own.pane, folder: P.folder ?? null } });
+    }
     this.template = P.template ?? (this.role === "coordinator" ? "collie-coordinator" : null);
     this.machine = this.addr?.includes("/") ? this.addr.split("/")[0] : null;
     this.phase = this.addr ? "finding" : "fresh";
