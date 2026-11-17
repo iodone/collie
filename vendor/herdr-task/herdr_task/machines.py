@@ -27,7 +27,7 @@ from .news import news_send, send_or_hold, typing
 
 
 # ---- sync: the same task tools on every machine ---------------------------------------------
-# What a machine needs to run tasks: herdr-task (one zipapp), herdr-artifact (with its guide and
+# What a machine needs to run tasks: collie-task (one zipapp), collie-artifact (with its guide and
 # markup), herdr-secret (a remote copy: it asks the main machine), herdr-browser once it exists,
 # and the role templates. Each goes to the same place under that machine's home as here
 # (~/.local/bin/..., ~/.config/herdr-core/templates/...). A stamp there (~/.herdr/tools.json)
@@ -36,7 +36,7 @@ from .news import news_send, send_or_hold, typing
 # there is kept (--force replaces it). Nothing else there is touched.
 
 ROLES = ("assistant", "worker", "reviewer")
-ARTIFACT_HOME = ".local/share/herdr/artifacts"
+ARTIFACT_HOME = ".local/share/collie/artifacts"
 STAMP = ".herdr/tools.json"
 MACHINES = os.path.join(STORE, ".machines.json")
 SYNC_DEBOUNCE_MS = 30000        # files changed here: wait until they stay put this long
@@ -102,18 +102,18 @@ def manifest():
         files.append({"path": rel, "data": data, "sha": sha, "mode": mode, "at": at, "protect": protect, "test": test})
 
     sources = [ENTRY] + ([os.path.join(PACKAGE, n) for n in os.listdir(PACKAGE) if n.endswith(".py")] if os.path.isdir(PACKAGE) else [])
-    add(".local/bin/herdr-task", bundle(), 0o755, sources, test=["--version"])
+    add(".local/bin/collie-task", bundle(), 0o755, sources, test=["--version"])
     links, touch = [], []
-    art = _real(".local/bin/herdr-artifact")
+    art = _real(".local/bin/collie-artifact") or _real(".config/herdr-app/mods/collie-artifacts/bin/collie-artifact")
     if art:
         root = os.path.dirname(os.path.dirname(art))
-        add(f"{ARTIFACT_HOME}/bin/herdr-artifact", _read(art), 0o755, [art], test=["--version"])
+        add(f"{ARTIFACT_HOME}/bin/collie-artifact", _read(art), 0o755, [art], test=["--version"])
         for extra in ("ARTIFACTS.md", "markup.js"):
             p = os.path.join(root, extra)
             if os.path.isfile(p):
                 add(f"{ARTIFACT_HOME}/{extra}", _read(p), 0o644, [p])
-        # As here: ~/.local/bin/herdr-artifact leads to its folder, where its guide sits beside it.
-        links.append({"path": ".local/bin/herdr-artifact", "target": f"{ARTIFACT_HOME}/bin/herdr-artifact"})
+        # As here: ~/.local/bin/collie-artifact leads to its folder, where its guide sits beside it.
+        links.append({"path": ".local/bin/collie-artifact", "target": f"{ARTIFACT_HOME}/bin/collie-artifact"})
     secret = _real(".local/bin/herdr-secret")
     if secret:
         add(".local/bin/herdr-secret", _read(secret), 0o755, [secret], test=["--help"])
@@ -158,17 +158,12 @@ try:
 except Exception:
     stamp = {}
 rec = stamp.get("files") or {}
-# The machine that holds herdr-task's source (Herdr's own folder, with its links into it) is
-# where copies come from: never written to.
-source = os.path.isdir(P(".config/herdr-app/mods/tasks/bin/herdr_task"))
-out = {"source": source, "files": {}, "links": {}, "stamp": {k: stamp.get(k) for k in ("version", "from", "at")},
+out = {"files": {}, "links": {}, "stamp": {k: stamp.get(k) for k in ("version", "from", "at")},
        "python": sys.version.split()[0], "os": os.uname().sysname, "home": H}
 for f in x["files"]:
     p, r = P(f["path"]), rec.get(f["path"]) or {}
     cur = sha(p)
-    if source:
-        st = "source here"
-    elif os.path.islink(p):
+    if os.path.islink(p):
         st = "own copy"
     elif cur == f["sha"]:
         st = "current"
@@ -208,9 +203,7 @@ for f in x["files"]:
 for l in x["links"]:
     p, t = P(l["path"]), P(l["target"])
     st = "current" if os.path.islink(p) and os.readlink(p) == t else "missing" if not os.path.lexists(p) else "behind"
-    if source:
-        st = "source here"
-    elif st == "behind" and os.path.islink(p) and not os.readlink(p).startswith(P(".local/share/herdr")):
+    if st == "behind" and os.path.islink(p) and not os.readlink(p).startswith(P(".local/share/collie")):
         st = "own copy"
     if x["op"] == "install" and st != "current" and os.path.isfile(t):
         try:
@@ -237,7 +230,7 @@ def main_here():
     except Exception:
         return False
     return bool(rec.get("id")) and rec.get("id") == me
-if x["op"] == "install" and not source:
+if x["op"] == "install":
     for t in x["touch"]:
         if t.get("unless_main") and main_here():
             continue
@@ -287,8 +280,6 @@ OK = ("current", "installed", "own copy")
 
 
 def _verdict(res):
-    if res.get("source"):
-        return "source", ["holds herdr-task's source: copies come from there, it's never written to"]
     bad = {p: s for p, s in {**res["files"], **res["links"]}.items() if s not in OK}
     if not bad:
         return "current", []
@@ -303,13 +294,13 @@ def sync_machine(machine, m, op="install", force=False):
     try:
         res = _remote_python(machine, INSTALL, {**me, "op": "check", "files": [bare(f) for f in m["files"]]}, timeout=60)
         state, details = _verdict(res)
-        if op == "install" and state not in ("current", "source"):
+        if op == "install" and state != "current":
             need = {p for p, s in res["files"].items() if s in ("missing", "behind")}
             send = [{**bare(f), "data": base64.b64encode(f["data"]).decode()} if f["path"] in need else bare(f) for f in m["files"]]
             res = _remote_python(machine, INSTALL, {**me, "op": "install", "files": send}, timeout=180)
             state, details = _verdict(res)
             for f in m["files"]:
-                mark = {".local/bin/herdr-task": STORE, f"{ARTIFACT_HOME}/bin/herdr-artifact": os.path.join(HOME, ".herdr", "artifacts")}.get(f["path"])
+                mark = {".local/bin/collie-task": STORE, f"{ARTIFACT_HOME}/bin/collie-artifact": os.path.join(HOME, ".local", "share", "collie", "artifacts")}.get(f["path"])
                 if mark and res["files"].get(f["path"]) in ("current", "installed"):
                     _mark(os.path.join(mark, ".remote", machine), hashlib.sha1(f["data"]).hexdigest())
     except Fail as e:
@@ -320,7 +311,7 @@ def sync_machine(machine, m, op="install", force=False):
 
 
 def _mark(path, digest):
-    """herdr-task's and herdr-artifact's own --on keep these: with the right one they don't
+    """collie-task's and collie-artifact's own --on keep these: with the right one they don't
     install themselves again."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as f:
@@ -364,7 +355,7 @@ def sync(names=None, op="install", force=False):
 
     def one(name):
         if held:
-            out[name] = {"machine": name, "state": "held", "details": [f"{held} (shepherdr doctor lets it go)"], "version": m["version"]}
+            out[name] = {"machine": name, "state": "held", "details": [held], "version": m["version"]}
             return
         out[name] = sync_machine(name, m, op, force) if links[name].get("state") == "connected" else \
             {"machine": name, "state": "unreachable", "details": [f"herdr-core link {links[name].get('state')}"], "version": m["version"]}
@@ -379,7 +370,7 @@ def sync(names=None, op="install", force=False):
         for r in rows:
             e = d.setdefault("machines", {}).setdefault(r["machine"], {})
             e.update({"state": r["state"], "checked": now(), "details": r["details"]})
-            if r["state"] in ("current", "source"):
+            if r["state"] == "current":
                 e["synced"] = m["version"]
             elif e.get("synced") == m["version"]:
                 e.pop("synced")
@@ -398,17 +389,17 @@ def cmd_machines(args):
         else:
             print(f"Tools here: version {r['version']}." if r["machines"] else "No other machines connected here.")
             for x in r["machines"]:
-                word = {"current": "current", "source": "holds the source (left alone)", "drift": "out of date", "failed": "failed", "unreachable": "can't reach", "held": "held"}.get(x["state"], x["state"])
+                word = {"current": "current", "drift": "out of date", "failed": "failed", "unreachable": "can't reach", "held": "held"}.get(x["state"], x["state"])
                 more = f" (updated {len(x['changed'])} file(s))" if x.get("changed") else ""
                 print(f"  {x['machine']}: {word}{more}" + "".join(f"\n      {d}" for d in x["details"]))
-        if args.check and any(x["state"] not in ("current", "source") for x in r["machines"]):
+        if args.check and any(x["state"] != "current" for x in r["machines"]):
             raise SystemExit(1)
 
 
 # ---- the scheduler's part -------------------------------------------------------------------
 
 def _spawn(argv, log):
-    """A detached herdr-task run, so the scheduler's round never waits on another machine."""
+    """A detached collie-task run, so the scheduler's round never waits on another machine."""
     os.makedirs(STORE, exist_ok=True)
     with open(os.path.join(STORE, log), "a") as out:
         subprocess.Popen([sys.executable, ENTRY, *argv], stdin=subprocess.DEVNULL, stdout=out, stderr=out, start_new_session=True,
@@ -808,7 +799,7 @@ def tell(target, text, sender=None):
         d, rows = directory(refresh=True)
         hits = _find(rows, target)
     if not hits:
-        raise Fail(f"no live Assistant {target!r} reachable from here (herdr-task assistants lists them)")
+        raise Fail(f"no live Assistant {target!r} reachable from here (collie-task assistants lists them)")
     if len(hits) > 1:
         raise Fail(f"{target!r} is more than one Assistant: " + ", ".join(a["target"] for a in hits))
     to = hits[0]

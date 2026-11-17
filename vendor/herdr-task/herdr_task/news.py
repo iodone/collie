@@ -216,12 +216,12 @@ def news_pass(report, folder=None):
     os.replace(tmp, NEWS)
 
 
-READ = "herdr.chat.read"  # the Assistant's turn last read (mods/chat/unread.js)
+READ = "herdr.chat.read"  # the Assistant's turn last read (a label: Collie's chat reads it, mods/collie-chat)
 NO_REPLY = re.compile(r"^\s*(?:<hc\s+no-reply\b[^>]*/>|</?no-reply\b[^\n]*)\s*$")
 
 
 def news_read(quiet):
-    """Unread is a new turn of the Assistant's (mods/chat/unread.js). News it answered only with
+    """Unread is a new turn of the Assistant's (Collie's chat reads the label, mods/collie-chat). News it answered only with
     <no-reply> shows nothing, so it isn't new: an Assistant read before the news is read after
     it too. quiet = {address: {turn, at}}, the ones told while read; done ones leave it."""
     for addr, q in list(quiet.items()):

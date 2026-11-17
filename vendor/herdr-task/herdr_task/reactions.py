@@ -1,7 +1,7 @@
 """Reactions (Settings › Agents › Reactions, on unless turned off): every agent in Herdr reacts to
 some of the person's messages with an emoji: Assistants, task workers, automation runs and plain
-agent tabs. Each learns how at the start of each session (the chat's SessionStart hook,
-mods/chat/session-note.sh, asks `herdr-task _session-note`): an Assistant with its settings block
+agent tabs. Each learns how at the start of each session (collie-chat's SessionStart hook,
+mods/collie-chat/session-note.sh, asks `collie-task _session-note`): an Assistant with its settings block
 (assistant_settings.py), any other agent just these words (agent_note), and its terminal is
 labelled with what it was taught. A running one is told once when the setting changes for its
 space, as SHEP-49's <herdr-setting> line: an Assistant by assistant_settings' pass, every other

@@ -75,10 +75,8 @@ export default class CollieArtifacts extends View {
     if (this.opening) return;
     this.opening = a.id;
     cx.notify();
-    // over the ticket's chat when its place is known, else the whole window
-    const area = shared("chat.areas")?.thread?.area ?? null;
     cx.spawn(async (cx) => {
-      await openViewer({ id: a.id, title: a.title, version: a.v, latest: a.v, machine }, area);
+      await openViewer({ id: a.id, title: a.title, version: a.v, latest: a.v, machine });
       this.opening = null;
       cx.notify();
     });

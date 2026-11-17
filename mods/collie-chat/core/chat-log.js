@@ -389,18 +389,20 @@ const short = (p) => {
 };
 const clip = (s, n = 90) => { s = String(s ?? "").replace(/\s+/g, " ").trim(); return s.length > n ? s.slice(0, n - 1) + "…" : s; };
 
-// A command that publishes an artifact (mods/artifacts): the chat shows a card for it, found in
-// the artifacts' registry by who published it and when.
-const ARTIFACT = /\bherdr-artifact\b[^\n|;&]*\b(publish|update)\b/;
+// A command that publishes an artifact (mods/collie-artifacts; herdr-artifact in an older
+// transcript): the chat shows a card for it, found in the artifacts' registry by who published it
+// and when.
+const ARTIFACT = /\b(?:collie|herdr)-artifact\b[^\n|;&]*\b(publish|update)\b/;
 
 // The messages a shell command sends other agents: [{ to, text, how }], how "hc" (`hc send [flags] <terminal>
-// <text>`, to a terminal) or "assistant" (`herdr-task tell-assistant <address or space> <text>`). Read with a small
-// shell lexer: quotes, escapes, `;` `&&` `||` `|` and new lines between commands, heredoc bodies skipped, and a text
-// given as "$VAR" taken from a VAR=… set earlier in the same command. A text it can't know is left out.
+// <text>`, to a terminal) or "assistant" (`collie-task tell-assistant <address or space> <text>`; herdr-task in an
+// older transcript). Read with a small shell lexer: quotes, escapes, `;` `&&` `||` `|` and new lines between
+// commands, heredoc bodies skipped, and a text given as "$VAR" taken from a VAR=… set earlier in the
+// same command. A text it can't know is left out.
 const VALUED = new Set(["--if", "--timeout", "--on"]);
 export function sendsOf(command) {
   const s = String(command ?? "");
-  if (!/\b(hc|herdr-task)\b/.test(s) || !/\b(send|tell-assistant)\b/.test(s)) return [];
+  if (!/\b(hc|collie-task|herdr-task)\b/.test(s) || !/\b(send|tell-assistant)\b/.test(s)) return [];
   const cmds = [], vars = new Map();
   let words = [], w = null, i = 0, heredocs = [];
   // w: { text, var? (the word was only $NAME) }
@@ -462,7 +464,7 @@ export function sendsOf(command) {
     const prog = String(a[0] ?? "").split("/").pop();
     let rest = null, how = null;
     if (prog === "hc" && a[1] === "send") { rest = a.slice(2); how = "hc"; }
-    else if (prog === "herdr-task" && a.includes("tell-assistant")) { rest = a.slice(a.indexOf("tell-assistant") + 1); how = "assistant"; }
+    else if ((prog === "collie-task" || prog === "herdr-task") && a.includes("tell-assistant")) { rest = a.slice(a.indexOf("tell-assistant") + 1); how = "assistant"; }
     if (!rest) continue;
     const args = [];
     for (let j = 0; j < rest.length; j++) {

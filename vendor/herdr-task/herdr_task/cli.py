@@ -1,4 +1,4 @@
-"""The command line, and running herdr-task on another machine (--on)."""
+"""The command line, and running collie-task on another machine (--on)."""
 
 import argparse
 import hashlib
@@ -52,35 +52,26 @@ def install_secret(machine):
 
 
 def remote_run(machine, argv, timeout=None):
-    """herdr-task on another machine (installed there first when it isn't this one): its run,
+    """collie-task on another machine (installed there first when it isn't this one): its run,
     output kept. timeout: seconds before herdr-core gives up on it."""
     body = bundle()
     digest = hashlib.sha1(body).hexdigest()
     mark = os.path.join(STORE, ".remote", machine)
-    target = ".local/bin/herdr-task"
+    target = ".local/bin/collie-task"
     try:
         with open(mark) as f:
-            # "source": it holds herdr-task's source, and runs its own
-            installed = f.read().strip() in (digest, "source")
+            installed = f.read().strip() == digest
     except OSError:
         installed = False
 
     def install():
         held = sync_held()
         if held:
-            raise Fail(f"herdr-task isn't current on {machine}, and copies to other machines wait: {held}. "
-                       "Run `shepherdr doctor` once the install is whole.")
+            raise Fail(f"collie-task isn't current on {machine}, and copies to other machines wait: {held}.")
         guard(["hc"])
-        # A machine with Herdr's own install (its window's) holds herdr-task's source: copies come from there, it's
-        # never written to (machines.py, the same rule). Its link ~/.local/bin/herdr-task leads into that install.
-        if run(["hc", "exec", "--on", machine, "--", "test", "-d", ".config/herdr-app/mods/tasks/bin/herdr_task"]).returncode == 0:
-            os.makedirs(os.path.dirname(mark), exist_ok=True)
-            with open(mark, "w") as f:
-                f.write("source")
-            return
         r = subprocess.run(["hc", "file", "write", "--on", machine, target], input=body, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if r.returncode != 0:
-            raise Fail(f"Couldn't install herdr-task on {machine}: {r.stderr.decode().strip()}")
+            raise Fail(f"Couldn't install collie-task on {machine}: {r.stderr.decode().strip()}")
         run(["hc", "exec", "--on", machine, "--", "chmod", "+x", target], check=True)
         os.makedirs(os.path.dirname(mark), exist_ok=True)
         with open(mark, "w") as f:
@@ -91,7 +82,7 @@ def remote_run(machine, argv, timeout=None):
         install()
     install_secret(machine)
     wait = ["--timeout", str(timeout)] if timeout else []
-    call = ["hc", "exec", "--on", machine, *wait, "--", "sh", "-c", 'exec "$HOME/.local/bin/herdr-task" "$@"', "herdr-task", *argv]
+    call = ["hc", "exec", "--on", machine, *wait, "--", "sh", "-c", 'exec "$HOME/.local/bin/collie-task" "$@"', "collie-task", *argv]
     r = run(call)
     if r.returncode == 127 or "not found" in r.stderr and not r.stdout:
         install()
@@ -100,7 +91,7 @@ def remote_run(machine, argv, timeout=None):
 
 
 def remote(machine, argv):
-    """Runs herdr-task on the machine that holds the folder (installing it there first), then
+    """Runs collie-task on the machine that holds the folder (installing it there first), then
     names a new tab from here, where the window is."""
     if argv[:1] == ["tick"]:
         # Its start limits live in Settings here, where the window is (HERD-40).
@@ -144,8 +135,8 @@ def main():
         print(VERSION)
         return 0
 
-    p = argparse.ArgumentParser(prog="herdr-task", description="Herdr's tasks: add, start and finish work for a folder.",
-                                epilog="Run on another machine's folder: herdr-task --on <machine> <command> ...")
+    p = argparse.ArgumentParser(prog="collie-task", description="Collie's tasks: add, start and finish work for a folder.",
+                                epilog="Run on another machine's folder: collie-task --on <machine> <command> ...")
     sub = p.add_subparsers(dest="cmd")
 
     def cmd(name, fn, help, id=True):
@@ -222,7 +213,7 @@ def main():
     c.add_argument("--details", help="optional: a few short bullets in plain words (one \"- \" per line): what changed for the "
                                      "person first, then how it was checked; file names only where they help; never one dense "
                                      "paragraph. Folded under Details in the Accept card")
-    c.add_argument("--proof", help="its proof artifact's id (herdr-artifact publish prints it); default: its newest artifact titled \"... · Proof\"")
+    c.add_argument("--proof", help="its proof artifact's id (collie-artifact publish prints it); default: its newest artifact titled \"... · Proof\"")
     c.add_argument("--agents-md", help="\"For AGENTS.md\": one line about setting up or testing this repo that the next agent "
                                        "would need and AGENTS.md lacks; the Assistant decides whether to add it")
     c = cmd("reviewed", cmd_reviewed, "a task's agent records one review round of its current commit (Review: on): ready then "
@@ -281,7 +272,7 @@ def main():
     c = cmd("tick", cmd_tick, "start queued tasks that can go; mark merged ones done (Herdr runs this)", id=False)
     c.add_argument("--machine", help=argparse.SUPPRESS)  # this machine's name, from Herdr's window (HERD-40)
     c.add_argument("--hold", help=argparse.SUPPRESS)  # its start limits as JSON, from Settings > Machines
-    c = sub.add_parser("review")  # reviewers herdr-task started before agents reviewed their own work
+    c = sub.add_parser("review")  # reviewers collie-task started before agents reviewed their own work
     c.add_argument("id")
     c.add_argument("--folder")
     c.add_argument("--json", action="store_true")
@@ -390,7 +381,7 @@ def main():
     auto_cmd("rm", "remove it")
     auto_cmd("run-now", "add and start its task now")
     ma = sub.add_parser("machines", help="other machines: keep the task tools in step there (sync), and what each machine reaches (reach)").add_subparsers(dest="machines")
-    c = ma.add_parser("sync", help="install or update herdr-task, its helpers and the role templates on every connected machine (current ones are skipped)")
+    c = ma.add_parser("sync", help="install or update collie-task, its helpers and the role templates on every connected machine (current ones are skipped)")
     c.add_argument("machine", nargs="*", help="only these machines (default: every connected one)")
     c.add_argument("--check", action="store_true", help="only report each machine: current, out of date (and what), or can't reach; exits 1 unless all are current")
     c.add_argument("--force", action="store_true", help="also replace a template someone changed there, or a newer copy")
@@ -447,7 +438,7 @@ def main():
     c = sub.add_parser("_allow")  # Codex's PermissionRequest hook (own_argv)
     c.add_argument("--command", required=True)
     c.set_defaults(fn=cmd_allow, json=False)
-    c = sub.add_parser("_session-note")  # the chat's SessionStart hook (mods/chat/session-note.sh): an Assistant's extra words
+    c = sub.add_parser("_session-note")  # the chat's SessionStart hook (mods/collie-chat/session-note.sh): an Assistant's extra words
     c.add_argument("terminal")
     c.set_defaults(fn=cmd_session_note, json=False)
     c = sub.add_parser("_hold-news")  # feedback's report, queued for its Assistant in the background (feedback.queue_news)
@@ -470,6 +461,6 @@ def main():
         if getattr(args, "json", False):
             print(json.dumps({"error": str(e)}))
         else:
-            print(f"herdr-task: {e}", file=sys.stderr)
+            print(f"collie-task: {e}", file=sys.stderr)
         return 1
     return 0

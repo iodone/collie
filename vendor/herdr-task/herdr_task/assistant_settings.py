@@ -1,8 +1,8 @@
 """What a space's Assistant knows of the person's settings (SHEP-49): the ones that shape how it
 makes and runs tasks, resolved for its space (Everywhere's, then this machine's from before, then
 the space's own), as a short "Your settings" block, like the Settings block a worker's brief ends
-with. Its session gets the block at every start, resume, compaction and handoff (the chat's
-SessionStart hook, mods/chat/session-note.sh, asks `herdr-task _session-note`); a running one gets
+with. Its session gets the block at every start, resume, compaction and handoff (collie-chat's
+SessionStart hook, mods/collie-chat/session-note.sh, asks `collie-task _session-note`); a running one gets
 one hidden notice line per setting that changed for its space, several at once in one message,
 never for a save that changed nothing there. Other agents (task workers, automation runs, agent
 tabs) aren't told the block: their brief is fixed; they get only Reactions (reactions.py)."""
@@ -192,7 +192,7 @@ def session_note(terminal):
 
 
 def cmd_session_note(args):
-    """`herdr-task _session-note <terminal>`: the hook's extra words, as JSON string content
+    """`collie-task _session-note <terminal>`: the hook's extra words, as JSON string content
     (escaped, without the quotes) so the hook can put them in its own JSON as they are."""
     try:
         text = session_note(args.terminal)

@@ -59,15 +59,7 @@ export function chatOf(address) {
 // On screen as a terminal: its pane is in the shown tab, with no chat showing it.
 function onScreen(address) {
   const tab = focused()?.tab;
-  return Boolean(tab) && panes().some((p) => p.terminal === address && p.tab === tab) && !chatOf(address) && !threadShown(address);
-}
-
-// A task worker's thread (the old chat's openThread(): shared "chat.threads" = { [pane]: { terminal,
-// task, title } }) in the shown tab: its asks are answered on the thread's card there.
-function threadShown(address) {
-  const tab = focused()?.tab;
-  return Boolean(tab) && Object.entries(shared("chat.threads") ?? {}).some(([pane, v]) => v?.terminal === address
-    && panes().some((p) => p.pane === pane && p.mod === "collie-chat" && p.tab === tab));
+  return Boolean(tab) && panes().some((p) => p.terminal === address && p.tab === tab) && !chatOf(address);
 }
 
 // ---- the engine (the tab bar runs it) --------------------------------------------------------
@@ -141,7 +133,7 @@ const release = (id) => writeTextFile(`${ASKS()}/ans/${id}.json`, "", null).catc
 // already gave them (the agent shows as blocked). An open chat alerts by itself. It says why, as
 // the Tasks row does.
 async function alert(a) {
-  if (chatOf(a.terminal) || threadShown(a.terminal) || terminals().find((k) => k.address === a.terminal)?.status === "blocked") return;
+  if (chatOf(a.terminal) || terminals().find((k) => k.address === a.terminal)?.status === "blocked") return;
   // An Assistant whose space's Notify is Off stays quiet.
   if (!notifies(terminals().find((k) => k.address === a.terminal), "need")) return;
   let req = null;
@@ -382,9 +374,6 @@ export function showInbox() {
 export function toAgent(address) {
   const chat = chatOf(address);
   if (chat) { selectTabOf(chat); run("pane.focus", { pane: chat }); return; }
-  // A task worker's thread, open beside its coordinator's chat (a chat feature #7 does not port yet).
-  const thread = Object.entries(shared("chat.threads") ?? {}).find(([p, v]) => v?.terminal === address && panes().some((x) => x.pane === p))?.[0];
-  if (thread) { selectTabOf(thread); run("pane.focus", { pane: thread }); return; }
   const p = panes().find((x) => x.terminal === address);
   if (p) { selectTab(p.tab); run("pane.focus", { pane: p.pane }); return; }
   // No pane (a task worker runs without one): peek at its terminal over the tab.

@@ -27,9 +27,9 @@ BACKUP_EVERY_MS = 10 * 60000
 BACKUP_KEEP = 48
 BACKUP_NAME = re.compile(r"^\d{4}-\d\d-\d\dT\d\d-\d\d-\d\dZ$")
 THIS = "this-computer"
-# The sidebar's state in shared.json: sections, icons, pins, machine names; space colors; the
-# Assistant chats waiting for a first message.
-SIDEBAR_KEYS = ("spaces-chat", "space.colors", "coordinator.slots")
+# The sidebar's state in shared.json: the space icons Collie keeps, space colors and the
+# Assistant slots (Collie's chat: an Assistant per space).
+SIDEBAR_KEYS = ("collie.spaceIcons", "space.colors", "coordinator.slots")
 # What a terminal was, enough to start it again (its status and turn change all the time).
 TERMINAL_KEYS = ("address", "name", "agent", "template", "cwd", "parent", "state")
 MARK = "--herdr-backup--"
@@ -137,10 +137,13 @@ def blocks(node):
 def restore_plan(folder):
     """What a backup holds, as the spaces it would recreate, machine by machine."""
     sidebar = read_list(os.path.join(folder, "sidebar.json")) or {}
+    # Icons as Collie keeps them (collie.spaceIcons). An older backup may still hold Shepherdr's
+    # chat key ("spaces-chat": icons, sections, pins): read for its own sake, never written.
     side = sidebar.get("spaces-chat") or {}
     sections = side.get("sections") or []
+    icons = sidebar.get("collie.spaceIcons") or side.get("icons") or {}
     out = {"backup": os.path.basename(folder), "machines": [], "sections": sections,
-           "icons": side.get("icons") or {}, "pinned": side.get("pinned") or []}
+           "icons": icons, "pinned": side.get("pinned") or []}
     for name in sorted(os.listdir(folder), key=lambda n: (n != f"{THIS}.json", n)):
         if not name.endswith(".json") or name == "sidebar.json":
             continue
@@ -161,7 +164,7 @@ def restore_plan(folder):
                 tabs.append({"id": tb["id"], "name": tb.get("name"), "panes": panes})
             spaces.append({"id": sp["id"], "name": sp.get("name"), "folder": sp.get("folder"),
                            "section": next((s.get("name") for s in sections if sid in (s.get("spaces") or [])), None),
-                           "icon": (side.get("icons") or {}).get(sid), "pinned": sid in (side.get("pinned") or []), "tabs": tabs})
+                           "icon": icons.get(sid), "pinned": sid in (side.get("pinned") or []), "tabs": tabs})
         out["machines"].append({"machine": machine, "error": d.get("error"), "spaces": spaces})
     return out
 

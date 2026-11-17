@@ -348,11 +348,13 @@ def print_plan(root: Path, plans: list[dict]) -> None:
 
 
 HOOK_FILES = (".claude/settings.json", ".codex/hooks.json")
+# collie-chat's hooks: the permission card (a permission, question or plan answered on the agent's
+# chat), and the note a session starts with (how reactions travel, an Assistant's settings).
+CHAT_HOOKS = (("PermissionRequest", "ask-hook.sh", 1800), ("SessionStart", "session-note.sh", 10))
 
 
 def add_hooks(root: Path) -> list[list[str]]:
-    """Point Claude/Codex PermissionRequest at collie-chat's ask hook, once."""
-    command = f"sh '{app_root(root)}/mods/collie-chat/ask-hook.sh'"
+    """Point Claude/Codex at collie-chat's hooks, once: its permission card and its session note."""
     done: list[list[str]] = []
     for relative in HOOK_FILES:
         path = target_path(root, relative)
@@ -363,24 +365,27 @@ def add_hooks(root: Path) -> list[list[str]]:
         except ValueError:
             print(f"hooks: {path} is not valid JSON; left alone", file=sys.stderr)
             continue
-        event = "PermissionRequest"
-        entries = data.setdefault("hooks", {}).setdefault(event, [])
-        if any("ask-hook.sh" in hook.get("command", "") for entry in entries for hook in entry.get("hooks", [])):
+        added = False
+        for event, script, timeout in CHAT_HOOKS:
+            command = f"sh '{app_root(root)}/mods/collie-chat/{script}'"
+            entries = data.setdefault("hooks", {}).setdefault(event, [])
             done.append([relative, event, command])
-            continue
-        entries.append({"hooks": [{"type": "command", "command": command, "timeout": 1800}]})
-        if path.exists():
-            Backups(root, False).save(root, relative)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write(path, (json.dumps(data, indent=2) + "\n").encode())
-        done.append([relative, event, command])
-        if relative.startswith(".codex"):
-            print("hooks: Codex asks once to trust its new hook; approve it in its Hooks screen")
+            if any(script in hook.get("command", "") for entry in entries for hook in entry.get("hooks", [])):
+                continue
+            entries.append({"hooks": [{"type": "command", "command": command, "timeout": timeout}]})
+            added = True
+        if added:
+            if path.exists():
+                Backups(root, False).save(root, relative)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write(path, (json.dumps(data, indent=2) + "\n").encode())
+            if relative.startswith(".codex"):
+                print("hooks: Codex asks once to trust its new hook; approve it in its Hooks screen")
     return done
 
 
 def remove_hooks(root: Path, dry_run: bool) -> None:
-    command = f"{app_root(root)}/mods/collie-chat/ask-hook.sh"
+    scripts = [script for _, script, _ in CHAT_HOOKS]
     for relative in HOOK_FILES:
         path = target_path(root, relative)
         if not path.exists():
@@ -392,7 +397,7 @@ def remove_hooks(root: Path, dry_run: bool) -> None:
         changed = False
         for event, entries in list((data.get("hooks") or {}).items()):
             kept = [entry for entry in entries
-                    if not any(command in hook.get("command", "") for hook in entry.get("hooks", []))]
+                    if not any(f"/mods/collie-chat/{script}" in hook.get("command", "") for script in scripts for hook in entry.get("hooks", []))]
             if len(kept) != len(entries):
                 changed = True
                 if kept:

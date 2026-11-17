@@ -322,7 +322,7 @@ def forward(args, machine, space):
     except ValueError:
         v = None
     if not isinstance(v, dict):
-        why = ((r.stderr or r.stdout).strip().splitlines() or ["no answer"])[-1].replace("herdr-task: ", "")
+        why = ((r.stderr or r.stdout).strip().splitlines() or ["no answer"])[-1].replace("collie-task: ", "")
         raise Fail(f"Couldn't reach {machine}: {why}")
     if v.get("error"):
         raise Fail(v["error"])

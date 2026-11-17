@@ -430,6 +430,7 @@ Inbox 不是第二个操作台。每行右侧只有一个 **回复** 按钮：
   - session 丢失时用同一模板的正文重开新 session 并说明（`lostMessage`）。
   - task news（`<herdr-news>`）走 `core/chat-log.js`，在对话里显示为细行（`newsLine`）；
   - Claude 的 permission/question/plan 由 `ask-hook.sh` 写入 `data/chat-asks/{open,req,ans,end}`，chat 用 `cards.js` / `strips.js` 显示并回答，`hc interrupt` 仍作 Stop；
+  - session 开始时 `session-note.sh`（`collie install` 写进 `~/.claude/settings.json` / `~/.codex/hooks.json` 的 SessionStart）说明 chat 的标签约定；Assistant 另得 `collie-task _session-note` 给出的 “Your settings” 块；
   - CLI 启动前的 trust / sign-in 等屏幕由 `screens.js` / `core/screens.js` 读屏成卡片，按下只在该屏幕仍是原样时生效；
   - 尚未移植（Slice 3+）：ticket 工具、图片/模型/反应/线程。
 - Inbox 的“回复”按 `herdr.chat` / `herdr.chat.slot` 找 coordinator 终端；chat pane 没有 terminal，旧写法会把消息静默丢掉。
@@ -444,7 +445,7 @@ Inbox 不是第二个操作台。每行右侧只有一个 **回复** 按钮：
 
 - **一台机器只有一个 collie service**，不是每个 space 一个。
 - Bun 进程，跑 `service/main.ts`；由 systemd user unit / launchd agent 管理。
-- 负责 Web/API/WebSocket、`incoming/*.json`、`herdr-task tick`、scheduler、远端 tick、coordinator/worker revive。
+- 负责 Web/API/WebSocket、`incoming/*.json`、`collie-task tick`、scheduler、远端 tick、coordinator/worker revive。
 - 不拥有 coordinator；coordinator 的生命周期在 herdr-core。
 - unit 负责：`RunAtLoad` / `KeepAlive`（systemd `Restart=always`），开机后自动拉起。
 - 窗口与 service 互备：
