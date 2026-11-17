@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "layout": "collie",
   "mods": [
-    "collie",
+    "collie-inbox",
     "collie-artifacts",
     "collie-chat",
     "collie-chat-image",

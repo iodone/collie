@@ -1,5 +1,5 @@
-// What needs the person, from every space and machine: the Tasks panel's "Needs you" (mods/tasks;
-// there is no Inbox panel). Items are derived
+// What needs the person, from every space and machine: Collie Inbox's "Needs you"
+// (mods/collie-inbox). Items are derived
 // each time from what is there now and never stored, so they go once handled:
 //   ask      a Claude agent asks (a permission, a plan, questions) through the chat's
 //            PermissionRequest hook (the chat's ask hook, #7 Slice 2): answered on its chat's card
@@ -29,14 +29,14 @@
 // is missing. Claude shows its own prompt in its terminal meanwhile; Codex waits on the hook, so
 // a Codex agent's ask is released once its terminal comes on screen, and Codex asks there.
 //
-// Shared: the source is lib/inbox.js; bin/sync-shared copies it into each mod in lib/COPIES.
-// Edit lib/inbox.js, never a mod's copy, then run bin/sync-shared.
+// This engine lives in the always-loaded tab bar; the Inbox UI is mods/collie-inbox.
+// Pure helpers are shared through core/needs.js and core/spaces.js.
 
 import { LINE_MAX, REASONS, fit, reqReason, reportReason } from "./core/needs.js";
-import { notifies, spaceOfTerminal } from "./notify.js";
+import { notifies } from "./notify.js";
 import { toast, toastWho as whoOf } from "./lib/ui.js";
 import { exec, appHome, home, focused, shared, setShared, watchFolder, readTextFile, writeTextFile, playSound, settings, run, layout } from "herdr";
-import { terminals, agents, panes, spaces } from "./live.js";
+import { terminals, panes, spaces } from "./live.js";
 import { chatPane } from "./core/spaces.js";
 
 const CLI = () => process.env.COLLIE_TASK_CLI ?? `${appHome()}/bin/collie-task`;
@@ -84,12 +84,12 @@ export function startInbox(cx) {
   // Agents' alerts (herdr-task alert): labels, so no program to run; a look each second.
   cx.timer.every(1000, () => agentAlerts());
   cx.timer.every(20000, (cx) => cx.spawn(async () => { await readTasks().catch(() => {}); }));
-  // A thread asked for (shared "chat.threadreq") that no coordinator chat took within 1.5 s
+  // A thread asked for (shared "collie-chat.threadreq") that no coordinator chat took within 1.5 s
   // (none open in that space, or it shows its terminal): go to the worker itself instead.
   let fellBack = null;
   cx.timer.every(500, () => {
-    const q = shared("chat.threadreq");
-    if (!q?.terminal || q.at === fellBack || shared("chat.threadack") === q.at) return;
+    const q = shared("collie-chat.threadreq");
+    if (!q?.terminal || q.at === fellBack || shared("collie-chat.threadack") === q.at) return;
     const age = Date.now() - q.at;
     if (age < 1500 || age > 6000) return;
     fellBack = q.at;
@@ -149,7 +149,7 @@ async function alert(a) {
 // `herdr-task alert "<title>" --body "<why>"` (as Shepherdr's `shepherdr alert`): the agent's own
 // terminal gets the core label herdr.alert = { id, at, title, body, task?, about? }, which every
 // Herdr client sees at once. Each new one: the blocked sound and a toast, a click on it goes to
-// the agent (a task's chat in the Tasks panel). A task's agent, or an alert about a task
+// the agent (its chat, or its terminal when it has no pane). A task's agent, or an alert about a task
 // (--task), always reaches the person; an Assistant's follows its space's Notify (notify.js).
 // After a restart, only those from the last 15 seconds still show.
 const ALERT = "herdr.alert";
@@ -174,18 +174,10 @@ function agentAlerts() {
 }
 
 // A click on an alert's toast (the tab bar's "alert-<terminal>" command; a mod command carries
-// no args): a task's agent opens on its chat in the Tasks panel, anything else goes to the agent.
+// no args): go to the agent's chat, or peek at its terminal when it has no pane.
 export function toAlert(args) {
   const terminal = args?.terminal;
   if (!terminal) return;
-  const k = terminals().find((x) => x.address === terminal);
-  if (k?.labels?.["herdr.task"] && hasNode(layout(), "tasks-thread")) {
-    setShared("tasks.thread", { terminal, task: null, title: agentInfo(terminal)?.title ?? null, at: Date.now() });
-    run("layout.select", { stack: "panel-body", child: "tasks" });
-    run("layout.select", { stack: "tasks", child: "tasks-thread" });
-    run("layout.show", { id: "panel" });
-    return;
-  }
   toAgent(terminal);
 }
 
@@ -229,7 +221,7 @@ async function readTasksNow() {
     const on = machine ? ["--on", machine] : [];
     const list = await json(CLI(), [...on, "list", "--all", "--json"]);
     for (const g of Array.isArray(list) ? list : []) for (const x of g.tasks ?? []) {
-      // Ready: herdr-task's own status, the same as Tasks' Ready group and Shepherdr's green
+      // Ready: herdr-task's own status, the same as the Inbox's Ready group and Shepherdr's green
       // counts (not Merging, nor one whose agent asks: that agent is a "blocked" item).
       // "asks": its agent waits (a live blocked terminal, an item of its own): kept for its reason.
       // "provider": cut off by its model's provider, the tries used up (herdr-task tick).
@@ -286,7 +278,7 @@ async function json(cmd, args) {
 
 // ---- the items ----------------------------------------------------------------------------
 
-// Every item now, most urgent first: asks and waiting agents, then problems. These are Tasks'
+// Every item now, most urgent first: asks and waiting agents, then problems. These are the Inbox's
 // "Needs you" and the red counts; a task ready to merge isn't one (it's in Ready: ready()).
 export function items() {
   const asks = shared("inbox.asks") ?? [];
@@ -337,7 +329,7 @@ export function countsByTab() {
   return m;
 }
 
-// The tasks in Tasks' Ready, for the green counts (beside the red ones), and per tab.
+// The tasks in the Inbox's Ready, for the green counts (beside the red ones), and per tab.
 export const ready = () => (shared("inbox.tasks") ?? []).filter((x) => x.kind === "merge");
 export const readyCount = () => ready().length;
 export function readyByTab() {
@@ -380,17 +372,10 @@ export function toAgent(address) {
   peekTerminal(address);
 }
 
-// A terminal with no pane (a task worker or reviewer, which has no tab by design): its raw
-// screen in the Tasks panel's task view, Terminal side (mods/chat/panel.js openTaskThread(),
-// then requestWorkerTerminal()). A layout without that view gets Herdr's own peek.
-const hasNode = (n, id) => Boolean(n && typeof n === "object") && (n.id === id || (n.children ?? []).some((c) => hasNode(c, id)));
+// A terminal with no pane (a task worker or reviewer, which has no tab by design): Herdr's
+// own peek. Collie's ticket page is not a terminal host, so there is no task-view branch.
 export function peekTerminal(terminal, task = null, title = null) {
-  if (!hasNode(layout(), "tasks-thread")) { run("terminal.peek", { terminal }); return; }
-  setShared("tasks.thread", { terminal, task, title: title ?? agentInfo(terminal)?.title ?? null, at: Date.now() });
-  run("layout.select", { stack: "panel-body", child: "tasks" });
-  run("layout.select", { stack: "tasks", child: "tasks-thread" });
-  run("layout.show", { id: "panel" });
-  setShared("tasks.thread.termreq", { terminal, at: Date.now() });
+  run("terminal.peek", { terminal });
 }
 
 function selectTab(tab) {
@@ -401,5 +386,3 @@ function selectTab(tab) {
 const selectTabOf = (pane) => { const p = panes().find((x) => x.pane === pane); if (p) selectTab(p.tab); };
 
 // The agents an item is about, for its name and status.
-export const agentInfo = (address) => agents().find((a) => a.address === address) ?? null;
-export const terminalInfo = (address) => terminals().find((k) => k.address === address) ?? null;

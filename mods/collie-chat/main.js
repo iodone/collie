@@ -3164,7 +3164,7 @@ export default class Chat extends View {
       case "tasknews": {
         // A task's news line (newsLines()): its mark, the id, what happened, then its words, dim;
         // a needs-you line still waiting in red. The whole line opens it in the Inbox (clickRow()).
-        const tick = (c) => div().size(12).flex_none().rounded(6).bg(c).child(svg("mods/collie/task/tick.svg").size(12).flex_none().text_color("#ffffff"));
+        const tick = (c) => div().size(12).flex_none().rounded(6).bg(c).child(svg("mods/collie-inbox/task/tick.svg").size(12).flex_none().text_color("#ffffff"));
         const dot = (c) => div().size(8).flex_none().rounded(4).bg(c);
         const mark = x.mark === "ready" ? tick(green()) : x.mark === "done" ? tick(t.dim)
           : dot(x.mark === "started" ? amber() : x.mark === "needs" ? (x.live ? red() : t.dim) : t.dim);

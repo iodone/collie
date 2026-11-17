@@ -33,7 +33,7 @@ const waiting = (id: string, extra: Record<string, any> = {}) => ({
   ...extra,
 });
 
-describe("mods/collie pure queue projection", () => {
+describe("mods/collie-inbox pure queue projection", () => {
   test("只投影 waiting：priority 升序、同优先级先进先出、hold 沉底，且不改输入", () => {
     const decisions = [
       waiting("dc_held", { priority: { value: 0 }, hold: { until: null } }),
@@ -181,7 +181,7 @@ test("layout 只保留 collie 自有页面，不再挂 shep 的 Tasks/Assistant 
 
 test("Inbox 是顶部 panel 页签，ticket 详情留在 Inbox 内", () => {
   const top = readFileSync(new URL("../mods/collie-tabs/main.js", import.meta.url), "utf8");
-  const source = readFileSync(new URL("../mods/collie/main.js", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../mods/collie-inbox/main.js", import.meta.url), "utf8");
   expect(top).toContain('panelButton("collie", "Inbox"');
   expect(source).toContain('run("layout.select", { stack: STACK, child: TICKET })');
   expect(source).toContain('run("layout.select", { stack: BODY, child });');
@@ -192,7 +192,7 @@ test("Inbox 是顶部 panel 页签，ticket 详情留在 Inbox 内", () => {
 });
 
 test("mod 只导入包内共享库拷贝，不越过 herdr 模块边界", () => {
-  const source = readFileSync(new URL("../mods/collie/main.js", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../mods/collie-inbox/main.js", import.meta.url), "utf8");
   expect(source).toContain('from "./lib/inbox-queue.js"');
   expect(source).toContain('from "./lib/artview.js"');
   expect(source).toContain('from "./core/task-artifacts.js"');
@@ -201,7 +201,7 @@ test("mod 只导入包内共享库拷贝，不越过 herdr 模块边界", () => 
   expect(source).not.toContain('collie-detail');
   expect(source).not.toContain('decisionId');
   const shared = readFileSync(new URL("../lib/inbox-queue.js", import.meta.url), "utf8");
-  const copied = readFileSync(new URL("../mods/collie/lib/inbox-queue.js", import.meta.url), "utf8");
+  const copied = readFileSync(new URL("../mods/collie-inbox/lib/inbox-queue.js", import.meta.url), "utf8");
   expect(copied).toBe(shared);
 
   // #6: the ticket's list and the viewer's toolbar are one collie-owned mod.
@@ -231,7 +231,7 @@ test("ticket 详情复用 shepherdr 的任务视图，只留 Terminal 与 Artifa
   expect(ticket.type).toEqual("column");
   expect(ticket.children.map((child: any) => child.id)).toEqual(["collie-ticket-head", "collie-ticket-body"]);
   expect(ticket.children[0]).toMatchObject({
-    type: "block", size: { px: 127 }, content: { mod: "collie", props: { view: "head" } },
+    type: "block", size: { px: 127 }, content: { mod: "collie-inbox", props: { view: "head" } },
   });
   expect(body.type).toEqual("stack");
   expect(body.children.map((child: any) => child.id)).toEqual(["collie-ticket-artifacts"]);
@@ -242,7 +242,7 @@ test("ticket 详情复用 shepherdr 的任务视图，只留 Terminal 与 Artifa
   expect(stack.children.map((child: any) => child.id)).toEqual(["collie-list", "collie-ticket"]);
   expect(stack.active).toEqual("collie-list");
 
-  const source = readFileSync(new URL("../mods/collie/main.js", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../mods/collie-inbox/main.js", import.meta.url), "utf8");
   expect(source).toContain('["terminal", "Terminal", { disabled: !live }]');
   expect(source).toContain('["artifacts", this.artsLabel(), {}]');
   expect(source).toContain('segmented("collie-thread-mode"');
@@ -257,9 +257,9 @@ test("ticket 详情复用 shepherdr 的任务视图，只留 Terminal 与 Artifa
   expect(source.match(/taskDot\(stage === "needs" \? need : stage, \{ pct, halo: stage === "needs" && need === "needs" \}\)/g)).toHaveLength(2);
   expect(source).toContain("STAGE_WORD[stage] ?? stage");
   const dot = readFileSync(new URL("../lib/ticket-dot.js", import.meta.url), "utf8");
-  expect(dot).toContain("mods/collie/task/pie/");
-  expect(dot).toContain("mods/collie/task/tick.svg");
-  const copied = readFileSync(new URL("../mods/collie/lib/ticket-dot.js", import.meta.url), "utf8");
+  expect(dot).toContain("mods/collie-inbox/task/pie/");
+  expect(dot).toContain("mods/collie-inbox/task/tick.svg");
+  const copied = readFileSync(new URL("../mods/collie-inbox/lib/ticket-dot.js", import.meta.url), "utf8");
   expect(copied).toBe(dot);
   expect(source).toContain("label: STAGE_WORD.needs");
   expect(source).toContain("this.spaceHead(t, group.key, group.rows.length)");
@@ -269,7 +269,7 @@ test("ticket 详情复用 shepherdr 的任务视图，只留 Terminal 与 Artifa
 });
 
 test("Inbox 的过滤器对应四个 Work 状态，回复回到 coordinator chat", () => {
-  const source = readFileSync(new URL("../mods/collie/main.js", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../mods/collie-inbox/main.js", import.meta.url), "utf8");
   expect(source).toContain('[["all", "All"], ["needs", "Needs you"], ["todo", "Todo"], ["working", "Working"], ["settled", "Settled"]]');
   expect(source).not.toContain('["thinking", "Thinking"]');
   expect(source).not.toContain('["progress", "In progress"]');
@@ -327,7 +327,7 @@ test("collie-request 将重复的 --ticket 全部交给 request socket", async (
   }
 });
 
-describe("mods/collie navigation targets", () => {
+describe("mods/collie-inbox navigation targets", () => {
   const decision = waiting("dc_12345678");
   const receipt = {
     decision_ref: decision.id,
@@ -411,18 +411,18 @@ describe("chrome / tabs / settings / toasts 自包含（#8）", () => {
     "mods/collie-chrome/main.js",
     "mods/collie-tabs/main.js",
     "mods/collie-tabs/coordinator.js",
-    "mods/collie-tabs/inbox.js",
+    "mods/collie-tabs/inbox-engine.js",
     "mods/collie-tabs/core/spaces.js",
     "mods/collie-pane-chat/main.js",
     "mods/collie-settings/main.js",
     "mods/collie-artifacts/main.js",
     "mods/collie-artifacts/bar.js",
     "lib/artview.js",
-    "mods/collie/lib/artview.js",
+    "mods/collie-inbox/lib/artview.js",
     "mods/collie-artifacts/lib/artview.js",
     "mods/collie-artifacts/lib/ui.js",
     "lib/ui.js",
-    "mods/collie/lib/ui.js",
+    "mods/collie-inbox/lib/ui.js",
     "mods/collie-tabs/lib/ui.js",
     "mods/collie-chrome/lib/ui.js",
     "mods/collie-settings/lib/ui.js",

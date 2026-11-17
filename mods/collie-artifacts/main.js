@@ -1,7 +1,7 @@
 // A ticket's Artifacts (SHEP-60): what its agent and its helpers made or updated, its proof first (marked Proof), then
 // newest first; each with its title (without the ticket's id in front), how many versions and when. A click opens it in
 // the artifact viewer (its versions, Mark up) over the ticket, or the whole window. A child of the ticket view beside
-// Terminal; the header finds them (mods/collie/main.js pollArts, core/task-artifacts.js) into shared
+// Terminal; the header finds them (mods/collie-inbox/main.js pollArts, core/task-artifacts.js) into shared
 // "tasks.thread.artifacts" and counts them on its switch. None: a quiet line.
 // The same mod is the viewer's toolbar when props().artifact is set (lib/artview.js mounts it): bar.js draws it.
 import { View, div, svg } from "gpui-kit";

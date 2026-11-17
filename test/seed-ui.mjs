@@ -25,7 +25,7 @@ const reviewReceipt = {
   summary: "【UI 测试】双循环 Ticket 详情已准备好",
   details: "- 统一 Decision 与 Task 视图\n- 展示变更、检查和 Proof\n- 在 Inbox 内完成 Review",
   proof: {
-    refs: ["commit:ef57b5e", "cmd:npm test (131 passed)", "mods/collie/main.js:250"],
+    refs: ["commit:ef57b5e", "cmd:npm test (131 passed)", "mods/collie-inbox/main.js:250"],
     text: "131 tests passed\nTicket detail evidence rendered",
   },
 };
@@ -34,7 +34,7 @@ reviewReceipt.task = { ...reviewReceipt.task, id: "COLLIE-999" };
 review.receipt_ref = reviewReceipt.id;
 review.ui_evidence = {
   commits: { count: 1, list: [["ef57b5e", "feat: unify ticket flow"]] },
-  diff: { list: [{ path: "mods/collie/main.js", added: 86, removed: 24 }, { path: "service/main.ts", added: 31, removed: 8 }] },
+  diff: { list: [{ path: "mods/collie-inbox/main.js", added: 86, removed: 24 }, { path: "service/main.ts", added: 31, removed: 8 }] },
   checks: { state: "passed", text: "All 131 tests passed" },
 };
 review.human_boundary = { form: "card", chat_injection: false };

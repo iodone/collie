@@ -4,7 +4,7 @@ import { panes, run, openOverlay, theme, window, shared, setShared, layout, sett
 import { spacesWithChats as spaces, sweep } from "./parked.js";
 import { isCoordinatorTab, closeTab, watchNewSpaces, newSpace, openCoordinator, renameTab, renameSpace } from "./coordinator.js";
 import { startTick, tickOnChange } from "./tick.js";
-import { startInbox, countsByTab, readyByTab, showInbox, toAlert } from "./inbox.js";
+import { startInbox, countsByTab, readyByTab, showInbox, toAlert } from "./inbox-engine.js";
 import { countBadge, H, TEXT, RADIUS } from "./lib/ui.js";
 // A tab's name (what runs in it while Herdr named it): core/menus.js, as the web app's tab bar names it.
 import { tabName } from "./core/menus.js";
@@ -33,9 +33,9 @@ export default class Tabs extends View {
       setShared("collie.closeTabReq", null);
       closeTab(request.id);
     });
-    // Tasks' queue and merge watcher (mods/tasks owns it): left to the service while it runs.
+    // Inbox queue and merge watcher (collie-task owns it): left to the service while it runs.
     startTick(cx);
-    // What needs the person, for Tasks' "Needs you" and the red counts (inbox.js).
+    // What needs the person, for Inbox's "Needs you" and the red counts (inbox-engine.js).
     startInbox(cx);
     // Ctrl+Shift+W comes here so a coordinator with live workers asks first, like its x.
     // At most 5 s per wait (one pending nextCommand), so a reload's old build ends at its next
@@ -74,9 +74,9 @@ export default class Tabs extends View {
           const s = spaces().find(s => (id ? s.id === id : s.active));
           if (s) openCoordinator(s, true);
         }
-        // A toast's "needs you": the Tasks panel, on its Active tab.
+        // A toast's "needs you": the Inbox, on its Active tab.
         if (c === "collie") showInbox();
-        // An agent's alert (herdr-task alert), clicked: "alert-<terminal>" ("~" for "/"), to that agent (inbox.js).
+        // An agent's alert (collie-task alert), clicked: "alert-<terminal>" ("~" for "/"), to that agent (inbox-engine.js).
         if (c.startsWith("alert-")) toAlert({ terminal: c.slice(6).replace(/~/g, "/") });
       }
     });

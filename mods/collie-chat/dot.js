@@ -20,12 +20,12 @@ const needColor = red;
 const readyColor = green;
 
 // The pie: the ring with a solid wedge inside, from twelve o'clock clockwise, radius 3.5 of 14
-// (Shepherdr's inset 3.5px), one picture per 5% in mods/collie/task/pie/. Pictures, not paint_path: its
+// (Shepherdr's inset 3.5px), one picture per 5% in mods/collie-inbox/task/pie/. Pictures, not paint_path: its
 // arcs drew only the wedge's outline at this size, which read as a clock's hands.
-const pie = (pct) => `mods/collie/task/pie/${Math.min(100, Math.max(5, Math.round(pct / 5) * 5))}.svg`;
+const pie = (pct) => `mods/collie-inbox/task/pie/${Math.min(100, Math.max(5, Math.round(pct / 5) * 5))}.svg`;
 
 const box = () => div().relative().size(14).flex_none();
-const ring = (color, file = "circle") => svg(`mods/collie/task/${file}.svg`).size(14).flex_none().text_color(color);
+const ring = (color, file = "circle") => svg(`mods/collie-inbox/task/${file}.svg`).size(14).flex_none().text_color(color);
 
 // s: needs, working, merging, ready, queued, scheduled, todo, done, off. pct: the % done (working).
 export function taskDot(s, { pct = null, halo = false } = {}) {
@@ -37,7 +37,7 @@ export function taskDot(s, { pct = null, halo = false } = {}) {
       .when(halo, (el) => el.child(div().absolute().top(-1).left(-1).size(16).rounded(8).border(1.5).border_color(needColor() + "4d")));
     case "ready":
     case "done": return box().rounded(7).bg(s === "ready" ? readyColor() : t.dim)
-      .child(svg("mods/collie/task/tick.svg").size(14).flex_none().text_color("#ffffff"));
+      .child(svg("mods/collie-inbox/task/tick.svg").size(14).flex_none().text_color("#ffffff"));
     case "merging": return ring(readyColor(), "merging").spin(1400);
     case "queued": return ring(t.dim, "queued");
     case "scheduled": return ring(t.dim, "scheduled");

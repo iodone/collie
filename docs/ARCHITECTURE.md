@@ -315,6 +315,18 @@ stateDiagram-v2
 
 ## 8. Inbox 投影
 
+### 模块边界
+
+```text
+mods/collie-inbox/main.js          # Inbox 队列 + Ticket 页面（UI）
+mods/collie-tabs/inbox-engine.js   # 常驻引擎：asks / tasks / alerts
+lib/inbox-queue.js                 # 纯投影：queue / stage
+lib/ticket-dot.js                  # Ticket 状态点
+mods/collie-artifacts/             # Ticket Artifacts + viewer
+```
+
+引擎必须常驻，所以留在 tab bar；Inbox UI 通过 shared `inbox.*` / `collie.ticket` 读它，不跨 mod import。`collie-artifacts` 同时挂在 Ticket 和侧栏，保持独立。
+
 ### 过滤器
 
 ```text

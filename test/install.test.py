@@ -252,7 +252,7 @@ class InstallTest(unittest.TestCase):
         library.parent.mkdir(exist_ok=True)
         library.write_text("export const value = 1;\n")
         copies = self.source / "lib/COPIES"
-        copies.write_text(copies.read_text() + "shared.js: collie\n")
+        copies.write_text(copies.read_text() + "shared.js: collie-inbox\n")
         environment = os.environ.copy()
         environment["HOME"] = str(self.home)
         command = [sys.executable, str(self.source / "bin/collie-sync"), "--root", str(self.source)]
@@ -260,7 +260,7 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(check.returncode, 1)
         dry = subprocess.run(command + ["--dry-run"], capture_output=True, env=environment, check=False)
         self.assertEqual(dry.returncode, 0)
-        copied = self.source / "mods/collie/lib/shared.js"
+        copied = self.source / "mods/collie-inbox/lib/shared.js"
         self.assertFalse(copied.exists())
         subprocess.run(command, capture_output=True, env=environment, check=True)
         self.assertEqual(copied.read_text(), library.read_text())

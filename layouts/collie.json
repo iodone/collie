@@ -141,7 +141,7 @@
                           "id": "collie-list",
                           "type": "block",
                           "content": {
-                            "mod": "collie",
+                            "mod": "collie-inbox",
                             "props": {
                               "view": "queue"
                             }
@@ -155,7 +155,7 @@
                               "id": "collie-ticket-head",
                               "type": "block",
                               "content": {
-                                "mod": "collie",
+                                "mod": "collie-inbox",
                                 "props": {
                                   "view": "head"
                                 }
@@ -204,7 +204,7 @@
                       "id": "working",
                       "type": "block",
                       "content": {
-                        "mod": "collie",
+                        "mod": "collie-inbox",
                         "props": {
                           "view": "working"
                         }
