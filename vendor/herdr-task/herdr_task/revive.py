@@ -103,7 +103,7 @@ def lost_message(ref=None, template=None):
     """A new agent's first message once its session is gone (core/chat-view.js lostMessage)."""
     msg = f"<restart>{FRESH}</restart>"
     if ref:
-        msg += f"\n\nYou work on task {ref}: read its brief with `herdr-task show {ref}` and carry on from what is already done."
+        msg += f"\n\nYou work on task {ref}: read its brief with `collie-task show {ref}` and carry on from what is already done."
     body = "---".join(re.split(r"^---[ \t]*$", template or "", flags=re.M)[2:]).strip()
     if body:
         msg += f"\n\n{body}"
@@ -258,7 +258,9 @@ def plan(k, rec, running):
     if rec and rec.get("session") and rec.get("log") and os.path.isfile(rec["log"]):
         return ("resume", resume_argv(rec["kind"], rec["argv"], rec["session"], CUT if rec.get("working") else None), not rec.get("shell"))
     # Its session is gone: a new one, with the handover (and an Assistant's role, its template's words).
-    command, template = template_of() if assistant else (None, None)
+    command, template = template_of("collie-coordinator") if assistant else (None, None)
+    if assistant and not template:
+        command, template = template_of()
     argv = (rec or {}).get("argv") or (shlex.split(command) if command else None)
     if not argv:
         return None
