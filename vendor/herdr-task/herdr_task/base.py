@@ -31,7 +31,7 @@ class Fail(Exception):
 # Shepherdr's installer (bin/shepherdr) puts this file here while it replaces helpers or templates,
 # and removes it once `shepherdr doctor` finds the install whole. Until then nothing copies a helper
 # to another machine: not the sync, not a command's self-copy (cli.remote, herdr-artifact's,
-# herdr-secret's install --on), so a half-done or wrong copy never reaches every machine.
+# collie-secret's install), so a half-done or wrong copy never reaches every machine.
 SYNC_HOLD = os.path.join(HOME, ".herdr", "sync-hold")
 
 
@@ -44,17 +44,9 @@ def sync_held():
         return None
 
 
-# Shepherdr's add-ons (lib/addons.json): one the person switched off in Shepherdr settings >
-# Window is in Everywhere's "off" (~/.herdr/shepherdr.json, or HERDR_TASK_SETTINGS), and its
-# background work here stops (autopilot, browsers, the sync to other machines).
+# Collie has no Shepherdr add-on switches: optional work stays on.
 def addon_off(name):
-    path = os.environ.get("HERDR_TASK_SETTINGS") or os.path.join(HOME, ".herdr", "shepherdr.json")
-    try:
-        with open(path) as f:
-            off = (json.load(f).get("everywhere") or {}).get("off")
-    except (OSError, ValueError, AttributeError):
-        return False
-    return isinstance(off, list) and name in off
+    return False
 
 
 def now():

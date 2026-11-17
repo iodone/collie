@@ -28,8 +28,7 @@ from .news import news_send, send_or_hold, typing
 
 # ---- sync: the same task tools on every machine ---------------------------------------------
 # What a machine needs to run tasks: collie-task (one zipapp), collie-artifact (with its guide and
-# markup), herdr-secret (a remote copy: it asks the main machine), herdr-browser once it exists,
-# and the role templates. Each goes to the same place under that machine's home as here
+# markup), herdr-browser once it exists, and the role templates. Each goes to the same place under that machine's home as here
 # (~/.local/bin/..., ~/.config/herdr-core/templates/...). A stamp there (~/.herdr/tools.json)
 # records what was installed (each file's sha256 and its source's time), so a machine that is
 # current is skipped, an older copy never replaces a newer one, and a template someone changed
@@ -69,24 +68,6 @@ def _core_dir():
                         os.environ.get("HC_SESSION") or "default")
 
 
-def secrets_main_here():
-    """Whether this machine keeps the secrets (bin/herdr-secret remote()): herdr-core's document
-    "shepherdr.secrets" names it, or, none named yet, it has a vault and no remote mark. Only then
-    does a copy of herdr-secret it installs elsewhere get marked as asking another machine: a hub
-    that doesn't keep them (the Mac mini) once marked the main machine remote (SHEP-11)."""
-    def js(path):
-        try:
-            with open(path) as f:
-                return json.load(f)
-        except (OSError, ValueError):
-            return None
-    docs, core = js(os.path.join(_core_dir(), "docs.json")) or {}, js(os.path.join(_core_dir(), "core.json")) or {}
-    rec = ((docs.get("shepherdr.secrets") if isinstance(docs, dict) else None) or {}).get("value")
-    if isinstance(rec, dict) and rec.get("id"):
-        return isinstance(core, dict) and rec["id"] == core.get("id")
-    return os.path.isfile(os.path.join(HOME, ".herdr", "vault.json")) and not os.path.exists(os.path.join(HOME, ".herdr", "secret-remote"))
-
-
 def manifest():
     """What sync installs, from this machine's own copies: {version, files, links, touch}. A file
     is {path (under home), data, sha, mode, at (its source's time, ms), protect, test}."""
@@ -114,14 +95,6 @@ def manifest():
                 add(f"{ARTIFACT_HOME}/{extra}", _read(p), 0o644, [p])
         # As here: ~/.local/bin/collie-artifact leads to its folder, where its guide sits beside it.
         links.append({"path": ".local/bin/collie-artifact", "target": f"{ARTIFACT_HOME}/bin/collie-artifact"})
-    secret = _real(".local/bin/herdr-secret")
-    if secret:
-        add(".local/bin/herdr-secret", _read(secret), 0o755, [secret], test=["--help"])
-        # As `herdr-secret install --on`: a copy there asks this machine, the main one, unless it keeps
-        # a vault itself or the record there names it the main one. A machine that isn't the main one
-        # marks nothing.
-        if secrets_main_here():
-            touch.append({"path": ".herdr/secret-remote", "unless": ".herdr/vault.json", "unless_main": True})
     browser = _real(".local/bin/herdr-browser")
     if browser:
         add(".local/bin/herdr-browser", _read(browser), 0o755, [browser])
@@ -219,21 +192,8 @@ for l in x["links"]:
         except Exception as e:
             st = "failed: " + str(e)
     out["links"][l["path"]] = st
-def main_here():
-    # the record naming the machine that keeps the secrets ("shepherdr.secrets"), and this one's id
-    core = os.path.join(os.environ.get("XDG_STATE_HOME") or P(".local/state"), "herdr-core", "default")
-    try:
-        with open(os.path.join(core, "docs.json")) as f:
-            rec = (json.load(f).get("shepherdr.secrets") or {}).get("value") or {}
-        with open(os.path.join(core, "core.json")) as f:
-            me = json.load(f).get("id")
-    except Exception:
-        return False
-    return bool(rec.get("id")) and rec.get("id") == me
 if x["op"] == "install":
     for t in x["touch"]:
-        if t.get("unless_main") and main_here():
-            continue
         if not os.path.exists(P(t["path"])) and not os.path.exists(P(t["unless"])):
             os.makedirs(os.path.dirname(P(t["path"])), exist_ok=True)
             open(P(t["path"]), "a").close()

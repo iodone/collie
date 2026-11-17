@@ -188,7 +188,7 @@ def dependency_errors(root: Path, source: Path) -> list[str]:
         raise InstallError("addons.json `needs` must be an object or list")
     for mod, requirement in needs.items():
         if not (app_root(root) / "mods" / mod).is_dir():
-            errors.append(f"missing shepherdr mod `{mod}` at {app_root(root) / 'mods' / mod}")
+            errors.append(f"missing required mod `{mod}` at {app_root(root) / 'mods' / mod}")
     return errors
 
 

@@ -1,6 +1,6 @@
 // One Inbox workbench: waiting decisions, working dispatches and settled history.
-// All rows come from the Ledger projection; herdr-task is read only for navigation and diffs.
-// A ticket opens in its own page: shepherdr's task view with only Terminal and Artifacts.
+// All rows come from the Ledger projection; collie-task is read only for navigation and diffs.
+// A ticket opens in its own page: collie's task view with only Terminal and Artifacts.
 import { View, div, svg } from "gpui-kit";
 import {
   appHome, exec, focused, home, layout, panes, props, readTextFile, run,
@@ -22,7 +22,7 @@ const CLI = () => process.env.COLLIE_TASK_CLI ?? `${appHome()}/bin/collie-task`;
 const selected = () => shared("inbox.selected") ?? null;
 const ticket = () => shared("collie.ticket") ?? null;
 
-// The ticket page: shepherdr's task view nodes (the same ids in layouts/collie.json).
+// The ticket page: collie's task view nodes (the same ids in layouts/collie.json).
 const STACK = "collie", LIST = "collie-list", TICKET = "collie-ticket";
 const HEAD = "collie-ticket-head", BODY = "collie-ticket-body";
 const TERM = "collie-ticket-term", ARTIFACTS = "collie-ticket-artifacts";
@@ -40,14 +40,14 @@ function find(node, id) {
 const isLive = (address) => Boolean(address) && terminals().some((k) => k.address === address && k.state === "live");
 const artsKeyOf = (target) => `${target?.machine ?? ""}|${target?.folder ?? ""}|${target?.ref ?? ""}`;
 
-// The % done a working ticket shows: its agent's own report first (as shepherdr), else herdr-task's.
+// The % done a working ticket shows: its agent's own report first (as the agent reports), else collie-task's.
 function pctOf(target) {
   const own = ownProgress([target?.terminal]);
   const done = target?.progress?.done;
   return typeof own?.pct === "number" ? own.pct : typeof done === "number" ? done : null;
 }
 
-// Minutes the agent said are left (herdr-task status), counted down while it works.
+// Minutes the agent said are left (collie-task status), counted down while it works.
 function minutesLeft(progress) {
   if (typeof progress?.left !== "number") return null;
   const left = Math.max(0, progress.left - ((progress.paused_at ?? Date.now()) - (progress.at ?? Date.now())));
@@ -97,7 +97,7 @@ function backToInbox() {
 }
 
 // The terminal block shows the agent: an edit of that one block in the layout's file, as
-// shepherdr does (a mod can't draw a terminal, and a layout block shows any core terminal
+// collie does (a mod can't draw a terminal, and a layout block shows any core terminal
 // without giving it a pane). Only if the file is unchanged since it was read; else read again.
 async function pointTerm(address, cx) {
   const path = `${appHome()}/layouts/${shared("layout")}.json`;
@@ -340,8 +340,8 @@ export default class Inbox extends View {
     });
   }
 
-  // The shown ticket's artifacts, as shepherdr finds them (mods/chat/panel.js loadArts): its
-  // folder's list (herdr-artifact) and what its agents' logs say they published.
+  // The shown ticket's artifacts, as Collie finds them (mods/collie-inbox/main.js loadArts): its
+  // folder's list (collie-artifact) and what its agents' logs say they published.
   pollArts(cx) {
     if (this.view !== "head") return;
     const target = ticket()?.target;
@@ -367,7 +367,7 @@ export default class Inbox extends View {
           setShared("tasks.thread.artifacts", value);
         }
       } finally {
-        // Even a failed look waits its turn (a tight loop would ask herdr-artifact again and again).
+        // Even a failed look waits its turn (a tight loop would ask collie-artifact again and again).
         this.artsKey = key;
         this.artsAt = Date.now();
         this.artsBusy = false;
@@ -439,7 +439,7 @@ export default class Inbox extends View {
     } catch {}
   }
 
-  // A group heading (shepherdr's mods/tasks/main.js group()): the fold chevron in the rows' icon
+  // A group heading (the Inbox's group()): the fold chevron in the rows' icon
   // column, the label and its count right by it.
   groupHead(t, { id, label, count, top = false, shut = false, onFold = null }) {
     return h().id(id).h(28).flex_none().px(8).gap(12).items_center().rounded(RADIUS.card).text_size(TEXT.label)
@@ -453,7 +453,7 @@ export default class Inbox extends View {
         .when(count > 0, (el) => el.child(div().flex_none().text_color(t.dim).child(String(count)))));
   }
 
-  // A space's heading (shepherdr's SpaceHeading): its emoji (else #) where the rows' dots are, its
+  // A space's heading (the Inbox's SpaceHeading): its emoji (else #) where the rows' dots are, its
   // name, its count; a click opens the space.
   spaceHead(t, key, count) {
     const space = spaces().find((s) => s.id === key || s.name === key);

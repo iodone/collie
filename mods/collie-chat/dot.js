@@ -55,6 +55,3 @@ export function ownProgress(addresses) {
   }
   return null;
 }
-
-// Minutes left show once the agent gave them (core/tasks.js, shared with the web app).
-export { estimated } from "./core/tasks.js";

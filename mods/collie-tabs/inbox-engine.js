@@ -4,20 +4,20 @@
 //   ask      a Claude agent asks (a permission, a plan, questions) through the chat's
 //            PermissionRequest hook (the chat's ask hook, #7 Slice 2): answered on its chat's card
 //   blocked  any other agent waiting for the person (its live status), here or elsewhere
-//   merge    a task in Ready (herdr-task's status ready): kept in "inbox.tasks" but not an
+//   merge    a task in Ready (collie-task's status ready): kept in "inbox.tasks" but not an
 //            item, since it sits in Tasks' Ready, not Needs you (ready(): the green counts)
 //   check    a task with something wrong (failing checks, a conflict, ...: its attention)
 //   stopped  a task whose agent ended before it said ready ("Agent stopped")
-//   waiting  a task whose agent went quiet without saying ready (herdr-task's derived status:
+//   waiting  a task whose agent went quiet without saying ready (collie-task's derived status:
 //            Needs you, needs "reply"): why (its own status line, its question or last words)
 //   auto     an automation that failed to fire or to start its task
-//   provider an assistant (coordinator) its model's provider kept cutting off: herdr-task tick
+//   provider an assistant (coordinator) its model's provider kept cutting off: collie-task tick
 //            told it to carry on after 1, 2, 4 and 8 minutes, and the fifth try was cut off too,
 //            or the error is one waiting can't fix (signed out, out of allowance)
 //
 // Each item says why in at most 40 characters (reasonOf: as Shepherdr, a standard reason or the
 // agent's own question cut to fit, never its message pasted): the Tasks row, the red counts'
-// alerts and toasts say the same. A task's reason is herdr-task's (its why); an ask's comes from
+// alerts and toasts say the same. A task's reason is collie-task's (its why); an ask's comes from
 // the hook's request; a waiting agent's from its own status report (OSC 7501 kind).
 //
 // The engine (startInbox) runs in the tab bar, which is always loaded. It shares what takes a
@@ -81,7 +81,7 @@ export function startInbox(cx) {
     }
   });
   cx.spawn(async () => { await readTasks().catch(() => {}); });
-  // Agents' alerts (herdr-task alert): labels, so no program to run; a look each second.
+  // Agents' alerts (collie-task alert): labels, so no program to run; a look each second.
   cx.timer.every(1000, () => agentAlerts());
   cx.timer.every(20000, (cx) => cx.spawn(async () => { await readTasks().catch(() => {}); }));
   // A thread asked for (shared "collie-chat.threadreq") that no coordinator chat took within 1.5 s
@@ -146,7 +146,7 @@ async function alert(a) {
 
 // ---- agents' alerts --------------------------------------------------------------------------
 
-// `herdr-task alert "<title>" --body "<why>"` (as Shepherdr's `shepherdr alert`): the agent's own
+// `collie-task alert "<title>" --body "<why>"` (as Shepherdr's `collie alert`): the agent's own
 // terminal gets the core label herdr.alert = { id, at, title, body, task?, about? }, which every
 // Herdr client sees at once. Each new one: the blocked sound and a toast, a click on it goes to
 // the agent (its chat, or its terminal when it has no pane). A task's agent, or an alert about a task
@@ -191,7 +191,7 @@ export function reasonOf(item, req = null) {
   if (item.why) return item.why;
   if (item.kind === "ask") return req ? reqReason(req) : REASONS.question;
   if (item.kind === "blocked") {
-    // A task worker: herdr-task's reason (its tool call, question, plan, or its report's kind).
+    // A task worker: collie-task's reason (its tool call, question, plan, or its report's kind).
     const t = (shared("inbox.tasks") ?? []).find((x) => x.kind === "asks" && x.live?.includes(item.terminal));
     if (t?.why) return t.why;
     const report = terminals().find((k) => k.address === item.terminal)?.report;
@@ -221,11 +221,11 @@ async function readTasksNow() {
     const on = machine ? ["--on", machine] : [];
     const list = await json(CLI(), [...on, "list", "--all", "--json"]);
     for (const g of Array.isArray(list) ? list : []) for (const x of g.tasks ?? []) {
-      // Ready: herdr-task's own status, the same as the Inbox's Ready group and Shepherdr's green
+      // Ready: collie-task's own status, the same as the Inbox's Ready group and Shepherdr's green
       // counts (not Merging, nor one whose agent asks: that agent is a "blocked" item).
       // "asks": its agent waits (a live blocked terminal, an item of its own): kept for its reason.
-      // "provider": cut off by its model's provider, the tries used up (herdr-task tick).
-      // A problem its agent is on (herdr-task's on_it(): Working, not Needs you) is no item.
+      // "provider": cut off by its model's provider, the tries used up (collie-task tick).
+      // A problem its agent is on (collie-task's on_it(): Working, not Needs you) is no item.
       const kind = x.attention ? (x.needs === "attention" ? "check" : null) : x.state === "ready" ? (x.status === "ready" ? "merge" : null)
         : x.needs === "stopped" || x.status === "stopped" ? "stopped" : x.needs === "reply" || x.needs === "provider" ? "waiting"
         : x.needs === "asks" ? "asks" : null;
@@ -244,7 +244,7 @@ async function readTasksNow() {
   await readRetries();
 }
 
-// Assistants (coordinators) here that their provider kept cutting off (herdr-task tick's
+// Assistants (coordinators) here that their provider kept cutting off (collie-task tick's
 // .retries.json): an item each, and once a toast. Task workers' show on their tasks.
 const told = new Set();
 async function readRetries() {
@@ -263,7 +263,7 @@ async function readRetries() {
 }
 
 // Output the same as last time isn't parsed again (one entry per command: a few per machine).
-// Not a file mtime check: herdr-task derives states (an agent gone quiet) without a file changing.
+// Not a file mtime check: collie-task derives states (an agent gone quiet) without a file changing.
 const parsed = new Map();
 async function json(cmd, args) {
   const r = await exec(cmd, args).catch(() => null);
@@ -299,7 +299,7 @@ export function items() {
 export const count = () => items().length;
 
 // The tab an item is in, for the red counts on tabs and spaces: its agent's (where its chat
-// shows it, else its pane), or its task's. Task agents have no tab (herdr-task runs them with no
+// shows it, else its pane), or its task's. Task agents have no tab (collie-task runs them with no
 // pane, as hc children of the space's coordinator): theirs is their parent's, else their space's
 // coordinator's (labels herdr.task.space, or a task's space).
 export function tabOf(item, depth = 0) {

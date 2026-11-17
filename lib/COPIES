@@ -1,8 +1,7 @@
 # Shared modules: lib/<file> is the source, copied by bin/collie-sync into each mod listed.
 # A mod can only import files in its own folder, so each needs its own copy.
 # core/<file>: the shared core (core/ beside lib/), copied to mods/<mod>/core/<file>.
-# ui.js: collie-tabs / collie-chrome / collie-settings still use the shepherdr-shaped UI
-#   (openSettings -> mods/shepherdr-settings); de-shepherdr it in lib/ui.js, not in a copy.
+# ui.js: the shared UI primitives, copied into each mod that draws with them.
 inbox-queue.js: collie-inbox
 ticket-dot.js: collie-inbox
 artview.js: collie-inbox collie-artifacts

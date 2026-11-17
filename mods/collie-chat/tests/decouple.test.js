@@ -1,15 +1,10 @@
-// The chat's active code must not reach Shepherdr's runtime: secrets use collie-secret and
-// Collie's vault, usage is off, and voice/dictation/call is disabled. Voice implementation files
-// stay vendored but are not reachable while VOICE is false.
-import { readFileSync, readdirSync, statSync } from "fs";
+// The chat's code must not reach Shepherdr's runtime: secrets use collie-secret and Collie's
+// vault, usage is off, and the voice/dictation/call stack is gone (files deleted, not hidden).
+import { existsSync, readFileSync, readdirSync, statSync } from "fs";
 import { join, relative } from "path";
 import { expect, test, describe } from "bun:test";
 
 const ROOT = join(import.meta.dir, "..");
-const DISABLED = new Set([
-  "dictate.js", "call-screen.js", "voice.ts", "key.ts", "record.ts", "audio.ts",
-  "core/audio.js", "core/voice.js", "mac-audio.swift",
-]);
 const files = [];
 function walk(dir) {
   for (const name of readdirSync(dir)) {
@@ -20,38 +15,49 @@ function walk(dir) {
 }
 walk(ROOT);
 
-const active = files.filter((p) => !DISABLED.has(relative(ROOT, p).replaceAll("\\", "/")) && !p.includes("/tests/"));
+const text = (p) => readFileSync(p, "utf8");
+const shown = (p) => relative(ROOT, p).replaceAll("\\", "/");
+const active = files.filter((p) => !p.includes("/tests/"));
 
-describe("collie chat runtime is decoupled from Shepherdr", () => {
+describe("collie chat runtime is decoupled from Shepherdr and has no voice stack", () => {
   test("secrets use collie-secret and Collie's vault", () => {
-    const s = readFileSync(join(ROOT, "secrets.js"), "utf8");
+    const s = text(join(ROOT, "secrets.js"));
     expect(s).toContain("collie-secret");
     expect(s).toContain(".local/share/collie/secrets");
     expect(s).not.toContain("herdr-secret");
     expect(s).not.toContain(".herdr/vault");
   });
 
-  test("no active file reads Shepherdr's secret, service, usage or sidebar stores", () => {
+  test("no chat file names Shepherdr's secret, service, usage or sidebar stores", () => {
     const banned = ["herdr-secret", ".herdr/vault.json", ".herdr/shepherdr", "spaces-chat", "lib/addons.json"];
     const bad = [];
     for (const p of active) {
-      const text = readFileSync(p, "utf8");
-      for (const word of banned) if (text.includes(word)) bad.push(`${relative(ROOT, p)}: ${word}`);
+      const t = text(p);
+      for (const word of banned) if (t.includes(word)) bad.push(`${shown(p)}: ${word}`);
     }
     expect(bad).toEqual([]);
   });
 
-  test("voice, dictation and calls stay disabled and hidden", () => {
-    const main = readFileSync(join(ROOT, "main.js"), "utf8");
-    expect(main).toContain("const VOICE = false");
-    expect(main).toContain("if (!VOICE) return;");
-    expect(main).not.toContain('addonOn("voice")');
+  test("the voice, dictation and call stack is deleted, not disabled", () => {
+    const gone = [
+      "dictate.js", "call-screen.js", "voice.ts", "key.ts", "record.ts", "audio.ts",
+      "transcribe.ts", "mac-audio.swift", "core/audio.js", "core/voice.js", "core/screen.js",
+    ];
+    const left = gone.filter((f) => existsSync(join(ROOT, f)));
+    expect(left).toEqual([]);
   });
 
-  test("usage is a no-op, not a Shepherdr log", () => {
-    const s = readFileSync(join(ROOT, "usage.js"), "utf8");
-    expect(s).toContain("export function note");
-    expect(s).not.toContain("exec(");
-    expect(s).not.toContain(".herdr");
+  test("no chat file keeps voice, dictation or call code or words", () => {
+    const banned = [
+      "VOICE", "Dictation", "dictate", "dictation", "voice", "Voice",
+      "CallScreen", "toggleCall", "callComposer", "liveRow", "herdr-audio",
+    ];
+    const bad = [];
+    for (const p of active) {
+      const t = text(p);
+      for (const word of banned) if (t.includes(word)) bad.push(`${shown(p)}: ${word}`);
+    }
+    expect(bad).toEqual([]);
   });
+
 });

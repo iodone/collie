@@ -271,7 +271,7 @@ export async function createSpace(folder, settings, machine = null, icon = null)
 }
 
 // A machine's home space (HERD-51): the space at its home folder, whose Assistant also looks after
-// the machine (herdr-task's home round). Made when missing, with its Assistant tab, and the view
+// the machine (collie-task's home round). Made when missing, with its Assistant tab, and the view
 // goes back to where the person was: Herdr's space.new shows the new space.
 export async function makeHomeSpace(machine = null) {
   const at = await homeOf(machine);
@@ -447,10 +447,10 @@ function watchRemoteSpaces(spaces) {
   return fresh;
 }
 
-// The task (herdr-task) an agent works on: its key, or null.
+// The task (collie-task) an agent works on: its key, or null.
 export const taskOf = (k) => k?.labels?.["herdr.task"] ?? null;
 
-// Restarts a task's agent in its tab through herdr-task, as `agentKey` or as it was.
+// Restarts a task's agent in its tab through collie-task, as `agentKey` or as it was.
 export const switchTask = (k, agentKey) =>
   script("task", [taskOf(k), k.foreground?.cwd ?? k.cwd, parentOf(k) ?? "", ...(agentKey ? [agentKey] : [])]);
 

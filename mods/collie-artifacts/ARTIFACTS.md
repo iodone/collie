@@ -17,10 +17,8 @@ collie-artifact export <id> --out ./dir  # copy its files out as ./dir/<id>-v<n>
 ```
 
 - **Store**: artifacts live in `$COLLIE_ARTIFACTS_HOME` (default `~/.local/share/collie/artifacts`):
-  `<slug>.json` per folder and `files/<id>/v<n>/` per version. The old Shepherdr stores
-  (`~/.local/share/shepherdr/artifacts`, `~/.herdr/artifacts`) are read as a fallback; every write,
-  and `export`'s source, comes from the collie store first. Removing an artifact that is only in a
-  legacy store is refused (update it once to copy it over).
+  `<slug>.json` per folder and `files/<id>/v<n>/` per version. Collie reads only this store;
+  Shepherdr's old stores are not read.
 - **Download**: `export` copies a version's files to `DIR/<id>-v<n>` and prints the path (or
   `{"path": ...}` with `--json`); it never changes the store. `pack` (tar on stdout) stays internal.
 - **Web link**: `open`/`link` use Shepherdr's web app when this machine is linked to one. Collie has

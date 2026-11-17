@@ -189,7 +189,7 @@ export function toast(n) {
 }
 
 // Who a toast is from, its title's first half ("HERD-4 · what", "~ Assistant · what"): a task's
-// agent by its task (herdr-task names it "herd-4-fix-login"; on another machine "HERD-4 on vm", as
+// agent by its task (collie-task names it "herd-4-fix-login"; on another machine "HERD-4 on vm", as
 // core/toasts.js taskWho), an Assistant by its space, anything else by its program. k: a terminal
 // (terminals()); task: a task ref when known.
 export function toastWho(k, task = null) {
@@ -211,7 +211,7 @@ export function toastWho(k, task = null) {
 export function plainError(e) {
   let s = String(e?.message ?? e ?? "").trim().split("\n").map((l) => l.trim()).filter(Boolean).pop() ?? "";
   s = s.replace(/^(uncaught\s+)?(\w*error|herdr-[\w-]+|hc|fatal)\s*:\s*/i, "").trim();
-  // Hints for agents ("`herdr-artifact list` shows them.") aren't for the person.
+  // Hints for agents ("`collie-artifact list` shows them.") aren't for the person.
   s = s.split(/(?<=[.!?])\s+/).filter((x) => !x.includes("`")).join(" ").trim();
   if (!s || /^[\w. -]+ failed\.?$/i.test(s) || /^(exit(ed)?( with)?( code| status)?|status|code)\s*:?\s*\d+\.?$/i.test(s)) return "";
   if (/timed? ?out|no answer within/i.test(s)) return "It didn't answer in time. Try again.";

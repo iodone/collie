@@ -8,8 +8,7 @@ app; only a rare custom one (a game, a live tool: --custom) is a Herdr mod the w
 a task: the repo root in git (a linked worktree counts as its main repo), else the folder itself.
 Each folder's artifacts are listed in $COLLIE_ARTIFACTS_HOME/<slug>.json (default
 ~/.local/share/collie/artifacts), on the machine where the folder lives; every version's files are
-kept in $COLLIE_ARTIFACTS_HOME/files/<id>/v<n>/ (the last 20). The old Shepherdr stores
-(~/.local/share/shepherdr/artifacts and ~/.herdr/artifacts) are read as a fallback; a write always
+kept in $COLLIE_ARTIFACTS_HOME/files/<id>/v<n>/ (the last 20). Collie reads only its own store; a write always
 lands in the collie store. The current version is installed as the mod mods/art-<id>/ of the Herdr
 app on that machine (a remote artifact is pulled into this window's app as art-<machine>-<id> when
 it's opened).
@@ -46,13 +45,8 @@ def _primary_store():
 
 STORE = _primary_store()
 FILES = os.path.join(STORE, "files")
-# Shepherdr's stores, read-only fallback: listed and shown from, never written. A publish/update reads
-# them and writes the merged result into STORE (new versions' files land under STORE/files); removal
-# of an artifact that lives only there is refused.
-LEGACY = ([p for p in (os.path.join(HOME, ".local", "share", "shepherdr", "artifacts"),
-                       os.path.join(HOME, ".herdr", "artifacts"))
-           if os.path.abspath(p) != os.path.abspath(STORE)]
-          if os.environ.get("COLLIE_ARTIFACTS_LEGACY", "").lower() in ("1", "true", "on") else [])
+# Collie has one artifact store; Shepherdr legacy stores are not read.
+LEGACY = []
 
 
 def stores():
@@ -1524,46 +1518,11 @@ def cmd_pull(o):
 
 
 # ---- showing the person (SHEP-99) ------------------------------------------------------------
-# Wherever the person is: the web app's page they use (a phone, a browser) opens it, else the window here; and a
-# link always works. The machine that serves the web app writes its link in herdr-core's document shepherdr.web on
-# every machine it links (core/host.js WEB_DOC), so an agent on a machine with no web app of its own has it too.
-WEB_DOC = "shepherdr.web"
-WEB_JSON = os.path.join(HOME, ".herdr", "shepherdr", "web.json")
-# The core label an agent's terminal asks with: the serving machine's service hears it (service/show.ts).
+# Collie has no web app host: the window is where an artifact opens.
 SHOW = "herdr.show"
 
 
-def core_doc(name):
-    """A herdr-core document's value on this machine (hc connect, plain JSON lines), or None."""
-    if not shutil.which("hc"):
-        return None
-    ask = "".join(json.dumps({"jsonrpc": "2.0", "id": i, "method": m, "params": p}) + "\n"
-                  for i, m, p in ((1, "hello", {"generation": 1}), (2, "doc.get", {"name": name})))
-    try:
-        r = subprocess.run(["hc", "connect"], input=ask, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                           universal_newlines=True, timeout=10)
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    for line in r.stdout.splitlines():
-        try:
-            m = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(m, dict) and m.get("id") == 2:
-            return (m.get("result") or {}).get("value")
-    return None
-
-
 def web_base():
-    """The web app's link (its tailnet address, ".../shepherdr/"), or None: the host's word here, else what
-    this machine's own service says (its web.json)."""
-    for get in (lambda: core_doc(WEB_DOC), lambda: json.load(open(WEB_JSON))):
-        try:
-            link = (get() or {}).get("link")
-        except (OSError, ValueError, AttributeError):
-            link = None
-        if isinstance(link, str) and link.startswith("https://"):
-            return link if link.endswith("/") else link + "/"
     return None
 
 

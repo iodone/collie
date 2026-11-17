@@ -10,10 +10,10 @@
 // "coordinator.slots"[slot] = { space, tab, pane, folder } says which pane and tab it is. When
 // that agent ends, the chat is empty again.
 //
-// The box takes pasted or dropped files (attach.js), suggests slash commands (slash.js),
-// dictates (dictate.js) and keeps an unsent draft per agent in data/chat-drafts. Under it,
-// the model button says what the agent runs on and opens a picker (mods/collie-chat-models) to restart it with other
-// choices (agent.js). A voice call (voice.ts, run beside the app) talks about this chat.
+// The box takes pasted or dropped files (attach.js), suggests slash commands (slash.js)
+// and keeps an unsent draft per agent in data/chat-drafts. Under it, the model button says
+// what the agent runs on and opens a picker (mods/collie-chat-models) to restart it with other
+// choices (agent.js).
 // Hovering a message shows its actions in a small bar over its top corner: react, reply (quote),
 // copy, and rewind (the CLI's own) or fork.
 // As Shepherdr's chat (docs/chat.md): a CLI stopped on its own first screen (trust, theme, sign
@@ -24,7 +24,7 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, TextareaState, Textarea, Scrollbar, VirtualListScrollHandle, TextView, v_virtual_list, InputState, Input } from "gpui-base";
-import { focused, props, run, theme, home, hc, exec, shared, setShared, watchFolder, window, settings, playSound, notify, appHome, readTextFile, writeTextFile, nextCommand, openOverlay, knownAgents, machines, layout } from "herdr";
+import { focused, props, run, theme, home, hc, exec, shared, setShared, watchFolder, window, settings, playSound, notify, appHome, readTextFile, writeTextFile, nextCommand, openOverlay, knownAgents, machines } from "herdr";
 import { agents, panes, terminals, spaces, inRender } from "./live.js";
 import * as fs from "fs/promises";
 import { FIND, LOG, Conversation, records, resultText, summary, excerpt, names, pilotLine } from "./core/chat-log.js";
@@ -51,16 +51,11 @@ import * as mentions from "./core/mentions.js";
 import * as agent from "./agent.js";
 import { cleanCommand } from "./core/clean-env.js";
 import * as choices from "./settings.js";
-import { Dictation, BUN_PATH, warmAudio } from "./dictate.js";
 
-// Writing down after Done this long says it's taking longer than usual (SHEP-63).
-const DICT_SLOW = 5000;
 import { markRead, onScreen, unread } from "./unread.js";
 import { notifies } from "./notify.js";
 import { ScreenWatch, screenStrips, openCard, cardsOf, starting, cliOf } from "./screens.js";
 import { dayLabel, dayOf } from "./days.js";
-import { CallScreen } from "./call-screen.js";
-import { note } from "./usage.js";
 
 // Messages a page of history holds: the newest page first, earlier ones as the person scrolls up.
 const PAGE = 200;
@@ -90,16 +85,12 @@ const askAt = (id) => { const p = String(id).split("."); const sec = Number(p[p.
 // A space's Assistant (its coordinator), whose alerts follow the space's Notify.
 const assistant = (k) => k?.labels?.["herdr.role"] === "coordinator";
 // Why hc didn't do it: { kind, message } from its JSON error ("blocked": a dialog is open), else its words.
-// The composer's round buttons (Send, Call, End call, mic, Mute), and the height of its text row
-// (one line of the box), which the call's row keeps so nothing moves when a call starts.
+// The composer's round buttons (Send and attach), and the height of its text row
+// (one line of the box).
 const ROUND = 28, TEXT_ROW = 34;
-// Collie does not ship the voice call / dictation stack; its entry points stay hidden.
-const VOICE = false;
 // Image thumbnails: the box's files are squares this many px, this far apart; under sent
 // messages each image keeps its shape, fitted in THUMB_ONE (one image) or THUMB_MANY (w, h).
 const THUMB = 56, THUMB_GAP = 6;
-// The live row's level wave: each bar's width and the gap between bars, in px.
-const WAVE_BAR = 3, WAVE_GAP = 2;
 // ONE row under each message, its band (a list row of its own), on the message's side (left
 // for the agent, right for the person), the reaction pills flush under the bubble's outer edge
 // and the smiley to add one beside them, each side the other's mirror: on the person's the time
@@ -205,16 +196,6 @@ function parts(text) {
 }
 
 let bound = false;
-
-// What the voice opened, in a few words for its "Opened by voice" toast.
-function voiceOpened(nav) {
-  if (nav.kind === "task") return `${nav.ref ?? String(nav.task ?? "").split(":").pop()}${nav.title ? ` \u00b7 ${nav.title}` : ""}`;
-  if (nav.kind === "artifact") return nav.title ?? "An artifact";
-  if (nav.kind === "tasks" || nav.kind === "needs") return nav.kind === "needs" ? "What needs you" : "The Inbox";
-  if (nav.kind === "settings") return `Settings${nav.section ? ` \u203a ${nav.section}` : ""}`;
-  if (nav.kind === "panel") return `${nav.panel[0].toUpperCase()}${nav.panel.slice(1)}`;
-  return nav.kind === "space" || nav.kind === "chat" ? "A space" : "";
-}
 
 export default class Chat extends View {
   init(_props, cx) {
@@ -341,7 +322,6 @@ export default class Chat extends View {
     this.note = null;
     this.dflt = null;
     this.argv = null;
-    this.call = null;
     this.press = null;
     this.views = {};
     this.myReacts = new Map();
@@ -400,7 +380,6 @@ export default class Chat extends View {
       cx.notify();
     });
     this.viewAsked = new Set();
-    this.callReqAt = shared("collie-chat.callreq")?.at ?? null;
     this.restartReqAt = shared("collie-chat.restartreq")?.at ?? null;
     this.reactReqAt = shared("collie-chat.reactreq")?.at ?? null;
     this.sendReqAt = shared("collie-chat.sendreq")?.at ?? null;
@@ -409,7 +388,6 @@ export default class Chat extends View {
     // subagents, its background shells) count seconds for their first minute, then minutes.
     let ticks = 0;
     cx.timer.every(1000, (cx) => {
-      if (this.call) return;
       ticks++;
       const rows = [...this.helpers(), ...this.jobs()];
       if (this.status() === "working" || rows.some((r) => Date.now() - (r.at ?? 0) < 61000) || (rows.length && ticks % 30 === 0)) cx.notify();
@@ -443,15 +421,11 @@ export default class Chat extends View {
         cx.notify();
       });
     });
-    // In a call the box is the call: this handle takes its keys (M mutes).
-    this.callFocus = cx.focus_handle();
-    // Drafts and dictation belong to the agent's first address (its origin), so they survive
+    // Drafts belong to the agent's first address (its origin), so they survive
     // Chat ⇄ Terminal, restarts from here, and app restarts.
     const labels = terminals().find((x) => x.address === this.addr)?.labels ?? {};
     this.originKey = labels["herdr.chat.origin"] || (this.slot ? `slot:${this.slot}` : null) || this.addr || "none";
     this.typing = labels["herdr.typing"] ? { addr: this.addr, at: Number(labels["herdr.typing"]) || 0 } : null;
-    this.dict = new Dictation(this.originKey);
-    if (VOICE) warmAudio();
     this.draftFile = `${appHome()}/data/chat-drafts/${safe(this.originKey)}.json`;
     if (!this.addr && this.role) this.phase = "fresh";
     if (this.phase === "fresh") this.loadChoice(cx);
@@ -520,10 +494,6 @@ export default class Chat extends View {
         // a pane copy already does on focus (draw()), so again is harmless.
         if (c === "focus") { this.box.focus(); cx.notify(); continue; }
         if (focused()?.pane !== this.myPane()) continue;
-        // Voice off (Shepherdr settings > Window > Add-ons): its keys do nothing.
-        if (c === "dictate" && VOICE) this.toggleDictation(cx);
-        if (c === "call" && VOICE) this.toggleCall(cx);
-        if (c === "mute") this.callMute(cx);
         if (c === "find") this.openFind(cx);
         cx.notify();
       }
@@ -548,13 +518,11 @@ export default class Chat extends View {
 
   // Closing (back to the terminal, or the pane goes): its flag goes, and a Codex agent's waiting
   // asks are released (Codex waits on the hook), so it asks in its terminal instead. Claude's stay
-  // on the web's cards: its terminal shows its own prompt meanwhile. A call or a recording ends with it.
+  // on the web's cards: its terminal shows its own prompt meanwhile.
   async close(cx) {
     this.box.release();
     this.findBox.release();
     this.scroll.release();
-    this.dict.cancel();
-    if (this.call) await this.hangup();
     if (!this.addr || this.machine) return;
     await exec("sh", ["-c", 'rm -f "$1/open/$2"; for f in "$1/req/$2".*.json; do [ -f "$f" ] && grep -q \'"turn_id"\' "$f" && : > "$1/ans/${f##*/}"; done; true', "x", this.askDir, this.addr]);
   }
@@ -1162,7 +1130,6 @@ export default class Chat extends View {
     }
     this.settlePending();
     this.stick = true;
-    if (this.call) this.callRecent();
     cx.notify();
   }
 
@@ -1287,7 +1254,6 @@ export default class Chat extends View {
     // for every later agent: it opens the model picker instead, that model chosen.
     const mm = !msg.files.length && /^\/model(?:\s+(\S+))?\s*$/i.exec(text);
     if (mm) { this.quote = msg.quote; this.modelCommand(mm[1] ?? null, cx); this.saveSoon(cx); cx.notify(); return; }
-    note("send", { n: msg.files.length });
     if (hold && this.status() === "working") this.queue.push(msg);
     else this.deliver(msg, cx);
     this.saveSoon(cx);
@@ -1716,7 +1682,6 @@ export default class Chat extends View {
   // ---- find (Ctrl+F) ----------------------------------------------------------------------------
 
   openFind(cx) {
-    note("feature", { type: "chat-find" });
     this.finding = true;
     this.findJump = true;
     cx.timer.after(0, () => this.findBox.focus());
@@ -2164,313 +2129,6 @@ export default class Chat extends View {
     run("tab.new", { space: space?.id, folder, argv: agent.forkArgv(this.kind, this.argv, session) });
   }
 
-  // ---- dictation ----------------------------------------------------------------------------
-
-  // Ctrl+Shift+D, the mic button and Done: start recording, or stop and write it down.
-  toggleDictation(cx) {
-    if (!VOICE) return;
-    if (this.dict.state === "writing") return;
-    if (this.dict.state === "recording") {
-      cx.notify();
-      const writing = this.dict.n;
-      // a slow writing says so
-      cx.spawn(async (cx) => { await cx.sleep(DICT_SLOW); if (this.dict.state === "writing" && this.dict.n === writing) cx.notify(); });
-      cx.spawn(async (cx) => {
-        cx.notify();
-        const text = await this.dict.stop();
-        // Into the box where the cursor is (the box is the text's place either way).
-        if (text) {
-          if (!this.box.value().trim()) this.box.set_value(text);
-          else this.box.replace(text);
-          this.saveSoon(cx);
-        }
-        this.box.focus();
-        cx.notify();
-      });
-      return;
-    }
-    note("feature", { type: "dictation" });
-    cx.spawn(async (cx) => {
-      await this.dict.start();
-      cx.notify();
-      // The mic's level for the wave, while recording.
-      await this.followLevels(cx, () => this.dict.level(), () => this.dict.state === "recording");
-    });
-  }
-
-  // Cancel: the recording goes, the box stays as it was.
-  cancelDictation(cx) {
-    this.dict.cancel();
-    this.box.focus();
-    cx.notify();
-  }
-
-  // While recording, the box's bottom row is the recording (the shared live row): the red X
-  // throws it away, the mic's level, "Recording" and the time, Done in Send's spot. After Done
-  // the mic and the wave stop at once: a calm spinner and "Writing…" until the words land (saying
-  // so after DICT_SLOW), the red X still drops it. The typed text stays above.
-  recordingRow(t) {
-    if (this.dict.state !== "writing") return this.liveRow(t, "chat-rec",
-      this.round("rec-x", "mods/collie-chat/x.svg", t, "danger", (cx) => this.cancelDictation(cx)),
-      "Recording", true, this.dict.started ?? Date.now(),
-      this.round("rec-done", "mods/collie-chat/check.svg", t, "call", (cx) => this.toggleDictation(cx)));
-    const slow = Date.now() - (this.dict.doneAt || Date.now()) >= DICT_SLOW;
-    return h_flex().id("chat-rec").w_full().h(44).flex_none().px(8).gap(12).items_center()
-      .child(this.round("rec-x", "mods/collie-chat/x.svg", t, "danger", (cx) => this.cancelDictation(cx)))
-      .child(h_flex().id("chat-rec-writing").flex_1().min_w(0).gap(8).items_center()
-        .child(svg("mods/collie-chrome/spinner.svg").size(14).flex_none().text_color(t.dim).spin(900))
-        .child(div().truncate().text_size(12.5).font_medium().text_color(t.muted).child(slow ? "Taking longer than usual…" : "Writing…")))
-      .child(this.round("rec-done", "mods/collie-chat/check.svg", t, "off", null));
-  }
-
-  // ---- voice call ---------------------------------------------------------------------------
-
-  get callDir() { return `${appHome()}/data/chat-voice/${safe(this.originKey)}`; }
-
-  toggleCall(cx) {
-    if (!VOICE) return;
-    if (this.call) { cx.spawn(async (cx) => { await this.hangup(); cx.notify(); }); return; }
-    if (this.dict.state === "recording") this.dict.cancel();
-    this.call = { phase: "connecting", who: null, muted: false, error: null, started: Date.now() };
-    note("feature", { type: "voice-call" });
-    if (shared("collie-chat.callError")) setShared("collie-chat.callError", null);
-    this.callShared();
-    cx.timer.after(0, () => { if (this.call) this.callFocus.focus(); });
-    const call = this.call;
-    cx.spawn(async (cx) => this.followLevels(cx, async () => {
-      const v = Number((await readTextFile(`${this.callDir}.level`).catch(() => null)) ?? 0);
-      return Number.isFinite(v) ? v : 0;
-    }, () => this.call === call));
-    cx.spawn(async (cx) => this.runCall(cx));
-  }
-
-  async runCall(cx) {
-    const dir = this.callDir;
-    const keyFile = `${appHome()}/secrets/elevenlabs.env`;
-    const ok = await exec("sh", ["-c", 'grep -q "^[[:space:]]*\\(export[[:space:]]*\\)\\{0,1\\}ELEVENLABS_API_KEY=." "$1" 2>/dev/null && echo yes', "x", keyFile]);
-    // Or kept in Settings › Secrets (Everywhere), here or on the machine that keeps the secrets: voice.ts reads it
-    // itself. The help only when that machine truly has none: one that can't be asked now (entries() fails) lets the
-    // call try, and voice.ts says it can't reach it.
-    const list = ok.stdout.trim() === "yes" ? null : await secrets.entries().catch(() => null);
-    const kept = !list || list.some((e) => e.name === "ELEVENLABS_API_KEY" && e.scope === "everywhere");
-    if (!kept) {
-      this.call = null;
-      this.callHelp = true;
-      this.callShared();
-      cx.notify();
-      return;
-    }
-    this.callHelp = false;
-    // the voice agent's screen tool reads and acts on this window (call-screen.js): refs start again each call
-    this.callScreen = new CallScreen(this);
-    const name = `${agent.NAMES[this.kind] ?? "the agent"}`;
-    await exec("sh", ["-c", 'rm -rf "$1" "$1.level" && mkdir -p "$1/in" && touch "$1/alive"', "x", dir]);
-    this.callRecent();
-    this.callWhereWas = null;
-    // The helper runs beside the app (setsid: not tied to this mod's exec; macOS has no setsid: its own process group
-    // and no hangup instead); it ends itself when the chat stops touching `alive`.
-    await exec("sh", ["-c", BUN_PATH + 'if command -v setsid >/dev/null 2>&1; then setsid bun "$2" "$1" "$3" "$4" </dev/null >"$1/log" 2>&1 & else set -m; nohup bun "$2" "$1" "$3" "$4" </dev/null >"$1/log" 2>&1 & fi', "x", dir, `${appHome()}/mods/collie-chat/voice.ts`, this.addr, name]);
-    const call = this.call;
-    let touched = 0, lastStatus = null, seen = new Set((this.conv?.items ?? []).map((x) => x.id));
-    while (this.call === call) {
-      const s = await readTextFile(`${dir}/state.json`).catch(() => null);
-      let st = null;
-      try { st = JSON.parse(s ?? "null"); } catch {}
-      if (st) {
-        const changed = st.phase !== call.phase || (st.doing ?? "") !== (call.doing ?? "") || st.error !== call.error || (st.who ?? null) !== call.who || (st.said ?? "") !== (call.said ?? "");
-        call.phase = st.phase; call.doing = typeof st.doing === "string" ? st.doing.slice(0, 60) : ""; call.error = st.error; call.pid = st.pid; call.who = st.who ?? null; call.said = st.said ?? "";
-        if (changed) { this.callShared(); cx.notify(); }
-        if (st.phase === "ended") {
-          if (st.error) this.callError(st.error);
-          this.call = null; this.callShared(); cx.notify();
-          return;
-        }
-      } else if (Date.now() - call.started > 15000) {
-        const log = (await readTextFile(`${dir}/log`).catch(() => "")) ?? "";
-        this.callError(log.trim().split("\n").pop() || "The call helper didn't answer.");
-        this.call = null; this.callShared(); cx.notify();
-        return;
-      }
-      // The call's clock ticks once a second; the bar elsewhere knows the call is still on.
-      if (Date.now() - (call.beat ?? 0) > 15000) { call.beat = Date.now(); this.callShared(); }
-      cx.notify();
-      if (Date.now() - touched > 4000) { touched = Date.now(); exec("touch", [`${dir}/alive`]); }
-      // The agent's status and its finished replies go to the voice agent.
-      const now = this.status();
-      if (now !== lastStatus) {
-        const prev = lastStatus;
-        lastStatus = now;
-        this.callSay({ type: "status", status: now, asking: now === "blocked" ? (this.asks[0]?.words?.title ?? this.asking()) : null });
-        if (prev === "working" && now !== "working") {
-          const fresh = (this.conv?.items ?? []).filter((x) => x.kind === "agent" && !seen.has(x.id));
-          if (fresh.length) this.callSay({ type: "reply", text: fresh.slice(-2).map((x) => x.text).join("\n\n") });
-        }
-        seen = new Set((this.conv?.items ?? []).map((x) => x.id));
-      } else if (now !== "working") {
-        // A reply written while it wasn't marked working (a quick answer).
-        const fresh = (this.conv?.items ?? []).filter((x) => x.kind === "agent" && !seen.has(x.id));
-        if (fresh.length) { this.callSay({ type: "reply", text: fresh.slice(-2).map((x) => x.text).join("\n\n") }); fresh.forEach((x) => seen.add(x.id)); }
-      }
-      // One watch at a time (a new one each second would pile up while the folder is quiet).
-      if (this.callWatch?.dir !== dir) {
-        const w = { dir, next: watchFolder(dir).catch(() => null).finally(() => { if (this.callWatch === w) this.callWatch = null; }) };
-        this.callWatch = w;
-      }
-      // What the window shows, for the call's "here"; what the voice agent asked to show.
-      // (the watch kept before awaiting: one that fires meanwhile clears this.callWatch)
-      const woke = this.callWatch.next;
-      this.callWhere();
-      await this.callNav();
-      await Promise.race([woke, cx.sleep(1000)]);
-    }
-  }
-
-  // What the window shows now, for the voice agent's "here", "this ticket" (voice.ts reads where.json): the space
-  // selected, and the ticket open in the Inbox. Written only when it changes.
-  callWhere() {
-    const find = (node, id) => { if (!node || typeof node !== "object") return null; if (node.id === id) return node; for (const c of node.children ?? []) { const hit = find(c, id); if (hit) return hit; } return null; };
-    const s = spaces().find((x) => x.active);
-    const place = s ? (s.machine && !String(s.id).includes("/") ? `${s.machine}/${s.id}` : String(s.id)) : null;
-    const tree = layout();
-    const panel = find(tree, "panel");
-    const open = panel && !panel.hidden && find(tree, "panel-body")?.active === "collie" && find(tree, "collie")?.active === "collie-ticket";
-    const task = open ? shared("tasks.thread")?.task ?? null : null;
-    const w = JSON.stringify({ place, task: task == null ? null : String(task), tab: null });
-    if (w === this.callWhereWas) return;
-    this.callWhereWas = w;
-    fs.writeFile(`${this.callDir}/where.json`, w).catch(() => {});
-  }
-
-  // What the voice agent asked to show (service/voice-tools.ts Nav, written by voice.ts into nav/), done here.
-  async callNav() {
-    const box = `${this.callDir}/nav`;
-    const names = (await fs.readdir(box).catch(() => [])).filter((f) => f.endsWith(".json")).sort();
-    for (const f of names) {
-      let nav = null;
-      try { nav = JSON.parse(await fs.readFile(`${box}/${f}`, "utf8")); } catch {}
-      await fs.unlink(`${box}/${f}`).catch(() => {});
-      if (!nav) continue;
-      // said back by the nav's name (voice.ts waits for it before the voice agent may say it's on screen)
-      let ack;
-      try { ack = this.voiceNav(nav) ?? { ok: true }; } catch (e) { console.error(`voice nav: ${e?.message ?? e}`); ack = { ok: false, why: "it failed in the window" }; }
-      // what the voice opened says why the window changed by itself (SHEP-105): a short quiet toast
-      if (ack.ok && nav.kind !== "screen") toast({ title: "Opened by voice", body: voiceOpened(nav), level: "info", timeout: 3500 });
-      await fs.mkdir(`${this.callDir}/navved`, { recursive: true }).catch(() => {});
-      await fs.writeFile(`${this.callDir}/navved/${f}`, JSON.stringify(ack)).catch(() => {});
-    }
-  }
-
-  // The voice call's screen tool scrolls this chat (call-screen.js): a few rows at a time, or to an end.
-  scrollBy(direction) {
-    const n = this.rows().length;
-    if (!n || !this.range) return null;
-    if (direction === "bottom") { this.pinned = true; this.scroll.scroll_to_bottom(); return "Scrolled the call's chat to the newest"; }
-    if (direction === "top") { this.pinned = false; this.scroll.scroll_to_item(0, "top"); return "Scrolled the call's chat to the oldest loaded (older ones load from there)"; }
-    const span = Math.max(1, this.range.end - this.range.start);
-    const to = direction === "up" ? Math.max(0, this.range.start - span) : Math.min(n - 1, this.range.end + span - 1);
-    this.pinned = direction === "down" && to >= n - 1;
-    this.scroll.scroll_to_item(to, direction === "up" ? "top" : "bottom");
-    return `Scrolled the call's chat ${direction}`;
-  }
-
-  scrollWords() {
-    const n = this.rows().length;
-    if (!n || !this.range) return "";
-    return `messages ${this.range.start + 1} to ${Math.min(n, this.range.end)} of ${n} loaded${this.range.end < n ? " (more below)" : ""}${this.range.start > 0 ? " (more above)" : ""}`;
-  }
-
-  // What the voice agent asked to show, done in this window: { ok } once done, else { ok: false, why }.
-  voiceNav(nav) {
-    const spaceOf = (place) => spaces().find((x) => String(x.id) === place || (x.machine && `${x.machine}/${x.id}` === place));
-    const no = (why) => ({ ok: false, why });
-    if (nav.kind === "screen") return (this.callScreen ??= new CallScreen(this)).act(nav);
-    if (nav.kind === "panel") {
-      if (nav.panel === "terminal" || nav.panel === "chat") return no("the window switches an Assistant between Chat and Terminal on its own tab, which a call can't reach yet");
-      run("layout.select", { stack: "panel-body", child: nav.panel === "artifacts" ? "artifacts" : nav.panel });
-      run("layout.show", { id: "panel" });
-      return { ok: true };
-    }
-    if (nav.kind === "space") {
-      const sp = spaceOf(nav.place);
-      if (!sp) return no("this window doesn't have that space");
-      run("space.select", { id: sp.id });
-      return { ok: true };
-    }
-    if (nav.kind === "chat") {
-      // the call's own chat: its pane; another chat: its space, or the Inbox for a task's worker
-      if (nav.addr === this.addr) { const mine = this.myPane() ?? this.lastPane; if (!mine) return no("its pane isn't open"); this.revealPane(mine); return { ok: true }; }
-      if (/\/worker$/.test(nav.chat ?? "") && nav.addr) { openInbox(); return { ok: true }; }
-      if (String(nav.chat ?? "").startsWith("p:")) { const sp = spaceOf(nav.chat.slice(2).replace(":", "/")); if (!sp) return no("this window doesn't have that space"); run("space.select", { id: sp.id }); return { ok: true }; }
-      return no("that chat isn't running");
-    }
-    if (nav.kind === "task") {
-      // Its ticket, and its worker's chat, are in the Inbox now (the Tasks panel is gone).
-      openInbox();
-      return { ok: true };
-    }
-    if (nav.kind === "tasks" || nav.kind === "needs") {
-      openInbox();
-      return { ok: true };
-    }
-    if (nav.kind === "artifact") { openViewer({ id: nav.artifact, title: nav.title, version: nav.v, latest: nav.v, machine: nav.machine ?? null }); return { ok: true }; }
-    if (nav.kind === "settings") { run("app.settings", nav.section ? { section: String(nav.section).toLowerCase() } : {}); return { ok: true }; }
-    return no("the window can't show that");
-  }
-
-  callSay(m) {
-    const dir = this.callDir;
-    const name = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}.json`;
-    fs.writeFile(`${dir}/in/${name}`, JSON.stringify(m)).catch(() => {});
-  }
-
-  // What read_chat tells the voice agent: the status and the last messages.
-  callRecent() {
-    const items = (this.conv?.items ?? []).filter((x) => x.kind === "user" || x.kind === "agent" || x.kind === "ask").slice(-10);
-    const st = this.status();
-    const text = [`The coding agent is ${st === "blocked" ? "waiting for the person" : st ?? "idle"}.${this.conv?.doing ? ` Now: ${this.conv.doing}.` : ""}`,
-      ...items.map((x) => `${x.kind === "user" ? "Person" : "Agent"}: ${String(x.text).slice(0, 1500)}`)].join("\n\n");
-    fs.writeFile(`${this.callDir}/recent.txt`, text).catch(() => {});
-  }
-
-  callMute(cx) {
-    if (!this.call) return;
-    this.call.muted = !this.call.muted;
-    this.callSay({ type: "mute", on: this.call.muted });
-    this.callShared();
-    cx.notify();
-  }
-
-  async hangup() {
-    const call = this.call;
-    this.call = null;
-    this.callShared();
-    if (!call) return;
-    this.callSay({ type: "hangup" });
-    const pid = call.pid;
-    if (pid) exec("sh", ["-c", 'sleep 1; kill "$1" 2>/dev/null; true', "x", String(pid)]);
-  }
-
-  // The sidebar's call card: shared "collie-chat.calls" =
-  // { <chat pane>: { phase, who, muted, started, beat, name, tab, said } }.
-  callShared() {
-    const mine = this.myPane() ?? this.lastPane;
-    if (!mine) return;
-    const all = { ...(shared("collie-chat.calls") ?? {}) };
-    const c = this.call;
-    if (c) {
-      const tab = panes().find((p) => p.pane === mine)?.tab ?? null;
-      all[mine] = { phase: c.phase, doing: c.doing ?? "", who: c.who, muted: c.muted, started: c.started, beat: c.beat ?? Date.now(),
-        name: agent.NAMES[this.kind] ?? "the agent", tab, said: c.said ?? "" };
-    } else if (all[mine]) delete all[mine];
-    else return;
-    setShared("collie-chat.calls", all);
-  }
-
-  // Why a call ended or didn't start: shown at the top of the window (mods/collie-chat-call) until closed.
-  callError(text) {
-    setShared("collie-chat.callError", { text, pane: this.myPane() ?? this.lastPane ?? null, at: Date.now() });
-  }
-
   // ---- model button and picker -----------------------------------------------------------------
 
   current() {
@@ -2641,15 +2299,6 @@ export default class Chat extends View {
       .on_click((_e, cx) => { cx.stop_propagation(); fn(cx); cx.notify(); })
       .when(Boolean(icon), (el) => el.child(svg(icon).size(14).flex_none()))
       .child(label);
-  }
-
-  // A 26 px icon button for the composer's bar (ghost, or on while `on`).
-  iconButton(id, icon, t, on, fn) {
-    return div().id(id).size(26).flex_none().flex().items_center().justify_center().rounded(7).cursor_pointer()
-      .when(on, (el) => el.bg(t.blocked + "22").text_color(t.blocked))
-      .when(!on, (el) => el.text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground)))
-      .on_click((_e, cx) => { cx.stop_propagation(); fn(cx); cx.notify(); })
-      .child(svg(icon).size(14));
   }
 
   // Keeps the newest row in view, once this render's rows (and their measured heights) are in.
@@ -3320,23 +2969,6 @@ export default class Chat extends View {
     return null;
   }
 
-  // Why a call can't start (no key yet).
-  callBar(t) {
-    const wrap = (el) => div().flex_none().w_full().max_w(COLUMN + 28).mx_auto().px(14).pt(6).child(el);
-    if (this.callHelp) {
-      return wrap(v_flex().px(12).py(10).gap(8).rounded(8).bg(t.surface).border_1().border_color(t.border)
-        .child(h_flex().gap(8).items_center()
-          .child(div().flex_1().text_size(TEXT.body).font_medium().text_color(t.foreground).child("Voice calls need an ElevenLabs key"))
-          .child(this.iconButton("call-help-close", "mods/collie-chat/x.svg", t, false, () => { this.callHelp = false; })))
-        .child(div().text_size(TEXT.label).text_color(t.muted).child("Add your key in Settings › Secrets as ELEVENLABS_API_KEY, then press the call button again."))
-        .child(h_flex().child(this.button("call-help-secrets", "Open Secrets", null, "secondary", t, () => {
-          this.callHelp = false;
-          openOverlay({ mod: "collie-settings", kind: "dialog", width: 820, height: 620, props: { section: "secrets" } });
-        }))));
-    }
-    return null;
-  }
-
   // The agent's helpers that are busy: its CLI's own (Claude Code's helpers launched and not
   // finished, Codex's spawned agents) count as working; Herdr's (terminals it started with hc:
   // their parent is this agent) count when they report working or blocked. Idle or finished
@@ -3710,25 +3342,21 @@ export default class Chat extends View {
     });
   }
 
-  // The composer's round buttons: one size and shape, so Send, Call, End call, the mic and Mute
-  // never change size or move; only the icon and fill change.
-  //   fill: "solid" (Send), "call" (Call), "danger" (End call), "on" (muted), "quiet" (Mute), "ghost", "off"
+  // The composer's round buttons: one size and shape, so Send and attach never change size
+  // or move; only the icon and fill change.
+  //   fill: "solid" (Send), "ghost" (attach), "off" (Send with nothing to send)
   round(id, icon, t, fill, fn) {
     const el = div().id(id).size(ROUND).flex_none().flex().items_center().justify_center().rounded(ROUND / 2)
       .when(fill === "solid", (el) => el.bg(t.solid).text_color(t.solid_foreground))
-      .when(fill === "call" || fill === "on", (el) => el.bg(t.foreground).text_color(t.background))
-      .when(fill === "danger", (el) => el.bg(t.blocked).text_color("#ffffff"))
-      .when(fill === "quiet", (el) => el.bg(t.raised).text_color(t.foreground))
-      .when(fill === "rec", (el) => el.bg(t.blocked + "22").text_color(t.blocked))
       .when(fill === "off", (el) => el.bg(t.raised).text_color(t.dim))
       .when(fill === "ghost", (el) => el.text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground)))
-      .child(icon === "spinner" ? svg("mods/collie-chrome/spinner.svg").size(14).spin(900) : svg(icon).size(14));
+      .child(svg(icon).size(14));
     if (!fn) return el;
     return el.cursor_pointer().when(fill !== "ghost", (el) => el.hover((s) => s.opacity(0.85)))
       .on_click((_e, cx) => { cx.stop_propagation(); fn(cx); cx.notify(); });
   }
 
-  // The bottom row's left part, the same in a call and out of it: what the agent runs on (opens the picker; not during a call).
+  // The bottom row's left part: what the agent runs on (opens the picker).
   pickParts(t, open) {
     const c = this.current();
     // Sized to its words, never cut: a narrow chat drops "· 1M" first.
@@ -3745,67 +3373,6 @@ export default class Chat extends View {
     ].filter(Boolean);
   }
 
-  // The live row a call and dictation share, 44 px, all on its midline: a round button on each
-  // end, the wave across all the room there is, a word and the time.
-  liveRow(t, id, left, word, dot, since, right) {
-    const secs = Math.max(0, Math.floor((Date.now() - since) / 1000));
-    return h_flex().id(id).w_full().h(44).flex_none().px(8).gap(12).items_center()
-      .child(left)
-      .child(this.wave(t, id))
-      .child(h_flex().flex_none().gap(6).items_center()
-        .when(dot, (el) => el.child(div().size(8).flex_none().rounded(4).bg(t.blocked)))
-        .child(div().text_size(12.5).font_medium().text_color(t.foreground).child(word))
-        // Digits of one width, so the time doesn't jiggle.
-        .child(div().font_family(settings().font_family ?? "JetBrains Mono").text_size(12).text_color(t.dim)
-          .child(elapsed(secs))))
-      .child(right);
-  }
-
-  // The level wave: bars across the whole width (as many as fit, measured), the newest level
-  // coming in on the right and moving left; a calm flat line while it's quiet.
-  wave(t, id) {
-    const n = Math.max(8, Math.floor(((this.waveW ?? 300) + WAVE_GAP) / (WAVE_BAR + WAVE_GAP)));
-    const lv = (this.levels ?? []).slice(-n);
-    const bars = [...Array(n - lv.length).fill(0), ...lv];
-    // Quiet is one thin faint line across, behind the bars.
-    return h_flex().id(`${id}-wave`).relative().flex_1().min_w(0).h(28).gap(WAVE_GAP).items_center().overflow_hidden()
-      .on_size_change((size, cx) => { if (Math.abs((this.waveW ?? 0) - size.width) > 2) { this.waveW = size.width; cx.notify(); } })
-      .child(div().absolute().left(0).right(0).top(13.5).h(1).bg(t.dim).opacity(0.3))
-      .children(bars.map((v) => v < 0.04
-        ? div().w(WAVE_BAR).h(1).flex_none()
-        : div().w(WAVE_BAR).h(2 + Math.round(Math.min(1, v) * 26)).flex_none().rounded(2).bg(t.foreground)));
-  }
-
-  // The level loop for the wave, ten times a second while `on()` holds.
-  async followLevels(cx, read, on) {
-    this.levels = [];
-    while (on()) {
-      this.levels = [...this.levels, await read()].slice(-400);
-      cx.notify();
-      await cx.sleep(100);
-    }
-    this.levels = [];
-  }
-
-  // In a call the box is the call: Mute, the wave, what the call is doing and for how long, the
-  // red X hangs up. M mutes while it has the keyboard.
-  callComposer(t) {
-    const c = this.call;
-    const word = c.muted && c.phase !== "speaking" ? "Muted"
-      : { connecting: "Connecting", listening: "Listening", thinking: "Thinking", speaking: "Speaking" }[c.phase] ?? "Connecting";
-    return div().flex_none().w_full().max_w(COLUMN + 28).mx_auto().px(14).pt(8).child(div().id("chat-call-box").w_full()
-      .rounded(10).border_1().border_color(t.input).bg(t.background)
-      .track_focus(this.callFocus)
-      .on_key_down((e, cx) => {
-        const m = e.modifiers ?? {};
-        if (e.key === "m" && !m.control && !m.alt && !m.platform) { cx.stop_propagation(); this.callMute(cx); }
-      })
-      .child(this.liveRow(t, "chat-call",
-        this.round("call-mute", `mods/collie-chat/${c.muted ? "mic-off" : "mic"}.svg`, t, c.muted ? "on" : "quiet", (cx) => this.callMute(cx)),
-        word, false, c.started,
-        this.round("call-x", "mods/collie-chat/phone-x.svg", t, "danger", (cx) => cx.spawn(async (cx) => { await this.hangup(); cx.notify(); })))));
-  }
-
   // The model button before the first message (loadChoice): the same menu, choosing what it starts on.
   freshPick(t, cx) {
     // A pick lands in this.choice.sel just after a render (settings.js applyReply), which then
@@ -3817,7 +3384,6 @@ export default class Chat extends View {
   }
 
   composer(t, st, cx = null) {
-    if (this.call) return this.callComposer(t);
     // A thread whose worker ended: read-only now.
     if (this.thread && this.ended) return div().flex_none().w_full().max_w(COLUMN + 28).mx_auto().px(14).pt(8)
       .child(h_flex().w_full().h(36).px(12).gap(8).items_center().rounded(10).border_1().border_color(t.border)
@@ -3829,7 +3395,6 @@ export default class Chat extends View {
     const empty = !this.box.value().trim() && !this.files.length;
     const can = ready && !empty;
     const list = this.focused || this.paneFocused ? this.suggestions() : [];
-    const rec = this.dict.state;
     const recallable = !list.length && (!this.box.value() || this.recall >= 0);
     const take = (fn) => (_e, cx) => { fn(cx); cx.stop_propagation(); cx.notify(); };
     const sel = Math.min(this.slashSel, Math.max(0, list.length - 1));
@@ -3885,20 +3450,17 @@ export default class Chat extends View {
           .when(Boolean(this.boxSpare && this.lineH), (el) => el.mb(-this.lineH)))
         .when(!this.box.value().trim(), (el) => el.child(div().absolute().top(9).left(12).text_size(13).text_color(t.dim)
           .child(this.asks.length || st === "blocked" ? WORDS.replyInstead : this.placeholder()))))
-      // While recording: the recording row. Else one row, on the right: what the agent runs on
-      // (opens the picker), dictation, Send (or Call). Send never turns into Stop: while the
-      // agent works it still sends (or queues) and calls; Stop is on the working line above.
-      .when(rec !== "idle", (el) => el.child(this.recordingRow(t)))
-      .when(rec === "idle", (el) => el.child(h_flex().h(36).pl(6).pr(6).gap(4).items_center()
+      // One row, on the right: what the agent runs on (opens the picker) and Send. Send never
+      // turns into Stop: while the agent works it still sends (or queues); Stop is on the
+      // working line above.
+      .child(h_flex().h(36).pl(6).pr(6).gap(4).items_center()
         // Attach on the left, as ChatGPT and Claude have it: the desktop's file picker.
         .child(this.round("chat-attach", "mods/collie-chat/plus.svg", t, "ghost", (cx) => this.pickFiles(cx)))
-        .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.blocked).child(rec === "idle" ? this.dict.error ?? "" : ""))
+        .child(div().flex_1().min_w(0))
         .when(Boolean(this.addr), (el) => el.children(this.pickParts(t, true)))
         .when(!this.addr && this.phase === "fresh" && Boolean(this.choice?.sel) && Boolean(cx), (el) => el.child(this.freshPick(t, cx)))
-        .when(VOICE, (el) => el.child(this.round("chat-mic", "mods/collie-chat/mic.svg", t, "ghost", (cx) => this.toggleDictation(cx))))
-        // Always Send (SHEP-108): quiet with nothing to send, filled once there is. A call is with
-        // Shepherdr itself, from the top of the sidebar (SHEP-105), never from a chat's box.
-        .child(this.round("chat-send", "mods/collie-chat/send.svg", t, can ? "solid" : "off", can ? (cx) => this.send(cx) : null)))));
+        // Always Send (SHEP-108): quiet with nothing to send, filled once there is.
+        .child(this.round("chat-send", "mods/collie-chat/send.svg", t, can ? "solid" : "off", can ? (cx) => this.send(cx) : null))));
   }
 
   // ---- alerts ---------------------------------------------------------------------------------
@@ -3946,19 +3508,17 @@ export default class Chat extends View {
     return resolveArtifacts(items, this.arts, String(this.addr ?? "").split("/").pop());
   }
 
-  // Every artifact on the agent's machine (~/.herdr/artifacts, one registry per folder): read
+  // Every artifact in Collie's store on the agent's machine (one registry per folder): read
   // when the conversation has a publish, again every few seconds while one isn't listed yet.
-  // A folder under a hidden one has a dot slug (~/.config/x: .config-x.json), so dot files
-  // count too; locks end in .lock, temp files have no .json.
   loadArts(cx) {
     if (this.artsLoading || Date.now() - (this.artsAt ?? 0) < 3000) return;
     this.artsLoading = true;
     cx.spawn(async (cx) => {
       try {
-        const r = await exec("sh", ["-c", 'cd "$HOME/.herdr/artifacts" 2>/dev/null || exit 0; for f in *.json .*.json; do [ -f "$f" ] && cat "$f" && printf "\\n\\036\\n"; done; true'], this.machine ? { on: this.machine } : {});
-        const arts = [];
-        for (const part of r.stdout.split("\x1e")) { try { arts.push(...(JSON.parse(part).artifacts ?? [])); } catch {} }
-        this.arts = arts;
+        const bin = `${appHome()}/mods/collie-artifacts/bin/collie-artifact`;
+        const r = await exec(bin, ["list", "--all", "--json"], this.machine ? { on: this.machine } : {});
+        const out = JSON.parse((r.stdout || "").trim().split("\n").pop() || "{}");
+        this.arts = Array.isArray(out.artifacts) ? out.artifacts : [];
       } catch {}
       this.artsAt = Date.now();
       this.artsLoading = false;
@@ -4001,7 +3561,7 @@ export default class Chat extends View {
     // keyboard: give it back, unless the person just pressed something inside the chat.
     // Not while the keyboard is somewhere else in the window that isn't a pane (#633): a thread's chat or the
     // Inbox's list and its search (shared "keyboard.holder", keyHolder()); Herdr still counts this pane as focused then.
-    else if (paneFocused && showsBox && !this.call && this.focused === false && Date.now() - (this.press?.at ?? 0) > 1500
+    else if (paneFocused && showsBox && this.focused === false && Date.now() - (this.press?.at ?? 0) > 1500
       && !keysElsewhere(shared(KEY_HOLDER), this.areaKey())
       && Date.now() - (this.refocusAt ?? 0) > 1000) {
       this.refocusAt = Date.now();
@@ -4010,14 +3570,6 @@ export default class Chat extends View {
     this.wasFocused = paneFocused;
     this.hadBox = showsBox;
     this.paneFocused = paneFocused;
-    // The sidebar's call card starts, mutes and ends the call it runs here
-    // through shared "collie-chat.callreq" = { pane, at, action: "start" | "mute" | "end" } (none: start or end).
-    const req = shared("collie-chat.callreq");
-    if (req && req.pane === mine && req.at !== this.callReqAt && Date.now() - req.at < 5000) {
-      this.callReqAt = req.at;
-      if (req.action === "mute") { if (this.call) cx.timer.after(0, (cx) => { this.callMute(cx); }); }
-      else if (req.action === "end" ? this.call : req.action === "start" ? !this.call : true) cx.timer.after(0, (cx) => { this.toggleCall(cx); cx.notify(); });
-    }
     // The model picker's Restart (mods/collie-chat-models): shared "collie-chat.restartreq" = { pane, at, pick }.
     const rr = shared("collie-chat.restartreq"), pk = this.pickKey();
     if (rr && pk && rr.pane === pk && rr.at !== this.restartReqAt && Date.now() - rr.at < 5000) {
@@ -4071,9 +3623,6 @@ export default class Chat extends View {
       this.reactReqAt = rq.at;
       cx.timer.after(0, (cx) => { this.toggleReaction(rq.target, rq.text, rq.emoji, cx); });
     }
-    // In a call, the call takes the keyboard when the pane does.
-    if (this.call && paneFocused && !this.callHadFocus) cx.timer.after(0, () => { if (this.call) this.callFocus.focus(); });
-    this.callHadFocus = Boolean(this.call && paneFocused);
     this.alerts(cx);
     const t = theme();
     const st = this.status() ?? null;
@@ -4147,7 +3696,7 @@ export default class Chat extends View {
     const lit = new Set(found.map((m) => m.id));
     this.needViews([...this.files.filter((f) => f.image).map((f) => f.path), ...rows.flatMap((r) => (r.kind === "imgs" ? r.paths : []))], cx);
     // What sits under the list (an ask card, the working line) changes its height: stay on the newest.
-    const below = `${this.asks.length}|${this.sasks.map((a) => a.name + (a.kept ? "+" : "")).join(",")}|${this.wasks.map((a) => a.id).join(",")}|${[this.addr, ...this.workerTasks().keys()].map((a) => openCard(a)?.id ?? "").join("")}|${st}|${this.focused}|${this.queue.length}|${Boolean(this.call)}|${this.files.length}|${Boolean(this.quote)}`;
+    const below = `${this.asks.length}|${this.sasks.map((a) => a.name + (a.kept ? "+" : "")).join(",")}|${this.wasks.map((a) => a.id).join(",")}|${[this.addr, ...this.workerTasks().keys()].map((a) => openCard(a)?.id ?? "").join("")}|${st}|${this.focused}|${this.queue.length}|${this.files.length}|${Boolean(this.quote)}`;
     if (below !== this.below) { this.below = below; if (this.pinned) this.stick = true; }
     if (Math.abs(this.heightsFor - this.width) > 1) { this.heights.clear(); this.measuredAt.clear(); this.heightsFor = this.width; this.measureGen++; }
     const keys = rows.map((x) => this.key(x));
@@ -4232,7 +3781,6 @@ export default class Chat extends View {
       .child(body)
       .when(Boolean(this.error), (el) => el.child(div().flex_none().px(18).py(4).text_size(12).text_color(t.blocked).truncate().child(this.error)))
       .child(this.statusLine(t, st) ?? div())
-      .child(this.callBar(t) ?? div())
       .child(this.queued(t) ?? div())
       .child(this.background(t, st, cx) ?? div())
       .child(this.composer(t, st))

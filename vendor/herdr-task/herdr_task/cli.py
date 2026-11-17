@@ -29,28 +29,6 @@ from .feedback import cmd_feedback
 
 # ---- another machine ------------------------------------------------------------------------
 
-def install_secret(machine):
-    """herdr-secret goes along to another machine (its `install --on`: no values, only the
-    command), so agents there can ask for and use secrets. Best effort, again when it changed."""
-    path = shutil.which("herdr-secret")
-    if not path or sync_held():
-        return
-    with open(os.path.realpath(path), "rb") as f:
-        digest = hashlib.sha1(f.read()).hexdigest()
-    mark = os.path.join(STORE, ".remote", f"{machine}.secret")
-    try:
-        with open(mark) as f:
-            if f.read().strip() == digest:
-                return
-    except OSError:
-        pass
-    r = subprocess.run([path, "install", "--on", machine], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if r.returncode == 0:
-        os.makedirs(os.path.dirname(mark), exist_ok=True)
-        with open(mark, "w") as f:
-            f.write(digest)
-
-
 def remote_run(machine, argv, timeout=None):
     """collie-task on another machine (installed there first when it isn't this one): its run,
     output kept. timeout: seconds before herdr-core gives up on it."""
@@ -80,7 +58,6 @@ def remote_run(machine, argv, timeout=None):
     # Held (base.sync_held): no copy goes; the copy already there runs.
     if not installed and not sync_held():
         install()
-    install_secret(machine)
     wait = ["--timeout", str(timeout)] if timeout else []
     call = ["hc", "exec", "--on", machine, *wait, "--", "sh", "-c", 'exec "$HOME/.local/bin/collie-task" "$@"', "collie-task", *argv]
     r = run(call)

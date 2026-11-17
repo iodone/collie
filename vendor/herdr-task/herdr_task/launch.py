@@ -2,7 +2,7 @@
 
 The launch allow-list ("an agent's own herdr-task commands never ask": OWN, own_rules, own_argv,
 cmd_allow) is the one place an agent's launch is given commands it may run without asking; allow
-another command (herdr-secret's, say) there."""
+another command (collie-secret's, say) there."""
 
 import hashlib
 import json
@@ -32,15 +32,14 @@ from .browsers import browser_line, browser_path
 # How long Codex waits on the permission hook: as the chat's card waits (ask-hook.sh).
 ASK_TIMEOUT = 1800
 OWN = ["ready", "reviewed", "status", "alert", "feedback", "show", "list", "where"]
-# herdr-secret's agent commands (~/.config/herdr-app/bin/herdr-secret): asking for a secret and
-# using one by name never ask either, as Shepherdr's secret commands. Written by its full path or
-# its bare name. Reviewers get none (launch() skips own_argv for them; herdr-secret refuses them).
-SECRET = ["ask", "run", "env", "list"]
+# collie-secret's agent commands (~/.config/herdr-app/bin/collie-secret): asking for a secret and
+# using one by name never ask either. Written by its full path or its bare name. Reviewers get none.
+SECRET = ["ask", "run", "list"]
 
 
 def secret_path():
-    """herdr-secret on PATH (~/.local/bin, here or on another machine), else None."""
-    return shutil.which("herdr-secret")
+    """collie-secret on PATH (~/.local/bin, here), else None."""
+    return shutil.which("collie-secret")
 
 
 def own_path():
@@ -59,7 +58,7 @@ def own_rules(path):
         return []
     rules = [f"Bash({path} {verb}:*)" for verb in OWN]
     sp = secret_path()
-    for p in [sp, "herdr-secret"] if sp and re.fullmatch(r"[\w@%+=:,./-]+", sp) else []:
+    for p in [sp] if sp and re.fullmatch(r"[\w@%+=:,./-]+", sp) else []:
         rules += [f"Bash({p} {verb}:*)" for verb in SECRET]
     # The task's browser (HERD-57): every herdr-browser command, as the brief writes it.
     bp = browser_path()
@@ -131,7 +130,7 @@ def own_command(path, text):
     if bp and len(words) >= 2 and words[0] in (bp, "herdr-browser"):
         return True
     sp = secret_path()
-    return bool(sp) and len(words) >= 2 and words[0] in (sp, "herdr-secret") and words[1] in SECRET
+    return bool(sp) and len(words) >= 2 and words[0] == sp and words[1] in SECRET
 
 
 def ask_hook():
@@ -387,8 +386,8 @@ def closing_line(s, task, parent=None, argv=None):
              f"then its {', '.join(OWN)} commands run without asking.")
     text += browser_line()
     if secret_path():
-        text += (" Secrets (keys, tokens, passwords) are used by name, never seen: `herdr-secret ask NAME --why \"…\"` "
-                 "(then end your turn), `herdr-secret run NAME -- <command>`, `herdr-secret list`; these run without asking too.")
+        text += (" Secrets (keys, tokens, passwords) are used by name, never seen: `collie-secret ask NAME --why \"…\"` "
+                 "(then end your turn), `collie-secret run NAME -- <command>`, `collie-secret list`; these run without asking too.")
     if argv and agent_key(argv) == "codex":
         text += " Codex's sandbox can't reach Herdr, so give those commands sandbox_permissions \"require_escalated\" from the first try."
     # No "report to your coordinator": Herdr tells the Assistant itself (news_pass).

@@ -1,4 +1,4 @@
-"""The person's settings (~/.herdr/shepherdr.json and per-folder), the agent each task runs, and
+"""The person's settings (~/.config/collie/settings.json and per-folder), the agent each task runs, and
 the Settings block a task's brief ends with."""
 
 import json
@@ -16,7 +16,6 @@ AGENTS = {"claude": ["claude"], "codex": ["codex", "--no-daemon"]}
 # ---- the person's settings ------------------------------------------------------------------
 
 SETTINGS = os.environ.get("COLLIE_TASK_SETTINGS") or os.environ.get("HERDR_TASK_SETTINGS") or os.path.join(HOME, ".config", "collie", "settings.json")
-LEGACY_SETTINGS = os.path.join(HOME, ".herdr", "shepherdr.json")
 # The role instructions are herdr-core templates (`hc templates` lists them): assistant.md (the
 # coordinator's), worker.md and reviewer.md. Workers and reviewers used ~/.herdr/instructions.
 TEMPLATES = os.environ.get("COLLIE_TASK_TEMPLATES") or os.environ.get("HERDR_TASK_TEMPLATES") or os.path.join(HOME, ".config", "herdr-core", "templates")
@@ -37,15 +36,12 @@ LOCAL_MACHINE = "local"
 
 def read_settings():
     """The settings file as it is ({} when there is none or it can't be read)."""
-    for path in (SETTINGS, LEGACY_SETTINGS):
-        try:
-            with open(path) as f:
-                d = json.load(f)
-        except (OSError, ValueError):
-            continue
-        if isinstance(d, dict):
-            return d
-    return {}
+    try:
+        with open(SETTINGS) as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return d if isinstance(d, dict) else {}
 
 
 def autopilot_layers(d, space=None):
@@ -124,7 +120,7 @@ def settings_for(s, space=None):
     """The settings for this folder's tasks: Shepherdr settings' Everywhere, then this machine's,
     then the override of the space working in this folder (--space's when several do): the most
     specific wins. The window no longer writes agent or task values for a machine (only its
-    machine-only rows, read by machine_limits/machine_option); ones set before still apply here. Written by the settings window (~/.herdr/shepherdr.json); herdr-task only
+    machine-only rows, read by machine_limits/machine_option); ones set before still apply here. Written by Collie settings; herdr-task only
     reads them."""
     everywhere, machine, pick = settings_layers(s, space)
     out = {k: dict(v) for k, v in DEFAULTS.items()}
