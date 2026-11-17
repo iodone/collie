@@ -7,7 +7,7 @@
 | 内容 | root 下的位置 |
 | :-- | :-- |
 | layout、mods、lib、CLI | `.config/herdr-app/` |
-| `collie-sync` helper | `.local/bin/collie-sync`（herdr-app 的 `bin/` 也保留一份） |
+| helper（`collie-sync` / `collie-task` / `collie-ticket` / `collie-secret`，外加 `collie-artifact`） | `.local/bin/`（herdr-app 的 `bin/` 也保留一份） |
 | 提示词 | `.config/herdr-core/templates/` |
 | 后台 runtime（service / kernel / plugins / protocol） | `.local/share/collie/` |
 | 运行状态与初始 `ruleset.json` | `.local/state/collie/` |
@@ -132,6 +132,26 @@ space 配置覆盖 Everywhere；未配置有效 `cli` 时不会静默选择另�
 - `accept` 把 Decision 推进到 `open`，恢复原 coordinator 会话；合并/评论由 coordinator 的 delivery 决定，完成后才 `settled`。
 - `drop` 直接 `settled{dropped}`；`later` 保持 `waiting`。
 - 打开/展开只是 `ack`，不会结案；只有 Card answer 的 outcome 才结案。
+
+## Secrets
+
+`collie-secret` 让 agent 按名字用密钥，值不进口语、日志或 artifact。保险库在 `~/.local/share/collie/secrets/vault.json`（目录 0700、文件 0600；`COLLIE_SECRETS_HOME` 可改位置），与 chat 的 ask card 写的是同一个文件。
+
+```bash
+# agent（在其 Collie 终端里）
+collie-secret ask GITHUB_TOKEN --why "push the branch"   # 在 chat 里留一张掩码卡，然后结束本轮
+collie-secret list                                       # 能用的名字
+collie-secret run GITHUB_TOKEN -- git push               # 值只在命令环境里，输出中的值被替换成 [GITHUB_TOKEN hidden]
+
+# 人
+printf '%s\n' "$VALUE" | collie-secret set GITHUB_TOKEN --why "push the branch"
+collie-secret names --json                               # 只有名字、why、时间，没有值
+collie-secret rm GITHUB_TOKEN
+```
+
+- `ask` 只把 `collie.secret.ask.NAME=<why>` 留在该终端上；chat 的卡片（`mods/collie-chat/secret-card.js`）保存后回报 agent「Kept: NAME」，agent 再按名字用。
+- 值短于 4 个字符不掩码（否则会把输出里每个字母都替换掉）。
+- 与 shepherdr 的 `herdr-secret` 相比，机器级别（Everywhere / 某台机器 / 某个 space）、远端保管与 FIFO 应答（`serve` / `install --on` / `mark-remote` / `where`）、`env` 子命令都没有移植。
 
 ## Coordinator 生命周期与恢复
 

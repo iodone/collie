@@ -107,6 +107,10 @@ class InstallTest(unittest.TestCase):
         helper = self.root / ".local/bin/collie-sync"
         self.assertTrue(helper.is_file())
         self.assertTrue(os.access(helper, os.X_OK))
+        secret = self.root / ".local/bin/collie-secret"
+        self.assertTrue(secret.is_file())
+        self.assertTrue(os.access(secret, os.X_OK))
+        self.assertTrue((self.root / ".config/herdr-app/bin/collie-secret").is_file())
         self.assertTrue((self.root / ".local/share/collie/service/main.ts").is_file())
         self.assertTrue((self.root / ".local/share/collie/protocol/invariants.mjs").is_file())
         self.assertEqual(

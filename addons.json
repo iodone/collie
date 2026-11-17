@@ -22,6 +22,7 @@
     "collie-sync",
     "collie-task",
     "collie-ticket",
+    "collie-secret",
     "collie-artifact"
   ],
   "templates": [
