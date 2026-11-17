@@ -301,16 +301,29 @@ def add_hooks(root: Path) -> list[list[str]]:
         except ValueError:
             print(f"hooks: {path} is not valid JSON; left alone", file=sys.stderr)
             continue
-        added = False
+        changed = False
         for event, script, timeout in CHAT_HOOKS:
             command = f"sh '{app_root(root)}/mods/collie-chat/{script}'"
             entries = data.setdefault("hooks", {}).setdefault(event, [])
             done.append([relative, event, command])
+            # Drop the same hook written by an older Shepherdr install (mods/chat/<script>).
+            kept = []
+            for entry in entries:
+                hooks = entry.get("hooks", [])
+                live = [h for h in hooks if f"/mods/chat/{script}" not in h.get("command", "")]
+                if len(live) != len(hooks):
+                    changed = True
+                    if live:
+                        entry["hooks"] = live
+                        kept.append(entry)
+                else:
+                    kept.append(entry)
+            entries[:] = kept
             if any(script in hook.get("command", "") for entry in entries for hook in entry.get("hooks", [])):
                 continue
             entries.append({"hooks": [{"type": "command", "command": command, "timeout": timeout}]})
-            added = True
-        if added:
+            changed = True
+        if changed:
             if path.exists():
                 Backups(root, False).save(root, relative)
             path.parent.mkdir(parents=True, exist_ok=True)

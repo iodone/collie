@@ -247,6 +247,20 @@ class InstallTest(unittest.TestCase):
         self.assertIn(".config/herdr-core/templates/collie-coordinator.md", manifest["files"])
         self.assertTrue((self.root / ".local/state/collie").exists())
 
+    def test_install_replaces_old_shep_chat_hooks(self):
+        path = self.root / ".claude/settings.json"
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({"hooks": {"SessionStart": [{"hooks": [
+            {"type": "command", "command": "sh '/Users/x/.config/herdr-app/mods/chat/session-note.sh'", "timeout": 10},
+            {"type": "command", "command": "echo keep", "timeout": 1},
+        ]}]}}))
+        self.install()
+        data = json.loads(path.read_text())
+        commands = [h.get("command", "") for e in data["hooks"]["SessionStart"] for h in e.get("hooks", [])]
+        self.assertFalse(any("/mods/chat/session-note.sh" in c for c in commands))
+        self.assertTrue(any("/mods/collie-chat/session-note.sh" in c for c in commands))
+        self.assertIn("echo keep", commands)
+
     def test_sync_check_dry_run_and_copy(self):
         library = self.source / "lib/shared.js"
         library.parent.mkdir(exist_ok=True)
