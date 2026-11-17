@@ -127,6 +127,13 @@
                   "type": "stack",
                   "children": [
                     {
+                      "id": "files",
+                      "type": "block",
+                      "content": {
+                        "mod": "collie-files"
+                      }
+                    },
+                    {
                       "id": "collie",
                       "type": "stack",
                       "children": [
@@ -182,6 +189,16 @@
                         }
                       ],
                       "active": "collie-list"
+                    },
+                    {
+                      "id": "artifacts",
+                      "type": "block",
+                      "content": {
+                        "mod": "collie-artifacts",
+                        "props": {
+                          "view": "panel"
+                        }
+                      }
                     },
                     {
                       "id": "working",

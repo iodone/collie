@@ -2,7 +2,7 @@ import { View, div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import { panes, run, openOverlay, theme, window, shared, layout, settings, nextCommand, readTextFile, appHome } from "herdr";
 import { spacesWithChats as spaces, sweep } from "./parked.js";
-import { agentIn, isCoordinatorTab, closeTab, watchNewSpaces, newSpace, openCoordinator, renameTab, renameSpace } from "./coordinator.js";
+import { isCoordinatorTab, closeTab, watchNewSpaces, newSpace, openCoordinator, renameTab, renameSpace } from "./coordinator.js";
 import { startTick, tickOnChange } from "./tick.js";
 import { startInbox, countsByTab, readyByTab, showInbox, toAlert } from "./inbox.js";
 import { serveRemote } from "./secrets.js";
@@ -50,16 +50,16 @@ export default class Tabs extends View {
         if (c === "rename-tab" && tab) renameTab(tab);
         if (c === "rename-space") { const sp = spaces().find(s => s.active); if (sp) renameSpace(sp.id); }
         // Ctrl+Shift+N: the New space dialog, on the shown space's machine.
-        if (c === "newspace") newSpace(spaces().find(s => s.active));
+        if (c === "space-new") newSpace(spaces().find(s => s.active));
         // This computer's + in the Spaces sidebar: the dialog here, whatever space is shown.
-        if (c === "newspace-local") newSpace(null);
-        // A machine's New space in the Spaces sidebar: the dialog there (shared "newspace.on" =
-        // { machine, at }, null machine: this computer). A script's way: data/newspace-on.json
+        if (c === "space-new-local") newSpace(null);
+        // A machine's New space in the Spaces sidebar: the dialog there (shared "collie.space.on" =
+        // { machine, at }, null machine: this computer). A script's way: data/collie-space-on.json
         // ({ machine }).
-        if (c === "newspace-on") {
-          let on = shared("newspace.on");
+        if (c === "space-new-on") {
+          let on = shared("collie.space.on");
           if (!on || Date.now() - on.at >= 10000) {
-            try { on = { ...JSON.parse(await readTextFile(`${appHome()}/data/newspace-on.json`) ?? "null"), at: Date.now() }; } catch { on = null; }
+            try { on = { ...JSON.parse(await readTextFile(`${appHome()}/data/collie-space-on.json`) ?? "null"), at: Date.now() }; } catch { on = null; }
           }
           newSpace(on?.machine ? { machine: on.machine } : null);
         }
@@ -122,9 +122,6 @@ export default class Tabs extends View {
     const space = spaces().find(p => p.active);
     // A coordinator's tab is pinned first.
     const shown = [...(space?.tabs ?? [])].sort((a, b) => isCoordinatorTab(b.id) - isCoordinatorTab(a.id));
-    // The tab menu's height: Rename, Close, and the rows the tab gets (menu-tasks): a coordinator
-    // tab's Edit instructions, an agent's Switch agent and Restart.
-    const menuHeight = (id) => 19 + 32 * (2 + (isCoordinatorTab(id) ? 1 : 0) + (agentIn(id) && !agentIn(id).address.includes("/") ? 2 : 0));
     const stop = (_e, cx) => cx.stop_propagation();
     const button = (id, label, action) => div().id(id).size(H.sm).flex_none().flex().items_center().justify_center().rounded(RADIUS.control).cursor_pointer().text_color(t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
       .on_mouse_down("left", stop).on_click(action).child(label);
@@ -143,7 +140,7 @@ export default class Tabs extends View {
           if (from !== null && from !== i) run("tab.move", { id: shown[from].id, index: space.tabs.findIndex(x => x.id === c.id) + 1 });
           else run("tab.select", { id: c.id });
         })
-        .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "menu-tasks", kind: "popup", width: 236, height: menuHeight(c.id), props: { tab: "tab", target: { id: c.id, space: space.id }, right: this.right } }); })
+        .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "menu", kind: "popup", width: 236, props: { tab: "tab", target: { id: c.id, space: space.id } } }); })
         .when(Boolean(program?.icon), el => el.child(program.tint ? svg(program.icon).size(14).text_color(t.muted) : image(program.icon).size(14)))
         .child(div().max_w(170).truncate().child(c.zoomed ? `${name} Z` : name))
         .when(c.status === "working", el => el.child(svg("mods/collie-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900)))
@@ -157,9 +154,10 @@ export default class Tabs extends View {
       ? Math.max(10, (root.traffic_lights[0] + 64) / settings().zoom - (sidebar?.hidden ? 0 : sidebar?.size?.px ?? 0))
       : 10;
     const panel = find(root, "panel"), body = find(root, "panel-body");
-    // The Inbox is the only panel page collie owns now; shep's Files/Changes/Tasks/Artifacts
-    // pages are removed from the layout.
-    const enabled = ["collie"];
+    // The panel's pages, all collie's own: Files, Inbox, Artifacts (the layout mounts them as
+    // "files", "collie" and "artifacts"). Shep's pages are gone.
+    const enabled = ["files", "collie", "artifacts"];
+    const waiting = shared("inbox.queue")?.waiting ?? 0;
     this.syncPanel(space, panel, body, enabled);
     // The side panel's button: icon first; the label when the bar has room (the open one keeps
     // its label); a count after the icon (the Inbox's waiting work).
@@ -180,12 +178,12 @@ export default class Tabs extends View {
     return h_flex().id("tabs-bar").size_full().min_w(0).px(10).pl(lightsPadding).gap(3).items_center().bg(t.chrome).border_b(1).border_color(t.border)
       .on_size_change((size, cx) => { this.width = size.width; cx.notify(); })
       .on_mouse_up("left", () => { this.pressed = null; })
-      // The bar runs to the window's right edge: menus opened from it place their submenus by it.
-      .on_mouse_move((e) => { this.right = e.position.x - e.local_position.x + e.bounds.width; })
       .on_scroll_wheel(e => { if (Math.abs(e.delta.y) >= 1) run(e.delta.y > 0 ? "tab.prev" : "tab.next"); })
       .child(h_flex().id("tab-scroll").flex_1().min_w(0).h_full().items_center().gap(3).overflow_x_scrollbar().children(shown.map(item)))
-      .child(button("tab-new", "+", () => openOverlay({ mod: "new-menu-tasks", kind: "popup", width: 250, height: 543, props: { right: this.right } })))
-      .child(panelButton("collie", "Inbox", "mods/collie-chrome/files.svg", [shared("inbox.queue")?.waiting ?? 0, 0]))
+      .child(button("tab-new", "+", () => openOverlay({ mod: "new-menu", kind: "popup", width: 250 })))
+      .child(panelButton("files", "Files", "mods/collie-files/file.svg"))
+      .child(panelButton("collie", "Inbox", "mods/collie-chrome/files.svg", [waiting, 0]))
+      .child(panelButton("artifacts", "Artifacts", "mods/collie-artifacts/artifacts.svg"))
       .when(w?.buttons, el => el.child(button("minimize", w.platform === "windows" ? svg("mods/collie-tabs/win-min.svg").size(16) : "−", () => run("window.minimize")))
         .child(button("maximize", w.platform === "windows" ? svg(`mods/collie-tabs/${w.maximized ? "win-restore" : "win-max"}.svg`).size(16) : "□", () => run("window.maximize")))
         .child(button("close-window", w.platform === "windows" ? svg("mods/collie-tabs/win-close.svg").size(16) : svg("mods/collie-tabs/win-close.svg").size(13), () => run("window.close"))));

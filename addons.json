@@ -10,7 +10,10 @@
     "collie-rules",
     "collie-tabs",
     "collie-chrome",
-    "collie-settings"
+    "collie-settings",
+    "collie-files",
+    "collie-space",
+    "collie-close"
   ],
   "needs": {},
   "helpers": [

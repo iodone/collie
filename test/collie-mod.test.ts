@@ -169,7 +169,7 @@ test("layout 只保留 collie 自有页面，不再挂 shep 的 Tasks/Assistant 
     Object.values(node).forEach(visit);
   };
   visit(layout);
-  expect(panel?.children?.map((child) => child.id)).toEqual(["collie", "working"]);
+  expect(panel?.children?.map((child) => child.id)).toEqual(["files", "collie", "artifacts", "working"]);
   expect(ticketBody?.children?.map((child) => child.id)).toEqual([
     "collie-ticket-artifacts",
   ]);

@@ -5,7 +5,7 @@
   "type": "module",
   "description": "herdr 的双循环插件（M0–M7）",
   "scripts": {
-    "test": "node --test protocol/test/*.test.mjs && bun test test/*.test.ts && bun test mods/collie-chat/tests/*.test.js && python3 test/install.test.py",
+    "test": "node --test protocol/test/*.test.mjs && bun test test/*.test.ts && bun test mods/collie-chat/tests/*.test.js && bun test mods/collie-files/tests/*.test.js && python3 test/install.test.py",
     "test:schema": "node --test protocol/test/schema.test.mjs",
     "test:invariants": "node --test protocol/test/invariants.test.mjs",
     "test:agent": "bun test test/herdr.test.ts",

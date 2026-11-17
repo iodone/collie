@@ -43,13 +43,13 @@ export default class WorkspaceChrome extends View {
         .child(row("settings", "settings", "Settings", () => run("app.settings"))
           .when(Boolean(updates().app.ready), el => el.child(div().size(6).rounded_full().bg(t.accent))))
         .child(row("collie-settings", "dog", "Collie settings", () => openOverlay({ mod: "collie-settings", kind: "dialog", frame: "none", width: 860, height: 0.92 })))
-        // Add machine: Herdr's own machine-add chat (a Herdr mod, not one of collie's).
-        .child(row("machine", "plus", "Add machine", () => run("mod.open", { name: "machine-add-chat" })));
+        // Add machine: Herdr's own Add a machine dialog (mods/machine-add).
+        .child(row("machine", "plus", "Add machine", () => run("mod.open", { name: "machine-add" })));
     }
     return h_flex().size_full().bg(t.chrome).pl(collapsed ? 6 : 14).pr(10).gap(4).items_center().text_size(13.5)
       .when(window()?.platform === "macos" && !window()?.fullscreen && !collapsed, el => el.pl(76))
       .when(!collapsed, el => el.child(h_flex().flex_1().gap(8).items_center().child(image("frame/welcome/herdr.png").size(20).rounded(5)).child(div().font_semibold().text_color(t.foreground).child("Herdr"))))
-      .when(!collapsed, el => el.child(this.button("search", svg("mods/collie-chrome/search.svg").size(15), () => run("mod.open", { name: "jump" }))))
+      .when(!collapsed, el => el.child(this.button("search", svg("mods/collie-chrome/search.svg").size(15), () => run("mod.open", { name: "picker" }))))
       // On the macOS rail the traffic lights fill the row; the agents list's » unfolds it.
       .when(!(collapsed && window()?.platform === "macos"), el => el.child(this.button("sidebar-toggle", svg("mods/collie-chrome/sidebar.svg").size(15), toggleSidebar)));
   }

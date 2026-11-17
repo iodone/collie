@@ -189,20 +189,19 @@ export async function openCoordinator(space, show = true, settings = null) {
   }
 }
 
-// New space: the New space dialog (mods/newspace), on the space's machine (none: this computer).
+// New space: the New space dialog (mods/collie-space), on the space's machine (none: this computer).
 // It finds that machine's recent folders and home first, so the dialog opens at the height its
 // content needs, its paths shown from that home.
 export async function newSpace(space) {
-  // The machine asked for, else (it can't be reached) this computer, as core/newspace.js startMachine: the dialog's
-  // Machine choice offers the rest, shown while another machine is connected.
+  // The machine asked for, else (it can't be reached) this computer: the dialog's Machine choice
+  // offers the rest, shown while another machine is connected.
   const asked = space?.machine ?? null;
   const machine = asked && !machineReady(asked) ? null : asked;
   const choosing = machines().some((m) => m.name && m.layout === "ready");
   const [recent, at] = await Promise.all([recentFolders(machine).catch(() => []), homeOf(machine).catch(() => null)]);
   if (!at) return toast({ title: `Couldn't reach ${machine}`, body: "Try New space again once it's connected.", level: "error" });
-  // The dialog draws its own panel (frame "none"), centered and as tall as what it shows now:
-  // the overlay is the panel at its tallest.
-  openOverlay({ mod: "newspace", kind: "dialog", frame: "none", width: 460, height: newSpaceHeight(recent.length, choosing), props: { recent, machine, home: at } });
+  // The dialog draws its own panel (frame "none"), centered as tall as what it shows now.
+  openOverlay({ mod: "collie-space", kind: "dialog", frame: "none", width: 460, height: newSpaceHeight(recent.length, choosing), props: { recent, machine, home: at } });
 }
 
 // A machine's home folder (null: this computer's).
@@ -212,18 +211,17 @@ export async function homeOf(machine = null) {
   return r.code === 0 && r.stdout.startsWith("/") ? r.stdout : null;
 }
 
-// The New space dialog's parts, in px (mods/newspace draws them at these sizes): its padding,
-// title, the Folder label and field (gap apart), list rows (a typed path's Use row, at most
-// NEWSPACE_SHOWN folders, then Choose folder…), the Coordinator row and, while it's on, its two
-// rows (Task ID, Agent), the buttons, and the space between sections. The overlay is the dialog
-// with the coordinator on; off, the dialog draws itself shorter in its middle.
-export const NEWSPACE = { pad: 18, title: 20, label: 16, gap: 4, field: 32, row: 31, line: 32, buttons: 32, section: 16 };
+// The New space dialog's parts, in px (mods/collie-space draws them at these sizes): its padding,
+// title, the Machine label and field (gap apart, a section after), the Folder label and field (gap
+// apart), the recent folder rows (at most NEWSPACE_SHOWN, then Choose folder…), the note under the
+// field, and the buttons, with a section before them.
+export const NEWSPACE = { pad: 18, title: 20, label: 16, gap: 4, field: 32, row: 31, buttons: 32, section: 16, note: 24 };
 export const NEWSPACE_SHOWN = 5;
-// choosing: the Machine choice shows (its label, field and the space under it), and another machine's folders may be
-// more, so the rows are at their most.
+// choosing: the Machine choice shows (its label, field and the space under it).
 export function newSpaceHeight(n, choosing = false) {
-  const k = NEWSPACE, rows = 1 + Math.min(choosing ? NEWSPACE_SHOWN : n, NEWSPACE_SHOWN) + 1;
-  return (choosing ? k.label + k.gap + k.field + k.section : 0) + 2 * k.pad + k.title + k.section + k.label + k.gap + k.field + k.gap + rows * k.row + k.section + 3 * k.line + k.section + k.buttons;
+  const k = NEWSPACE, rows = Math.min(NEWSPACE_SHOWN, n) + 1;
+  return (choosing ? k.label + k.gap + k.field + k.section : 0) + 2 * k.pad + k.title + k.section + k.label + k.gap + k.field + k.gap
+    + rows * k.row + k.note + k.section + k.buttons;
 }
 
 // A machine's folders people worked in (null: this computer's), newest first, at most 8: its spaces'
@@ -245,9 +243,10 @@ export async function recentFolders(machine = null) {
   return out;
 }
 
-// Makes a space at `folder` (New space dialog), on `machine` (null: this computer), and, unless
-// `settings` is null, its Coordinator tab, started with those settings on the first message; lands
-// in it. `icon`: the emoji the dialog picked (null: "#"), kept in shared "collie.spaceIcons"
+// Makes a space at `folder` (New space dialog), on `machine` (null: this computer), and its
+// Coordinator tab, started with `settings` on the first message (undefined: Collie settings'
+// choice, as openCoordinator reads it); settings null leaves the space without one. Lands in it.
+// `icon`: the emoji the dialog picked (null: "#"), kept in shared "collie.spaceIcons"
 // ({ [space id]: emoji }), as the sidebar's Rename keeps a space's. Resolves with the space id.
 // With a coordinator, the space has only its Coordinator tab: Herdr's first shell tab goes, while
 // it is still a fresh shell nobody used.
@@ -386,10 +385,10 @@ export function watchNewSpaces(spaces) {
   }
   // The New space dialog closes as soon as it asks: the space is made here (createSpace), where
   // the work isn't cut short by the dialog going when the view moves to the new space.
-  const make = shared("newspace.createreq");
+  const make = shared("collie.spacereq");
   if (make) {
-    setShared("newspace.createreq", null);
-    if (Date.now() - make.at < 10000) createSpace(make.folder, make.settings ?? null, make.machine ?? null, make.icon ?? null)
+    setShared("collie.spacereq", null);
+    if (Date.now() - make.at < 10000) createSpace(make.folder, make.settings, make.machine ?? null, make.icon ?? null)
       .catch((e) => toast({ title: "Space wasn't made", body: plainError(e), level: "error" }));
   }
   // Settings > Machines turned a machine's Home Assistant on: its home space, made if missing.
@@ -464,7 +463,7 @@ export const restartAgent = (k, argv) => script("restart", argv ? [k.address, JS
 export function closeTab(tabId) {
   const c = coordinatorIn(tabId);
   if (c) {
-    openOverlay({ mod: "coordinator", kind: "dialog", width: 440, height: 336, props: { view: "close", tab: tabId } });
+    openOverlay({ mod: "collie-close", kind: "dialog", width: 440, height: 336, props: { tab: tabId, coord: c.address } });
     return;
   }
   const space = allSpaces().find((s) => s.tabs.some((x) => x.id === tabId));
@@ -472,28 +471,28 @@ export function closeTab(tabId) {
   run("tab.close", { id: tabId });
 }
 
-// Rename a tab: our prompt (mods/prompt-chat, the app's one dialog footer), its field holding the
-// name given (empty when nobody named it: it keeps its number).
+// Rename a tab: Herdr's prompt (mods/prompt), its field holding the name given (empty when nobody
+// named it: it keeps its number), its hint showing the name it has.
 export function renameTab(tab) {
-  openOverlay({ mod: "prompt-chat", kind: "dialog", width: 400, height: 196, props: { title: "Rename tab",
-    value: tab?.named ? tab.name : "", placeholder: tab?.name ?? "", command: { name: "tab.rename", args: { id: tab?.id } } } });
+  openOverlay({ mod: "prompt", kind: "dialog", width: 400, props: { title: "Rename tab",
+    value: tab?.named ? tab.name : "", hint: `Now: ${tab?.name ?? "Tab"}`, command: { name: "tab.rename", args: { id: tab?.id } } } });
 }
 
-// A space's Rename: our prompt (mods/prompt-chat, as Rename tab uses), its field holding the name
-// given (empty when nobody named it: the name stays). Close asks our confirm (mods/confirm-chat)
-// before Herdr's close.
+// A space's Rename: Herdr's prompt (as Rename tab uses), its field holding the name given (empty
+// when nobody named it: the name stays). Close asks Herdr's confirm (mods/confirm) before
+// Herdr's close.
 export function renameSpace(id) {
   const space = allSpaces().find((s) => s.id === id);
-  openOverlay({ mod: "prompt-chat", kind: "dialog", width: 400, height: 196, props: { title: "Rename space",
-    value: space?.named ? space.name : "", placeholder: space?.name ?? "", command: { name: "space.rename", args: { id } } } });
+  openOverlay({ mod: "prompt", kind: "dialog", width: 400, props: { title: "Rename space",
+    value: space?.named ? space.name : "", hint: `Now: ${space?.name ?? "Space"}`, command: { name: "space.rename", args: { id } } } });
 }
 export function closeSpace(id) {
   const name = allSpaces().find((s) => s.id === id)?.name;
-  openOverlay({ mod: "confirm-chat", kind: "dialog", width: 400, height: 168, props: {
+  openOverlay({ mod: "confirm", kind: "dialog", width: 400, height: 168, props: {
     title: name && name !== "~" ? `Close \u201c${name}\u201d?` : "Close this space?",
-    detail: "Its tabs close and every program in them ends.", verb: "Close space",
+    detail: "Its tabs close and every program in them ends.",
     command: { name: "space.close", args: { id, confirmed: true } } } });
-  logSpace("close", id, "coordinator.js closeSpace (asks in confirm-chat)");
+  logSpace("close", id, "coordinator.js closeSpace (asks in mods/confirm)");
 }
 
 // An element's place in the window, from a mouse event on it: { x, y, width, height }.

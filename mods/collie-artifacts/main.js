@@ -6,8 +6,8 @@
 // The same mod is the viewer's toolbar when props().artifact is set (lib/artview.js mounts it): bar.js draws it.
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { theme, shared, props } from "herdr";
-import { openViewer } from "./lib/artview.js";
+import { theme, shared, props, spaces } from "herdr";
+import { openViewer, artifactCli } from "./lib/artview.js";
 import { titleInTask } from "./core/task-artifacts.js";
 import { TEXT, RADIUS } from "./lib/ui.js";
 import { initArtifactBar, artifactBar, closeArtifactBar } from "./bar.js";
@@ -33,8 +33,39 @@ export default class CollieArtifacts extends View {
     // The viewer's toolbar (bar.js): its versions, Mark up.
     if (props()?.artifact) return initArtifactBar(this, cx);
     this.opening = null;
+    if (props()?.view === "panel") {
+      this.panel = { key: null, list: [], loading: true, error: null };
+      this.loadPanel(cx);
+      cx.timer.every(15000, (cx) => { this.panel.key = null; this.loadPanel(cx); cx.notify(); });
+      return;
+    }
     // "2h ago" moves on
     cx.timer.every(60000, (cx) => cx.notify());
+  }
+
+  panelLocation() {
+    const space = spaces().find((s) => s.active);
+    return { folder: space?.folder ?? null, machine: space?.machine ?? null, id: space?.id ?? null };
+  }
+
+  loadPanel(cx) {
+    const at = this.panelLocation();
+    if (!at.folder) {
+      this.panel = { ...this.panel, key: "none", list: [], loading: false, error: "No folder open." };
+      return;
+    }
+    const key = `${at.machine ?? ""}|${at.folder}`;
+    if (this.panel.key === key && !this.panel.error) return;
+    this.panel = { ...this.panel, key, loading: true, error: null };
+    cx.spawn(async (cx) => {
+      try {
+        const out = await artifactCli(at.machine, ["list", "--folder", at.folder]);
+        this.panel = { key, folder: at.folder, machine: at.machine, list: out?.artifacts ?? [], loading: false, error: null };
+      } catch (e) {
+        this.panel = { key, folder: at.folder, machine: at.machine, list: [], loading: false, error: String(e?.message ?? e) };
+      }
+      cx.notify();
+    });
   }
 
   // The viewer going away ends its Mark up.
@@ -75,9 +106,38 @@ export default class CollieArtifacts extends View {
           .child(busy ? "Opening…" : [`${a.v} ${a.v === 1 ? "version" : "versions"}`, a.at ? ago(a.at) : null].filter(Boolean).join(" · "))));
   }
 
-  render(_cx) {
+  panelRow(t, a, machine, i) {
+    const busy = this.opening === a.id;
+    return h_flex().id(`panel-art-${i}`).w_full().min_w(0).px(10).py(8).gap(10).items_start().rounded(RADIUS.control).cursor_pointer()
+      .hover((s) => s.bg(t.hover))
+      .on_click((_e, cx) => { cx.stop_propagation(); this.open(a, machine, cx); })
+      .child(div().pt(1).flex_none().child(svg(ICON).size(14).text_color(a.proof ? t.accent : t.dim)))
+      .child(v_flex().flex_1().min_w(0).gap(2)
+        .child(h_flex().min_w(0).gap(8).items_center()
+          .child(div().min_w(0).truncate().text_size(13).text_color(t.foreground).child(a.title || a.id))
+          .when(Boolean(a.proof), (el) => el.child(div().flex_none().h(18).px(7).flex().items_center().rounded(9).bg(t.selected)
+            .text_size(11).font_medium().text_color(t.muted).child("Proof"))))
+        .child(div().min_w(0).truncate().text_size(TEXT.label).text_color(t.dim)
+          .child(busy ? "Opening…" : [`${a.v ?? a.version ?? 1} ${(a.v ?? a.version ?? 1) === 1 ? "version" : "versions"}`, a.at ? ago(a.at) : null].filter(Boolean).join(" · "))));
+  }
+
+  panelView(cx, t) {
+    const root = v_flex().id("artifacts-panel").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13);
+    const p = this.panel;
+    if (p.loading) return root.child(this.note(t, "Looking for artifacts…"));
+    if (p.error) return root.child(this.note(t, "Couldn't read artifacts", p.error));
+    if (!p.list.length) return root.child(this.note(t, "No artifacts yet", "Reports and proofs published in this folder show here."));
+    return root.child(v_flex().id("artifacts-panel-list").flex_1().min_h(0).overflow_y_scrollbar().p(6).gap(2)
+      .children(p.list.map((x, i) => this.panelRow(t, x, p.machine, i))));
+  }
+
+  render(cx) {
     const t = theme();
     if (props()?.artifact) return artifactBar(this, props().artifact, this.handle);
+    if (props()?.view === "panel") {
+      this.loadPanel(cx);
+      return this.panelView(cx, t);
+    }
     const root = v_flex().id("ticket-artifacts").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13);
     const w = shared("tasks.thread");
     if (!w) return root.child(this.note(t, "No ticket open."));
