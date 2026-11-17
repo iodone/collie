@@ -511,6 +511,103 @@ def remove_empty_parents(path: Path, stop: Path, preserve: Path) -> None:
         path = path.parent
 
 
+
+def service_unit(root: Path, bun: str, main: Path) -> tuple[Path, str]:
+    state = target_path(root, STATE)
+    log = state / "service.log"
+    if sys.platform == "darwin":
+        label = "dev.collie.service"
+        path = Path("Library/LaunchAgents") / f"{label}.plist"
+        path_text = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>{label}</string>
+  <key>ProgramArguments</key><array><string>{bun}</string><string>{main}</string></array>
+  <key>EnvironmentVariables</key><dict>
+    <key>HOME</key><string>{root}</string>
+    <key>HERDR_INBOX_STATE</key><string>{state}</string>
+    <key>PATH</key><string>{Path(bun).parent}:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>{log}</string>
+  <key>StandardErrorPath</key><string>{log}</string>
+</dict></plist>
+"""
+    else:
+        path = Path(".config/systemd/user/collie.service")
+        path_text = f"""[Unit]
+Description=Collie background service
+After=network-online.target
+
+[Service]
+ExecStart={bun} {main}
+Environment=HOME={root}
+Environment=HERDR_INBOX_STATE={state}
+Environment=PATH={Path(bun).parent}:/usr/local/bin:/usr/bin:/bin
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target
+"""
+    return path, path_text
+
+
+def service_control(root: Path, action: str) -> int:
+    if root != Path.home():
+        print(f"collie service unit belongs to {root}; run {action} in that HOME", file=sys.stderr)
+        return 0
+    if sys.platform == "darwin":
+        label = f"gui/{os.getuid()}/dev.collie.service"
+        command = ["launchctl", "kickstart", "-k", label] if action == "start" else ["launchctl", "bootout", label]
+    else:
+        command = ["systemctl", "--user", action, "collie.service"]
+    result = subprocess.run(command)
+    return result.returncode
+
+
+def service_install(args) -> int:
+    root = args.root.expanduser().resolve()
+    validate_root(root)
+    bun = shutil.which("bun")
+    if not bun:
+        raise InstallError("bun is required for collie service")
+    main = target_path(root, RUNTIME / "service/main.ts")
+    if not main.is_file():
+        raise InstallError(f"missing service entry: {main}")
+    relative, text = service_unit(root, bun, main)
+    path = target_path(root, relative)
+    if args.dry_run:
+        print(f"would write {path}")
+        return 0
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write(path, text.encode(), 0o644)
+    print(path)
+    if root != Path.home():
+        return 0
+    if sys.platform == "darwin":
+        target = f"gui/{os.getuid()}"
+        subprocess.run(["launchctl", "bootout", f"{target}/dev.collie.service"], capture_output=True)
+        return subprocess.run(["launchctl", "bootstrap", target, str(path)]).returncode
+    subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
+    return subprocess.run(["systemctl", "--user", "enable", "--now", "collie.service"]).returncode
+
+
+def service_uninstall(args) -> int:
+    root = args.root.expanduser().resolve()
+    validate_root(root)
+    bun = shutil.which("bun") or "bun"
+    main = target_path(root, RUNTIME / "service/main.ts")
+    relative, _ = service_unit(root, bun, main)
+    path = target_path(root, relative)
+    if root == Path.home():
+        service_control(root, "stop")
+    if path.exists() and not args.dry_run:
+        path.unlink()
+    print(path)
+    return 0
+
 def service_health(root: Path):
     socket_path = target_path(root, STATE / "service.sock")
     if not socket_path.exists():
@@ -539,6 +636,14 @@ def service_health(root: Path):
         return True, json.loads(body or b"{}")
     except ValueError:
         return False, {"error": "collie service returned invalid JSON"}
+
+
+def service_start(args) -> int:
+    return service_control(args.root.expanduser().resolve(), "start")
+
+
+def service_stop(args) -> int:
+    return service_control(args.root.expanduser().resolve(), "stop")
 
 
 def service_status(args) -> int:
@@ -664,6 +769,12 @@ def parser() -> argparse.ArgumentParser:
     status_command = service_sub.add_parser("status")
     status_command.add_argument("--root", type=Path, default=Path.home())
     status_command.set_defaults(function=service_status)
+    for name, function in (("install", service_install), ("uninstall", service_uninstall),
+                           ("start", service_start), ("stop", service_stop)):
+        command = service_sub.add_parser(name)
+        command.add_argument("--root", type=Path, default=Path.home())
+        command.add_argument("--dry-run", action="store_true")
+        command.set_defaults(function=function)
     command = sub.add_parser("uninstall")
     common(command)
     command.set_defaults(function=uninstall)
