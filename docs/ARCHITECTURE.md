@@ -327,6 +327,8 @@ mods/collie-artifacts/             # Ticket Artifacts + viewer
 
 引擎必须常驻，所以留在 tab bar；Inbox UI 通过 shared `inbox.*` / `collie.ticket` 读它，不跨 mod import。`collie-artifacts` 同时挂在 Ticket 和侧栏，保持独立。
 
+Chat 的 secrets 走 `bin/collie-secret` 和 `~/.local/share/collie/secrets/vault.json`；voice / dictation / call 在 Collie 中关闭（`VOICE=false`），不读 shep 的 secret/service 路径。
+
 ### 过滤器
 
 ```text
