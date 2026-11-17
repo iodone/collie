@@ -10,23 +10,25 @@ import re
 from .base import Fail, HOME, git
 from .github import BAD, PENDING, pr_view
 
-ARTIFACTS = os.environ.get("COLLIE_ARTIFACTS") or os.path.join(HOME, ".herdr", "artifacts")
+ARTIFACTS = os.environ.get("COLLIE_ARTIFACTS") or os.path.join(HOME, ".local/share/collie/artifacts")
+LEGACY_ARTIFACTS = os.path.join(HOME, ".herdr", "artifacts")
 # Files named on the card, and commits.
 FEW = 3
 
 
 def artifacts_of(folder):
-    """This folder's artifacts, newest first (herdr-artifact's list for it; the same slug rule)."""
+    """This folder's artifacts, newest first (collie-artifact's list for it; the same slug rule)."""
     rel = os.path.relpath(folder, HOME) if folder == HOME or folder.startswith(HOME + "/") else folder
     slug = re.sub(r"[^A-Za-z0-9._-]+", "-", "home" if rel == "." else rel.strip("/")).strip("-") or "root"
-    for name in (slug, f"{slug}-{hashlib.sha1(folder.encode()).hexdigest()[:6]}"):
-        try:
-            with open(os.path.join(ARTIFACTS, name + ".json")) as f:
-                d = json.load(f)
-        except (OSError, ValueError):
-            continue
-        if d.get("folder") in (None, folder):
-            return d.get("artifacts") or []
+    for directory in (ARTIFACTS, LEGACY_ARTIFACTS):
+        for name in (slug, f"{slug}-{hashlib.sha1(folder.encode()).hexdigest()[:6]}"):
+            try:
+                with open(os.path.join(directory, name + ".json")) as f:
+                    d = json.load(f)
+            except (OSError, ValueError):
+                continue
+            if d.get("folder") in (None, folder):
+                return d.get("artifacts") or []
     return []
 
 
@@ -38,7 +40,7 @@ def find_proof(s, t, given=None):
     if given:
         a = next((a for a in arts if a.get("id") == given.strip()), None)
         if not a:
-            raise Fail(f"No artifact {given} in {s.loc['folder']} (herdr-artifact list shows them).")
+            raise Fail(f"No artifact {given} in {s.loc['folder']} (collie-artifact list shows them).")
     else:
         ref, since = s.ref(t).upper(), t.get("started") or 0
         mine = [a for a in arts if (a.get("task") or "").upper() == ref and re.search(r"\bproof\b", a.get("title") or "", re.I)
@@ -49,7 +51,7 @@ def find_proof(s, t, given=None):
     files = a.get("files") or []
     if "main.js" in files or "recipe.json" not in files:
         raise Fail(f"Your proof {a['id']} is a custom panel, which the person can't open on their phone. Make it a recipe "
-                   f"(recipe.json; `herdr-artifact guide`, A task's proof), `herdr-artifact update {a['id']} <dir>`, then run ready again.")
+                   f"(recipe.json; `collie-artifact guide`, A task's proof), `collie-artifact update {a['id']} <dir>`, then run ready again.")
     return {"id": a["id"], "title": a.get("title") or a["id"]}
 
 
