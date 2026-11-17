@@ -53,7 +53,7 @@ describe("Coordinator Host", () => {
       session: "session-1",
       run: async (input) => {
         calls.push(input);
-        return JSON.stringify({ session_id: "session-1", result: JSON.stringify({ state: "routed", why: "构建", actions: [{ kind: "noop", risk_tags: [] }] }) });
+        return JSON.stringify({ session_id: "session-1", result: JSON.stringify({ state: "open", why: "构建", actions: [{ kind: "noop", risk_tags: [] }] }) });
       },
     });
     expect(calls[0].command).toBe("codex");
@@ -69,7 +69,7 @@ describe("Coordinator Host", () => {
       stateDir: dir, ruleset, rolePromptRef,
       workspaces: { "collie": { folder: "/repo/collie", cli: "codex" } },
       agent: { run: worker.run },
-      decide: () => ({ state: "routed", why: "人主动发起构建", actions: [{ kind: "spawn_task", risk_tags: [], spawn: {
+      decide: () => ({ state: "open", why: "人主动发起构建", actions: [{ kind: "spawn_task", risk_tags: [], spawn: {
         title: "Build request", brief_ref: "/tmp/brief.md", base: "current", review: true, merge: false, access: "edit", tells: "needed",
       } }] }),
     });

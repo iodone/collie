@@ -90,7 +90,7 @@ test("卡片回答不清零 hops：6 跳卡答完还是 6 跳", async () => {
   const withHops = { ...card, occurrence: { ...card.occurrence, hops: 6 } };
   const answered = answerCard(withHops, { option: "accept", at: NOW, by: "mi" });
   assert.equal(answered.occurrence.hops, 6);
-  assert.equal(answered.state, "routed");
+  assert.equal(answered.state, "open");
 });
 
 test("卡片回答也不能「顺手」减少或放大 hops（9 跳答完还是 9 跳，下一次仍只记录）", async () => {
@@ -112,10 +112,10 @@ test("卡片回答的合法性：rework 必须带批注，drop 才落 settled", 
   });
   assert.equal(reworked.card.answer.annotations.length, 1);
   assert.equal(reworked.settled, null);
-  assert.equal(reworked.state, "routed");
+  assert.equal(reworked.state, "open");
 
   const dropped = answerCard(card, { option: "drop", at: NOW, by: "mi" });
-  assert.equal(dropped.state, "closed");
+  assert.equal(dropped.state, "settled");
   assert.equal(dropped.settled.outcome, "dropped");
 
   const later = answerCard(card, { option: "later", at: NOW, by: "mi", snooze_until: minutesAgo(-120) });
@@ -123,7 +123,7 @@ test("卡片回答的合法性：rework 必须带批注，drop 才落 settled", 
   assert.equal(later.occurrence.hops, card.occurrence.hops);
 
   assert.throws(() => answerCard(card, { option: "maybe", at: NOW, by: "mi" }), /非法选项/);
-  assert.throws(() => answerCard({ ...card, state: "routed" }, { option: "accept", at: NOW, by: "mi" }), /只有 waiting/);
+  assert.throws(() => answerCard({ ...card, state: "open" }, { option: "accept", at: NOW, by: "mi" }), /只有 waiting/);
 });
 
 // ── 每小时唤醒预算：全局一份 ─────────────────────────────────
@@ -257,8 +257,8 @@ test("命中任一条护栏都必须落到 waiting + approval 卡，规则说 ne
   for (const tag of ASK_FIRST) {
     const decided = {
       ...dc,
-      state: "routed",
-      decided_by: "rule_table",
+      state: "open",
+      decided_by: "system",
       risk: { tags: [], forced_waiting: false },
       actions: [
         {
@@ -291,7 +291,7 @@ test("coordinator 自称「没风险」不算：判据只看动作干了什么",
   const dc = await fixture("decision");
   const lying = {
     ...dc,
-    state: "routed",
+    state: "open",
     risk: { tags: [], forced_waiting: false }, // 自填为空
     actions: [{ kind: "emit_command", risk_tags: ["delete_data"], egress: { target: "gitlab", op: "comment", payload_ref: "/tmp/p.md" } }],
   };
@@ -345,7 +345,7 @@ test("无护栏命中时 applyGuard 不改判，但会重写 risk 并可用权�
   const withFakeHops = { ...dc, occurrence: { ...dc.occurrence, hops: 0 } };
   const result = applyGuard(withFakeHops, rs, { authoritative: { hops: 5 } });
   assert.equal(result.forced_waiting, false);
-  assert.equal(result.decision.state, "routed");
+  assert.equal(result.decision.state, "open");
   assert.equal(result.decision.occurrence.hops, 5, "coordinator 自填的 hops 必须被权威值覆盖");
   assert.equal(result.decision.card, null);
 });
@@ -372,7 +372,7 @@ test("ack 与 settled 是两个字段：ack 不改状态、不结账", async () 
 
   const settled = settle(acked, { at: NOW, by: "human", outcome: "merged" });
   assert.equal(isSettled(settled), true);
-  assert.equal(settled.state, "done");
+  assert.equal(settled.state, "settled");
   assert.equal(settled.settled.outcome, "merged");
   assert.deepEqual(assertAckSettledDistinct(settled), { acked: true, settled: true });
 });
@@ -435,11 +435,10 @@ test("长任务没进展 ≠ 失败：状态没前进且未超阈值时判 idle_
 
 // ── 照抄 autoloop 会坏的第 2 / 3 处的调用侧约束 ──────────────
 
-test("coordinator 的 cwd 可以是非 git 状态目录，且快照上限是常量 4KB", async () => {
-  const rs = await fixture("ruleset");
-  assert.equal(rs.rules[0].to.cwd.kind, "state");
+test("快照上限是常量 4KB；Case 允许非 git 的 state 目录", async () => {
   assert.equal(SNAPSHOT_BYTES_MAX, 4096);
-  assert.deepEqual(validate(rs.rules[0], "urn:collie:rule:v1").errors, []);
+  const ca = await fixture("case");
+  assert.equal(ca.space.resolution, "single");
 });
 
 test("回执是 ready 三件套，不是最后一条消息", async () => {

@@ -5,7 +5,13 @@
   "description": "路由表的落盘形态（mods/collie-rules 编辑的那份文件）。它同时承载三样不可下放的东西：护栏七条、全局预算、跳数/调序上限——这三样是 Everywhere only，不允许 per-space 覆盖（DESIGN §5.3）。",
   "type": "object",
   "additionalProperties": false,
-  "required": ["version", "ask_first", "budget", "max_hops", "priority_changes_per_24h", "rules"],
+  "required": [
+    "version",
+    "ask_first",
+    "budget",
+    "max_hops",
+    "priority_changes_per_24h"
+  ],
   "properties": {
     "version": {
       "type": "integer",
@@ -14,7 +20,17 @@
     },
     "ask_first": {
       "type": "array",
-      "items": { "enum": ["delete_data", "stop_service", "spend_money", "outbound_message", "product_direction", "rotate_secret", "change_permission"] },
+      "items": {
+        "enum": [
+          "delete_data",
+          "stop_service",
+          "spend_money",
+          "outbound_message",
+          "product_direction",
+          "rotate_secret",
+          "change_permission"
+        ]
+      },
       "minItems": 7,
       "maxItems": 7,
       "uniqueItems": true,
@@ -23,7 +39,11 @@
     "budget": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["per_hour", "window_minutes", "scope"],
+      "required": [
+        "per_hour",
+        "window_minutes",
+        "scope"
+      ],
       "description": "唤醒预算。DESIGN §3.2：必须是全局的——按 space 算，10 个 space 就是 60 次/小时。",
       "properties": {
         "per_hour": {
@@ -50,11 +70,6 @@
     "priority_changes_per_24h": {
       "const": 2,
       "description": "同一 object 24h 内 priority 变更上限，冻结为 2；第 3 次必须出卡（DESIGN §9）。"
-    },
-    "rules": {
-      "type": "array",
-      "items": { "$ref": "urn:collie:rule:v1" },
-      "description": "规则条目。fan-out：一条事件可命中多条，逐条入队。"
     }
   }
 }

@@ -1,5 +1,5 @@
 // protocol/invariants.mjs
-// DESIGN.md §7「不变量」的可执行形态。这里没有散文，只有函数——
+// ARCHITECTURE.md §9「不变量」的可执行形态。这里没有散文，只有函数——
 // 每个函数都是纯函数：输入对象、输出判定，不写库、不联网、不看时钟（now 由调用方传入）。
 //
 // 对应关系（README.md 里也列了同一张表）：
@@ -106,7 +106,7 @@ export function answerCard(decision, answer) {
 
   const hopsBefore = decision.occurrence.hops;
   const nextState =
-    answer.option === "drop" ? "closed" : answer.option === "later" ? "waiting" : "routed";
+    answer.option === "drop" ? "settled" : answer.option === "later" ? "waiting" : "open";
 
   const cardState = answer.option === "drop" ? "closed" : answer.option === "later" ? "open" : "decided";
 
@@ -395,10 +395,9 @@ export function settle(decision, { at, by, outcome }) {
     ["accepted", "merged", "commented", "superseded", "dropped", "expired", "failed"].includes(outcome),
     `非法 settle.outcome: ${String(outcome)}`,
   );
-  const closes = ["superseded", "dropped", "expired"].includes(outcome);
   return {
     ...decision,
-    state: closes ? "closed" : "done",
+    state: "settled",
     settled: { at, by, outcome },
   };
 }

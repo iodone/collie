@@ -274,23 +274,60 @@
                     },
                     {
                       "id": "collie",
-                      "type": "block",
-                      "content": {
-                        "mod": "collie",
-                        "props": {
-                          "view": "queue"
+                      "type": "stack",
+                      "children": [
+                        {
+                          "id": "collie-list",
+                          "type": "block",
+                          "content": {
+                            "mod": "collie",
+                            "props": {
+                              "view": "queue"
+                            }
+                          }
+                        },
+                        {
+                          "id": "collie-ticket",
+                          "type": "column",
+                          "children": [
+                            {
+                              "id": "collie-ticket-head",
+                              "type": "block",
+                              "content": {
+                                "mod": "collie",
+                                "props": {
+                                  "view": "head"
+                                }
+                              },
+                              "size": {
+                                "px": 127
+                              }
+                            },
+                            {
+                              "id": "collie-ticket-body",
+                              "type": "stack",
+                              "children": [
+                                {
+                                  "id": "collie-ticket-artifacts",
+                                  "type": "block",
+                                  "content": {
+                                    "mod": "task-artifacts"
+                                  }
+                                }
+                              ],
+                              "active": "collie-ticket-artifacts"
+                            }
+                          ],
+                          "background": "background",
+                          "border": {
+                            "width": 1,
+                            "color": "border"
+                          },
+                          "radius": 10,
+                          "resizable": false
                         }
-                      }
-                    },
-                    {
-                      "id": "collie-detail",
-                      "type": "block",
-                      "content": {
-                        "mod": "collie",
-                        "props": {
-                          "view": "detail"
-                        }
-                      }
+                      ],
+                      "active": "collie-list"
                     },
                     {
                       "id": "working",

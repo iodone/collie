@@ -25,7 +25,7 @@ export function cliRunner(command: string): DeliveryRunner {
 export function authorizedEmit(decision: Json, target: string): Json {
   const card = decision?.card;
   const answer = card?.answer;
-  const accepted = decision?.state === "routed"
+  const accepted = decision?.state === "open"
     && decision?.human_boundary?.form === "card"
     && decision?.human_boundary?.chat_injection === false
     && card?.state === "decided"

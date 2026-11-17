@@ -31,7 +31,7 @@ function assertInvalid(data, target, keyword, note) {
   return result;
 }
 
-test("七个 schema 都存在、都有 $id、都能被装载", () => {
+test("六个 schema 都存在、都有 $id、都能被装载", () => {
   const ids = docs.map((d) => d.schema.$id).sort();
   assert.deepEqual(ids, [
     "urn:collie:card:v1",
@@ -39,7 +39,6 @@ test("七个 schema 都存在、都有 $id、都能被装载", () => {
     "urn:collie:decision:v1",
     "urn:collie:event:v1",
     "urn:collie:receipt:v1",
-    "urn:collie:rule:v1",
     "urn:collie:ruleset:v1",
   ]);
 });
@@ -122,19 +121,6 @@ test("Ruleset：预算作用域与跳数上限冻结为常量", async () => {
   assertInvalid({ ...rs, max_hops: 12 }, "urn:collie:ruleset:v1", "const", "放宽跳数");
 });
 
-test("Rule：cwd 允许非 git 的状态目录（照抄 autoloop 会坏的第 2 处）", async () => {
-  const rs = await fixture("ruleset");
-  const rule = rs.rules[0];
-  assert.equal(rule.to.cwd.kind, "state");
-  assert.deepEqual(validate(rule, "urn:collie:rule:v1").errors, []);
-  assertInvalid(
-    { ...rule, to: { ...rule.to, cwd: { path: ".", kind: "git" } } },
-    "urn:collie:rule:v1",
-    "pattern",
-    "相对路径不允许",
-  );
-});
-
 test("Case：fixture 合法；job_turn 不得出现在 chat 里", async () => {
   const ca = await fixture("case");
   assert.deepEqual(validate(ca, "urn:collie:case:v1").errors, []);
@@ -165,18 +151,17 @@ test("Decision：fixture 合法", async () => {
 
 test("Decision：终态必须有 settled（ack 结不了账）", async () => {
   const dc = await fixture("decision");
-  const doneNoSettle = { ...dc, state: "done", ack: { at: "2026-11-13T10:30:00Z", by: "mi" } };
-  // settled 为 null 时被 then 分支的 type:object 挡住——总之 done 不能没有 settled。
-  assertInvalid(doneNoSettle, "urn:collie:decision:v1", "type", "done 但没有 settled");
+  const settledNoRecord = { ...dc, state: "settled", ack: { at: "2026-11-13T10:30:00Z", by: "mi" } };
+  assertInvalid(settledNoRecord, "urn:collie:decision:v1", "type", "settled 但没有 settled 记录");
 });
 
 test("Decision：settled 存在时 state 必须是终态", async () => {
   const dc = await fixture("decision");
-  const settledButRouted = {
+  const settledButOpen = {
     ...dc,
     settled: { at: "2026-11-13T10:30:00Z", by: "human", outcome: "accepted" },
   };
-  assertInvalid(settledButRouted, "urn:collie:decision:v1", "enum", "settled 与 state 不一致");
+  assertInvalid(settledButOpen, "urn:collie:decision:v1", "const", "settled 与 state 不一致");
 });
 
 test("Decision：不许把机器事件注入对话", async () => {
@@ -225,11 +210,11 @@ test("Decision：waiting 必须带 card；emit_command 必须带 egress", async 
   );
 });
 
-test("Card：就是 Decision{state:waiting}——routed 的同一对象不是卡", async () => {
+test("Card：就是 Decision{state:waiting}——open 的同一对象不是卡", async () => {
   const card = await fixture("card");
   assert.deepEqual(validate(card, "urn:collie:card:v1").errors, []);
-  const notWaiting = { ...card, state: "routed" };
-  assertInvalid(notWaiting, "urn:collie:card:v1", "const", "routed 不是卡");
+  const notWaiting = { ...card, state: "open" };
+  assertInvalid(notWaiting, "urn:collie:card:v1", "const", "open 不是卡");
   // 反向：卡片形状的东西用 Decision schema 校验也必须通过（同一个对象，不是两套字段）
   assert.deepEqual(validate(card, "urn:collie:decision:v1").errors, []);
 });

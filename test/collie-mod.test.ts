@@ -5,15 +5,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   diffTarget,
-  inboxDecisions,
   parseQueue,
   queuePath,
   receiptPath,
   settledDecisions,
+  STAGE_WORD,
+  ticketGroup,
+  ticketNeed,
+  ticketStage,
+  todoReason,
   workingDecisions,
+  workKind,
   taskTarget,
   waitingQueue,
-  workingBadge,
   workingCount,
 } from "../lib/inbox-queue.js";
 
@@ -34,56 +38,80 @@ describe("mods/collie pure queue projection", () => {
     const decisions = [
       waiting("dc_held", { priority: { value: 0 }, hold: { until: null } }),
       waiting("dc_second", { priority: { value: 2 }, decided_at: "2026-11-13T10:02:00Z" }),
-      { ...waiting("dc_routed"), state: "routed", receipt_ref: "rc_ready" },
+      { ...waiting("dc_open"), state: "open", receipt_ref: "rc_ready" },
       waiting("dc_default", { decided_at: "2026-11-13T09:00:00Z" }),
       waiting("dc_first", { priority: { value: 0 }, decided_at: "2026-11-13T10:01:00Z" }),
       waiting("dc_earlier", { priority: { value: 2 }, decided_at: "2026-11-13T10:01:00Z" }),
-      { ...waiting("dc_failed"), state: "failed" },
-      { ...waiting("dc_acting"), state: "acting" },
-      { ...waiting("dc_done"), state: "done" },
+      waiting("dc_card", { card: { kind: "alert" } }),
+      { ...waiting("dc_open"), state: "open" },
+      { ...waiting("dc_done"), state: "settled", settled: { at: "2026-11-13T11:00:00Z", outcome: "merged" } },
     ];
     const before = structuredClone(decisions);
 
     expect(waitingQueue(decisions).map((d) => d.id)).toEqual([
-      "dc_first", "dc_earlier", "dc_second", "dc_default", "dc_held",
+      "dc_first", "dc_earlier", "dc_second", "dc_default", "dc_card", "dc_held",
     ]);
     expect(decisions).toEqual(before);
     expect(workingCount(decisions)).toBe(2);
   });
 
-  test("Working / Settled 覆盖完整生命周期，但不混入 waiting", () => {
+  test("Settled 只认 Decision.settled；failed 有卡，不算 settled", () => {
     const rows = [
       waiting("dc_wait"),
-      { ...waiting("dc_work"), state: "acting", run: { task_ref: "HAT-42" } },
-      { ...waiting("dc_done"), state: "done", settled: { at: "2026-11-13T11:00:00Z" } },
-      { ...waiting("dc_closed"), state: "closed", settled: { at: "2026-11-13T12:00:00Z" } },
+      { ...waiting("dc_work"), state: "open", run: { task_ref: "HAT-42" } },
+      { ...waiting("dc_done"), state: "settled", settled: { at: "2026-11-13T11:00:00Z", outcome: "merged" } },
+      { ...waiting("dc_closed"), state: "settled", settled: { at: "2026-11-13T12:00:00Z", outcome: "dropped" } },
+      { ...waiting("dc_card"), state: "waiting", card: { kind: "alert" }, settled: null },
     ];
     expect(workingDecisions(rows).map((d) => d.id)).toEqual(["dc_work"]);
     expect(settledDecisions(rows).map((d) => d.id)).toEqual(["dc_closed", "dc_done"]);
-    expect(waitingQueue(rows).map((d) => d.id)).toEqual(["dc_wait"]);
+    expect(waitingQueue(rows).map((d) => d.id)).toEqual(["dc_card", "dc_wait"]);
   });
 
-  test("固定过滤器覆盖 All / Needs you / Working / Review / Settled，Working 角标来自 Decision", () => {
-    const rows = [
-      waiting("dc_needs"),
-      waiting("dc_review", { receipt_ref: "rc_12345678", card: { kind: "accept" } }),
-      { ...waiting("dc_thinking"), state: "thinking" },
-      { ...waiting("dc_routed"), state: "routed" },
-      { ...waiting("dc_progress"), state: "acting" },
-      { ...waiting("dc_done"), state: "done" },
-      { ...waiting("dc_internal"), state: "new" },
-    ];
-    expect(inboxDecisions(rows, "all").map((d) => d.id).sort()).toEqual([
-      "dc_done", "dc_needs", "dc_progress", "dc_review", "dc_routed", "dc_thinking",
-    ]);
-    expect(inboxDecisions(rows, "waiting").map((d) => d.id)).toEqual(["dc_needs", "dc_review"]);
-    expect(inboxDecisions(rows, "working").map((d) => d.id)).toEqual(["dc_progress", "dc_routed", "dc_thinking"]);
-    expect(inboxDecisions(rows, "review").map((d) => d.id)).toEqual(["dc_review"]);
-    expect(inboxDecisions(rows, "settled").map((d) => d.id)).toEqual(["dc_done"]);
-    expect(workingBadge(rows[2])).toBe("Thinking");
-    expect(workingBadge(rows[3])).toBe("In progress");
-    expect(workingBadge(rows[4])).toBe("In progress");
-    expect(workingBadge(rows[0])).toBeNull();
+  test("四个 Work 状态：Needs you / Todo / Working / Settled", () => {
+    const base = waiting("dc_stage");
+    expect(ticketStage(base, null)).toBe("needs");
+    expect(ticketStage({ ...base, state: "open" }, null)).toBe("todo");
+    expect(ticketStage({ ...base, state: "open" }, { state: "todo" })).toBe("todo");
+    expect(ticketStage({ ...base, state: "open" }, { state: "queued" })).toBe("todo");
+    expect(ticketStage({ ...base, state: "open" }, { state: "scheduled" })).toBe("todo");
+    expect(ticketStage({ ...base, state: "open" }, { state: "running" })).toBe("working");
+    expect(ticketStage({ ...base, state: "open" }, { state: "running" }, { worker: true })).toBe("working");
+    expect(ticketStage({ ...base, state: "open" }, { state: "running" }, { worker: true, reviewer: true })).toBe("working");
+    expect(ticketStage({ ...base, state: "open" }, { state: "running" }, { worker: true, blocked: true })).toBe("needs");
+    expect(ticketStage({ ...base, state: "open", run: { task_ref: "HAT-42" } }, null)).toBe("working");
+    expect(ticketStage({ ...base, state: "settled", settled: { at: "2026-11-13T11:00:00Z" } }, null)).toBe("settled");
+    expect(Object.keys(STAGE_WORD)).toEqual(["needs", "todo", "working", "settled"]);
+    expect(ticketNeed({ ...base, receipt_ref: "rc_stage" })).toBe("ready");
+    expect(workKind({ ...base, state: "open", run: { kind: "review" } }, { state: "running" }, { worker: true })).toBe("review");
+    expect(workKind({ ...base, state: "open", run: { kind: "build" } }, { state: "merging" }, { worker: true })).toBe("merge");
+    expect(workKind({ ...base, state: "open" }, { state: "running" }, { worker: true })).toBe("build");
+  });
+
+  test("Todo 的原因来自 herdr-task：依赖 / 容量 / 定时 / 未开始", () => {
+    expect(todoReason({ state: "queued", after: ["PS-3"] }, { why: "x" })).toBe("after PS-3");
+    expect(todoReason({ state: "queued", waiting_ext: ["vm:WEB-2"] }, { why: "x" })).toBe("after vm:WEB-2");
+    expect(todoReason({ state: "queued" }, { why: "x" })).toBe("waiting for a slot");
+    expect(todoReason({ state: "scheduled" }, { why: "x" })).toBe("scheduled");
+    expect(todoReason({ state: "todo" }, { why: "x" })).toBe("not started");
+    expect(todoReason(null, { why: "why x" })).toBe("why x");
+  });
+
+  test("分组：Needs you 置顶、space 内 Todo → Working、Settled 收在最后", () => {
+    const item = (id: string, stage: string, space: string, at: string) => ({
+      decision: { id, stage, space, decided_at: at }, stage,
+    });
+    const groups = ticketGroup([
+      item("w_old", "working", "beta", "2026-11-13T10:00:00Z"),
+      item("w_new", "working", "beta", "2026-11-13T12:00:00Z"),
+      item("t", "todo", "beta", "2026-11-13T09:00:00Z"),
+      item("n", "needs", "alpha", "2026-11-13T11:00:00Z"),
+      item("s", "settled", "alpha", "2026-11-13T13:00:00Z"),
+    ], ["alpha", "beta"]);
+    expect(groups.top.map((x) => x.decision.id)).toEqual(["n"]);
+    expect(groups.spaces.map((x) => x.key)).toEqual(["beta"]);
+    expect(groups.spaces[0].rows.map((x) => x.decision.id)).toEqual(["t", "w_new", "w_old"]);
+    expect(groups.settled.map((x) => x.decision.id)).toEqual(["s"]);
   });
 
   test("同优先级同时间用 id 稳定排序", () => {
@@ -106,7 +134,7 @@ describe("mods/collie pure queue projection", () => {
   test("队列不凭 task/receipt 自推导：非 waiting 有 ready receipt 也不入队，waiting 无 task 仍保留", () => {
     const readyElsewhere = {
       ...waiting("dc_ready_elsewhere"),
-      state: "acting",
+      state: "open",
       receipt_ref: "rc_ready",
       actions: [{ kind: "spawn_task" }],
     };
@@ -128,51 +156,105 @@ test("layout 保留 shepherdr 原生页面，Inbox 只是新增页面", () => {
   };
   visit(layout);
   expect(panel.children.map((child: any) => child.id)).toEqual([
-    "files", "changes", "tasks", "artifacts", "collie", "collie-detail", "working",
+    "files", "changes", "tasks", "artifacts", "collie", "working",
   ]);
   expect(new Set(ids).size).toBe(ids.length);
 });
 
-test("Inbox 是顶部 panel 页签，详情留在 Inbox 内", () => {
+test("Inbox 是顶部 panel 页签，ticket 详情留在 Inbox 内", () => {
   const top = readFileSync(new URL("../mods/collie-tabs/main.js", import.meta.url), "utf8");
   const source = readFileSync(new URL("../mods/collie/main.js", import.meta.url), "utf8");
   expect(top).toContain('panelButton("collie", "Inbox"');
-  expect(source).toContain('run("layout.select", { stack: "panel-body", child: "collie-detail" })');
-  expect(source).not.toContain('child: "tasks-thread"');
+  expect(source).toContain('run("layout.select", { stack: STACK, child: TICKET })');
+  expect(source).toContain('run("layout.select", { stack: BODY, child });');
+  expect(source).not.toContain('"tasks-thread"');
+  expect(source).not.toContain('collie-detail');
+  expect(source).not.toContain('decisionId');
   expect(source).not.toContain("standalone");
 });
 
 test("mod 只导入包内共享库拷贝，不越过 herdr 模块边界", () => {
   const source = readFileSync(new URL("../mods/collie/main.js", import.meta.url), "utf8");
   expect(source).toContain('from "./lib/inbox-queue.js"');
+  expect(source).toContain('from "./lib/artview.js"');
+  expect(source).toContain('from "./core/task-artifacts.js"');
   expect(source).not.toContain('from "../../lib/');
-  expect(source).toContain('run("layout.select", { stack: "panel-body", child: "collie-detail" })');
-  expect(source).not.toContain('child: "tasks-thread"');
+  expect(source).not.toContain('"tasks-thread"');
+  expect(source).not.toContain('collie-detail');
+  expect(source).not.toContain('decisionId');
   const shared = readFileSync(new URL("../lib/inbox-queue.js", import.meta.url), "utf8");
   const copied = readFileSync(new URL("../mods/collie/lib/inbox-queue.js", import.meta.url), "utf8");
   expect(copied).toBe(shared);
 });
 
-test("Inbox 固定五个过滤器，引用 chip 与 Receipt/Task 详情不经过原生 Accept", () => {
+test("ticket 详情复用 shepherdr 的任务视图，只留 Terminal 与 Artifacts", () => {
+  const layout = JSON.parse(readFileSync(new URL("../layouts/collie.json", import.meta.url), "utf8"));
+  const node = (value: any, id: string): any => value?.id === id ? value
+    : (value?.children ?? []).map((child: any) => node(child, id)).find(Boolean) ?? null;
+  const ticket = node(layout, "collie-ticket");
+  const body = node(layout, "collie-ticket-body");
+  expect(ticket.type).toEqual("column");
+  expect(ticket.children.map((child: any) => child.id)).toEqual(["collie-ticket-head", "collie-ticket-body"]);
+  expect(ticket.children[0]).toMatchObject({
+    type: "block", size: { px: 127 }, content: { mod: "collie", props: { view: "head" } },
+  });
+  expect(body.type).toEqual("stack");
+  expect(body.children.map((child: any) => child.id)).toEqual(["collie-ticket-artifacts"]);
+  expect(body.children[0].content).toEqual({ mod: "task-artifacts" });
+  expect(body.active).toEqual("collie-ticket-artifacts");
+  const stack = node(layout, "collie");
+  expect(stack.type).toEqual("stack");
+  expect(stack.children.map((child: any) => child.id)).toEqual(["collie-list", "collie-ticket"]);
+  expect(stack.active).toEqual("collie-list");
+
   const source = readFileSync(new URL("../mods/collie/main.js", import.meta.url), "utf8");
-  expect(source).toContain('[["all", "All"], ["waiting", "Needs you"], ["working", "Working"], ["review", "Review"], ["settled", "Settled"]]');
+  expect(source).toContain('["terminal", "Terminal", { disabled: !live }]');
+  expect(source).toContain('["artifacts", this.artsLabel(), {}]');
+  expect(source).toContain('segmented("collie-thread-mode"');
+  expect(source).not.toContain('"Chat"');
+  expect(source).not.toContain('"Files"');
+  expect(source).not.toContain('"Changes"');
+  expect(source).not.toContain('"Pull request"');
+  expect(source).not.toContain('"Browser"');
+  expect(source).toContain('id: TERM, type: "block", content: { terminal: address }');
+  expect(source).toContain('setShared("tasks.thread.artifacts"');
+  expect(source).toContain('setShared("tasks.thread", threadOf(target, decision))');
+  expect(source.match(/taskDot\(stage === "needs" \? need : stage, \{ pct, halo: stage === "needs" && need === "needs" \}\)/g)).toHaveLength(2);
+  expect(source).toContain("STAGE_WORD[stage] ?? stage");
+  const dot = readFileSync(new URL("../lib/ticket-dot.js", import.meta.url), "utf8");
+  expect(dot).toContain("mods/tasks/pie/");
+  expect(dot).toContain("mods/tasks/tick.svg");
+  const copied = readFileSync(new URL("../mods/collie/lib/ticket-dot.js", import.meta.url), "utf8");
+  expect(copied).toBe(dot);
+  expect(source).toContain("label: STAGE_WORD.needs");
+  expect(source).toContain("this.spaceHead(t, group.key, group.rows.length)");
+  expect(source).toContain("this.settledLine(t)");
+  expect(source).toContain("${STAGE_WORD.settled} ${this.groups.settled.length}");
+  expect(source).toContain("ticketGroup(this.staged");
+});
+
+test("Inbox 的过滤器对应四个 Work 状态，回复回到 coordinator chat", () => {
+  const source = readFileSync(new URL("../mods/collie/main.js", import.meta.url), "utf8");
+  expect(source).toContain('[["all", "All"], ["needs", "Needs you"], ["todo", "Todo"], ["working", "Working"], ["settled", "Settled"]]');
   expect(source).not.toContain('["thinking", "Thinking"]');
   expect(source).not.toContain('["progress", "In progress"]');
-  expect(source).toContain('action(`collie-quote-${decision.id}`, "引用"');
-  expect(source).toContain('args.push("--ticket", ticket.id)');
-  expect(source).toContain('receiptSection(t, "Details", receipt.details)');
-  expect(source).toContain('div().font_semibold().child("Checks")');
-  expect(source).toContain('div().text_size(11).font_semibold().text_color(t.muted).child("Proof")');
+  expect(source).toContain('action(`collie-reply-${decision.id}`, "回复"');
+  expect(source).toContain("async function replyToCoordinator");
+  expect(source).toContain("replyContext(decision, target, receipt)");
+  expect(source).toContain('exec("hc", ["send", chat.terminal');
+  expect(source).toContain('run("pane.focus", { pane: chat.pane })');
+  expect(source).not.toContain("collie-quote");
+  expect(source).not.toContain("openDecision");
+  expect(source).not.toContain("answerDecision");
+  expect(source).not.toContain("primaryAction");
+  expect(source).not.toContain("Input.new");
+  expect(source).not.toContain("this.tickets");
+  expect(source).not.toContain("collie-request");
+  expect(source).toContain('openViewer({ id: receipt.proof.id');
   expect(source).not.toContain('div().font_semibold().child("Inbox")');
   expect(source).not.toContain('child("New / Build")');
-  expect(source).toContain('action(`inbox-${id}`, label, this.filter !== id');
-  expect(source).toContain('this.tickets = [{');
-  expect(source).toContain('openTerminal(target)');
-  expect(source).toContain('openViewer({ id: receipt.proof.id');
-  expect(source).toContain('action("resume-ticket", "Resume"');
-  expect(source).toContain("receipt.proof?.text");
-  expect(source).toContain("Task state");
-  expect(source).toContain("run.task_ref");
+  expect(source).toContain('filterAction(`inbox-${id}`, label, this.filter === id');
+  expect(source).toContain("receipt?.proof?.id");
   expect(source).not.toContain('exec(CLI(), ["accept"');
 });
 
@@ -221,6 +303,9 @@ describe("mods/collie navigation targets", () => {
       title: "Implement inbox",
       state: "running",
       live: [{ address: "t88" }],
+      agents: [{ address: "t88", log: "/logs/t88.jsonl", at: 1 }],
+      proof: "art-proof-0001",
+      base_set: true,
     }],
   }];
   const detail = {
@@ -239,6 +324,9 @@ describe("mods/collie navigation targets", () => {
       folder: "/repo/collie",
       worktree: "/worktrees/collie/inbox",
       terminal: "t88",
+      base_set: true,
+      agents: [{ address: "t88", log: "/logs/t88.jsonl", at: 1 }],
+      proof: "art-proof-0001",
       key: { machine: null, folder: "/repo/collie", slug: "hat", id: 42 },
     });
     expect(diffTarget(target)).toEqual({

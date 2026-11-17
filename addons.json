@@ -13,7 +13,8 @@
   ],
   "needs": {
     "tasks": ">=3.1.0 <4",
-    "chat": ">=3.1.0 <4"
+    "chat": ">=3.1.0 <4",
+    "artifacts": ">=3.1.0 <4"
   },
   "helpers": [
     "collie-sync"

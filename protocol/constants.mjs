@@ -1,6 +1,6 @@
 // protocol/constants.mjs
-// M0 冻结的数值常量。DESIGN.md 是语义真源，这里是它的可执行镜像：
-// 任何一处改动都必须同时在 docs/DESIGN.md 留下痕迹。
+// M0 冻结的数值常量。ARCHITECTURE.md 是语义真源，这里是它的可执行镜像：
+// 任何一处改动都必须同时在 docs/ARCHITECTURE.md 留下痕迹。
 
 /** DESIGN §7.3 / §9：委派层数上限。> 8 只记录、不再派发。 */
 export const MAX_HOPS = 8;
@@ -31,19 +31,10 @@ export const ASK_FIRST = Object.freeze([
 ]);
 
 /** DESIGN §3.3：Decision 状态机。Card = state=waiting 的 Decision。 */
-export const DECISION_STATES = Object.freeze([
-  "new",
-  "thinking",
-  "waiting",
-  "routed",
-  "acting",
-  "done",
-  "failed",
-  "closed",
-]);
+export const DECISION_STATES = Object.freeze(["open", "waiting", "settled"]);
 
-/** 终态：进入后不再派发。done / closed 都必须有 settled。 */
-export const TERMINAL_STATES = Object.freeze(["done", "closed"]);
+/** 终态：进入后不再派发。settled 必须有 settled 对象。 */
+export const TERMINAL_STATES = Object.freeze(["settled"]);
 
 /** DESIGN §4.1：卡片三态。decided 只说明人表过态，不等于执行过。 */
 export const CARD_STATES = Object.freeze(["open", "decided", "closed"]);
@@ -51,7 +42,7 @@ export const CARD_STATES = Object.freeze(["open", "decided", "closed"]);
 /** DESIGN §4.1：人对卡片的四种回答。 */
 export const CARD_OPTIONS = Object.freeze(["accept", "rework", "drop", "later"]);
 
-/** 卡片用途。approval 只能由 guard 产生；alert 承载 failed。 */
+/** 卡片用途。approval 只能由 guard 产生；alert 承载失败。 */
 export const CARD_KINDS = Object.freeze(["approval", "accept", "question", "alert"]);
 
 /** DESIGN §4.2：任务状态归 herdr-task，本设计一个字都不改。 */
@@ -83,6 +74,6 @@ export const ACTION_KINDS = Object.freeze([
   "ask",
   "hold",
   "priority",
-  "propose_rule",
+  "propose_policy",
   "noop",
 ]);

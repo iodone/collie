@@ -14,15 +14,15 @@
 | manifest | `.config/herdr-app/installed.collie.json` |
 | 替换备份 | `.config/herdr-app/.collie-backup/<UTC 时间>/` |
 
-安装器不联网，不拉取依赖，也不修改 shepherdr 源码。runtime 保持仓库相对目录，因此 `service/main.ts` 对 kernel、plugins 和 protocol 的相对导入在安装后不变。初始路由表从 `protocol/fixtures/ruleset.json` 复制到状态目录；后续本地修改与代码文件一样受 `.new` 保护。`lib/addons/collie.json` 是本 add-on 的元数据，避免覆盖 shepherdr 的 add-on 清单。独立 manifest 文件名也避免覆盖 herdr-app 已有的 `installed.json`。
+安装器不联网，不拉取依赖，也不修改 shepherdr 源码。runtime 保持仓库相对目录，因此 `service/main.ts` 对 kernel、plugins 和 protocol 的相对导入在安装后不变。初始护栏/预算配置从 `protocol/fixtures/ruleset.json` 复制到状态目录；后续本地修改与代码文件一样受 `.new` 保护。`lib/addons/collie.json` 是本 add-on 的元数据，避免覆盖 shepherdr 的 add-on 清单。独立 manifest 文件名也避免覆盖 herdr-app 已有的 `installed.json`。
 
 ## 前置依赖
 
 - Python 3.10+；
 - herdr / shepherdr，且 `herdr-task` 在 `PATH`；
-- shepherdr 3.1.x 提供的 `herdr-task` 执行层；
+- shepherdr 3.1.x 提供的 `herdr-task` 执行层，以及 `tasks` / `chat` / `artifacts` 三个 add-on；
 - `bun`、`git` 在 `PATH`；
-- Inbox 使用独立 layout，不依赖 shepherdr 的 Assistant、Tasks、Files、Changes、Artifacts 页面。
+- Inbox 使用独立 layout；Ticket 详情的 Terminal 用 herdr 的 terminal block，Artifacts 复用 shepherdr 的 `task-artifacts`。
 
 版本优先从 `.config/shepherdr/installed.json` 或 herdr-app 的 `data/shepherdr/installed.json` 读取；没有这些文件时依次尝试 add-on 元数据和 `herdr-task --version`。缺依赖时安装会在写入前停止。
 
@@ -90,7 +90,32 @@ bun "$ROOT/.local/share/collie/service/main.ts"
 
 space 配置覆盖 Everywhere；未配置有效 `cli` 时不会静默选择另一款 agent。CLI 只返回 Decision JSON，spawn、护栏和 delivery 仍由 service 执行。
 
-Inbox 顶部的 New / Build 输入通过 `/request` 进入 chat_turn，不占机器 job turn 预算。`Decision.run.coordinator_ref` 保存会话引用，供 Card Review 恢复。没有配置 coordinator 时，New / Build 会明确报错，不会降级到 shepherdr Assistant。
+人的 New / Build、steering、回答 Card 都直接在 coordinator chat 里说；Inbox 只显示 `回复` 按钮，点击后把该 Work 的上下文发给 coordinator chat 并聚焦，由 LLM 先解释和建议。`collie-request` 仍保留为 API/channel 入口，不占机器 job turn 预算。`Decision.run.coordinator_ref` 保存会话引用，供 Card answer 恢复。没有配置 coordinator 时，New / Build 会明确报错，不会降级到 shepherdr Assistant。
+
+## 状态与队列
+
+- Decision 是唯一的持久状态机（`open / waiting / settled`）；Work 的 Needs you / Todo / Working / Settled 是投影，不写回 Ledger。
+- 队列只有 `waiting` 的 Decision；Todo / Working 不是队列。
+- `~/.local/state/collie/queue.json` 是 Ledger 投影，含全部 Decision，**不是**队列本身。
+- `Settled` 只认 `Decision.settled { at, by, outcome }`；`failed` 带卡，属于 Needs you；`ack` 不等于 settled。
+- review 工作必须由 coordinator 写 `Decision.run.kind="review"`；没有这个字段时，它按 build 显示。
+- 用户 policy 放在 `~/.local/state/collie/policy/<space>.md`（没有时读 `policy.md`），coordinator 只读。
+
+## Card answer
+
+验收与选择走 Card answer（不经过 shepherdr 原生 Accept）：
+
+```bash
+~/.config/herdr-app/bin/collie-answer --decision dc_xxx --option accept
+~/.config/herdr-app/bin/collie-answer --decision dc_xxx --option rework --note "..." --file path --line N
+~/.config/herdr-app/bin/collie-answer --decision dc_xxx --option drop
+~/.config/herdr-app/bin/collie-answer --decision dc_xxx --option later --snooze 2026-11-18T09:00:00Z
+```
+
+- `accept / rework` 需要该 space 有且只有一个可用的 coordinator；`drop / later` 不需要。
+- `accept` 把 Decision 推进到 `open`，恢复原 coordinator 会话；合并/评论由 coordinator 的 delivery 决定，完成后才 `settled`。
+- `drop` 直接 `settled{dropped}`；`later` 保持 `waiting`。
+- 打开/展开只是 `ack`，不会结案；只有 Card answer 的 outcome 才结案。
 
 ## Coordinator 常驻与恢复
 
@@ -171,9 +196,12 @@ bin/collie-sync --check
 
 | 症状 | 检查 |
 | :-- | :-- |
-| 安装前报缺依赖 | `PATH`、shepherdr 版本、`tasks` / `chat` mod 是否存在 |
+| 安装前报缺依赖 | `PATH`、shepherdr 版本、`tasks` / `chat` / `artifacts` / `task-artifacts` mod 是否存在 |
 | 报 unmanaged file differs | 确认文件归属；需要接管时显式加 `--adopt` |
 | doctor 报 modified | 文件已偏离 manifest；保留修改或人工恢复，不直接重跑覆盖 |
 | doctor 报 pending update | 处理对应 `.new`，不要删除原文件 |
 | update 报 source unavailable | 恢复 manifest 中的源码 checkout；不要另换来源静默更新 |
-| layout mod 缺失 | 安装对应 shepherdr mod，或先修复本包 layout 与 mod 的交付完整性 |
+| layout mod 缺失 | 安装对应 shepherdr mod（`tasks` / `chat` / `artifacts` / `task-artifacts`），或先修复本包 layout 与 mod 的交付完整性 |
+| review 工作被当成 build 显示 | coordinator 没写 `Decision.run.kind="review"`；补上后 Work 显示 `kind=review` |
+| Accept 后停在 Working | coordinator 未恢复或没有可用的 coordinator；检查 `collie-answer` 的 assistant 解析与 coordinator 会话 |
+| `Settled` 数量不对 | 检查 Decision 是否真的带 `settled`；`failed` 与 `ack` 都不算 |

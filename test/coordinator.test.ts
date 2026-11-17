@@ -13,10 +13,10 @@ const { validate } = await loadProtocol(new URL("../protocol", import.meta.url).
 const temporary: string[] = [];
 const scratch = () => { const path = mkdtempSync(join(tmpdir(), "collie-")); temporary.push(path); return path; };
 const clone = <T>(value: T): T => structuredClone(value);
-const decision = (why = "低风险事件，无需行动") => ({ state: "routed", why, actions: [{ kind: "noop", risk_tags: [] }] });
+const decision = (why = "低风险事件，无需行动") => ({ state: "open", why, actions: [{ kind: "noop", risk_tags: [] }] });
 const dispatchFor = (n: number) => {
   const source = { ...clone(event), id: `ev_test${String(n).padStart(12, "0")}`, key: `mr!93@${n}` };
-  const ingress = new Ingress(clone(ruleset));
+  const ingress = new Ingress();
   ingress.completeLane;
   return ingress.ingest(source).dispatches[0];
 };
@@ -44,7 +44,7 @@ describe("M3 Coordinator + Ledger", () => {
     expect(reopened.decisions[0].id).toBe(result.id);
     expect(reopened.events[0].id).toBe(dispatch.event.id);
     expect(JSON.parse(readFileSync(path, "utf8")).entries.map((entry: any) => entry.kind)).toEqual(["event", "case", "decision", "decision"]);
-    expect(ledger.history("decision").map((item) => item.state)).toEqual(["thinking", "routed"]);
+    expect(ledger.history("decision").map((item) => item.state)).toEqual(["open", "open"]);
   });
 
   test("全局 6 次预算用完后第 7 次不调用 coordinator，只落 waiting 卡", async () => {
@@ -71,7 +71,7 @@ describe("M3 Coordinator + Ledger", () => {
     const result = await coordinate(dispatchFor(1), {
       ledger, ruleset,
       decide: () => ({
-        state: "routed", why: "试图放大跳数并提升权限",
+        state: "open", why: "试图放大跳数并提升权限",
         occurrence: { object_key: "mr:mr!93", kind: "mr", round: 1, hops: 99 },
         actions: [{ kind: "spawn_task", risk_tags: [], spawn: {
           title: "test", brief_ref: "/tmp/brief.md", base: "main", review: true, merge: false, access: "full", tells: "never",
