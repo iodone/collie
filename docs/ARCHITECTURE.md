@@ -264,6 +264,52 @@ hc run --bg --json --keep --cwd <folder>
 3. agent 没有自己的 pane；`herdr.chat` 告诉所有 Herdr 客户端它被哪个 chat 显示。
 4. app 关闭/重启：Herdr 的 kept terminal 保留；`collie-chat` 通过 `herdr.chat.slot` / `herdr.chat.origin` 找回它，不新建 agent。
 
+### Job session：headless 与可见 helper
+
+当前 `job session` 不是 Herdr terminal：
+
+```text
+service
+  → runCoordinator()
+  → spawn <claude -p | codex exec> 子进程
+  → 读 stdout，解析 Decision JSON
+  → service 写 Ledger
+```
+
+因此它：
+
+- 没有 pane / tab；
+- 没有 `herdr.role` label；
+- 不可见，不会打断 Coordinator chat；
+- 但和 chat 使用同一份 `collie-coordinator.md`、settings、policy 和 Ledger。
+
+job session 不是 policy session；policy 对 chat 和 job 都是输入。
+
+如果要把 job 变成可见：
+
+```text
+hc run --bg --parent <coordinator-terminal>
+  --label herdr.role=helper
+  --label herdr.job=<job-id>
+  -- <coordinator role prompt>
+```
+
+它仍然只能是 **helper / advisory**：
+
+- 读 policy 和 snapshot；
+- 输出 proposed Decision JSON；
+- 由 service 校验并写 Ledger；
+- **不能**自己写 Ledger、不能标 `herdr.role=coordinator`、不能独立派 task。
+
+默认建议保持 headless；如果需要在 Collie 中观察 job，未来可在 `collie-settings` 增加：
+
+```text
+Coordinator
+  Job session: Headless (default) | Visible helper
+```
+
+当前设置没有这个开关；也没有 policy session 开关。
+
 ### worker / reviewer 的启动
 
 `collie-task launch()` 用 `hc run`，不让每个 task 占 tab：
