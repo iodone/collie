@@ -1,5 +1,5 @@
 ---
-name: worker
+name: collie-worker
 description: Delivers one Collie task in its worktree or folder, reports status with collie-task, and ends with a ready receipt.
 command: claude
 ---

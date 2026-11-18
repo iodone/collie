@@ -934,7 +934,7 @@ export default class Chat extends View {
     const named = /^([a-z][a-z0-9]*)-(\d+)(?:-|$)/.exec(t.name ?? "");
     const ref = this.workerTasks().get(t.address)?.ref ?? (t.labels?.["herdr.task"] && named ? `${named[1].toUpperCase()}-${named[2]}` : null);
     // An Assistant's role is in its first message (its template): it gets that again.
-    const template = assistant(t) && !t.address.includes("/") ? await readTextFile(`${home()}/.config/herdr-core/templates/assistant.md`).catch(() => null) : null;
+    const template = assistant(t) && !t.address.includes("/") ? await readTextFile(`${home()}/.config/herdr-core/templates/collie-coordinator.md`).catch(() => null) : null;
     const msg = lostMessage({ ref, template });
     const mine = t.address === this.addr;
     if (mine) { this.note = { id: `note-${Date.now()}`, text: WORDS.sessionGone }; cx.notify(); }

@@ -1,5 +1,5 @@
 ---
-name: reviewer
+name: collie-reviewer
 description: Reviews one Collie task read-only, reports findings with levels, and never edits, commits, or changes task state.
 command: claude
 ---

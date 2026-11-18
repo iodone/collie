@@ -16,8 +16,8 @@ AGENTS = {"claude": ["claude"], "codex": ["codex", "--no-daemon"]}
 # ---- the person's settings ------------------------------------------------------------------
 
 SETTINGS = os.environ.get("COLLIE_TASK_SETTINGS") or os.environ.get("HERDR_TASK_SETTINGS") or os.path.join(HOME, ".config", "collie", "settings.json")
-# The role instructions are herdr-core templates (`hc templates` lists them): assistant.md (the
-# coordinator's), worker.md and reviewer.md. Workers and reviewers used ~/.herdr/instructions.
+# The role instructions are herdr-core templates (`hc templates` lists them): collie-coordinator.md, collie-worker.md and
+# collie-reviewer.md. Workers and reviewers used ~/.herdr/instructions.
 TEMPLATES = os.environ.get("COLLIE_TASK_TEMPLATES") or os.environ.get("HERDR_TASK_TEMPLATES") or os.path.join(HOME, ".config", "herdr-core", "templates")
 OLD_INSTRUCTIONS = os.path.join(HOME, ".herdr", "instructions")
 ASSISTANT_TEMPLATES = ("assistant", "coordinator", "collie-coordinator")  # "coordinator": Assistants started before the rename

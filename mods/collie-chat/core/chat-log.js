@@ -238,7 +238,7 @@ function replyOf(t) {
 }
 
 // Where a message has code, fenced (```) or inline (`…`): [[start, end]]. Herdr's own tags never start inside code: a
-// role template's or brief's examples there (assistant.md's <herdr-news> lines) are words, not tags (#589). A real
+// role template's or brief's examples there (collie-coordinator.md's <herdr-news> lines) are words, not tags (#589). A real
 // tag may hold code (a failed check's log): only where it starts counts.
 function codeRanges(t) {
   return [...String(t).matchAll(/```[\s\S]*?(?:```|$)|`[^`\n]*`/g)].map((m) => [m.index, m.index + m[0].length]);

@@ -12,7 +12,7 @@ WORKER_MD_BEFORE_NEWS = """You work on one Herdr task. Stay within the task's sc
 - If something blocks you or the task is unclear, ask in your chat and wait.
 - Say how it's going: at the start and at each natural step, run the `collie-task status` command given at the end of your brief with what you're doing now (at most 40 characters), how far through the whole task you are and about how long is left. The person sees it in the Tasks panel.
 - Run the project's checks before you say you're done.
-- Review, when the Settings block says Review: on. Commit, then have fresh eyes that didn't write the change review it, read-only: a subagent, or a headless run of the Reviewer line's CLI with its model and effort (`codex exec --sandbox read-only "<prompt>" < /dev/null`, `claude -p --permission-mode plan "<prompt>" < /dev/null`: without `< /dev/null` they wait for input forever), your choice. Give it the brief, the diff against the base branch and ~/.herdr/instructions/reviewer.md. It reports what the change broke, left undone or added beyond the brief, each with proof and a level: blocker (breaks or loses people's work, or unsafe), major (someone would hit it, or it proves a claim false), minor (rarely hit, or style). Fix every finding at or above Must fix, commit, and review again; stop once a round finds none at or above it, or after Review rounds. Never agree with a finding just to end the loop: one you judge wrong goes in your summary with why, as do findings below the bar.
+- Review, when the Settings block says Review: on. Commit, then have fresh eyes that didn't write the change review it, read-only: a subagent, or a headless run of the Reviewer line's CLI with its model and effort (`codex exec --sandbox read-only "<prompt>" < /dev/null`, `claude -p --permission-mode plan "<prompt>" < /dev/null`: without `< /dev/null` they wait for input forever), your choice. Give it the brief, the diff against the base branch and ~/.herdr/instructions/collie-reviewer.md. It reports what the change broke, left undone or added beyond the brief, each with proof and a level: blocker (breaks or loses people's work, or unsafe), major (someone would hit it, or it proves a claim false), minor (rarely hit, or style). Fix every finding at or above Must fix, commit, and review again; stop once a round finds none at or above it, or after Review rounds. Never agree with a finding just to end the loop: one you judge wrong goes in your summary with why, as do findings below the bar.
 - When the work is finished, run the `collie-task ready` command given at the end of your brief, with a short summary. That puts the task in Ready for the person, who accepts it. Never mark a task done yourself. Merging then goes as the Merge line says; don't merge yourself unless told.
 """
 
@@ -24,7 +24,7 @@ WORKER_MD_BEFORE_TEMPLATES = WORKER_MD_BEFORE_NEWS.replace(
     "\"Needs a go to screenshot the menu\"): the person and the Assistant see it. End your message with one full question "
     "that names what you need and why (\"Can I take the window for 30s to screenshot the More menu?\"), never a bare \"Go?\".\n")
 # Since the roles are templates: the reviewer's words are in its template.
-WORKER_MD_BEFORE_GATE = WORKER_MD_BEFORE_TEMPLATES.replace("~/.herdr/instructions/reviewer.md", "~/.config/herdr-core/templates/reviewer.md")
+WORKER_MD_BEFORE_GATE = WORKER_MD_BEFORE_TEMPLATES.replace("~/.herdr/instructions/collie-reviewer.md", "~/.config/herdr-core/templates/collie-reviewer.md")
 # Since ready waits for a reviewed final commit (HERD-49), with GitHub news and "For AGENTS.md".
 REVIEW_GATE = (" After each round, record it on the commit it reviewed with the `collie-task reviewed` command given at the end "
                "of your brief: `ready` refuses a final commit no round was recorded on. Rounds used and your final commit "
@@ -71,13 +71,13 @@ WORKER_MD_BEFORE_SUBAGENTS = WORKER_MD_BEFORE_LEFT.replace(LEFT_OLD, LEFT_RULE)
 SUBAGENTS_OLD = ("read-only: a subagent, or a headless run of the Reviewer line's CLI with its model and effort (`codex exec "
                  "--sandbox read-only \"<prompt>\" < /dev/null`, `claude -p --permission-mode plan \"<prompt>\" < /dev/null`: "
                  "without `< /dev/null` they wait for input forever), your choice. Give it the brief, the diff against the base "
-                 "branch and ~/.config/herdr-core/templates/reviewer.md. It reports")
+                 "branch and ~/.config/herdr-core/templates/collie-reviewer.md. It reports")
 SUBAGENTS_RULE = ("read-only, as your own helper agent that people can watch and open: the Reviewer line's CLI with its model "
                   "and effort, interactive, started as your child with `hc run --bg --name <your task id, lower case>-review "
                   "--label \"herdr.task=$HERDR_BROWSER_TASK\" --label herdr.role=reviewer --label herdr.agent=<codex or "
                   "claude> -- <its command> \"<prompt>\"`, its command `codex --sandbox read-only --ask-for-approval never` "
                   "or `claude --permission-mode plan` (never `codex exec` or `claude -p`: nobody sees those). Its prompt gives "
-                  "it the brief, the diff against the base branch and ~/.config/herdr-core/templates/reviewer.md, and asks for "
+                  "it the brief, the diff against the base branch and ~/.config/herdr-core/templates/collie-reviewer.md, and asks for "
                   "its findings as its last message. It shows in your chat as a subagent and ends with you. Wait for it with "
                   "`hc wait <its name> --timeout 600` (again on a timeout, or while it says turn 0: it hadn't started), read its report with `hc read <its name> --lines "
                   "400`, then end it with `hc kill <its name>`. Any other helper agent you want (research, a second opinion) "
@@ -125,12 +125,15 @@ TEMPLATE_HEADS = {
 FRONT = re.compile(r"\A---[ \t]*\n.*?\n---[ \t]*(?:\n|\Z)", re.S)
 
 
+ROLE_FILES = {"worker": "collie-worker.md", "reviewer": "collie-reviewer.md"}
+
+
 def instructions(role):
     """The role's instructions: the words of its herdr-core template (TEMPLATES/<role>.md, which
     `hc templates` lists and the settings window opens for the person to edit), without the
     frontmatter. A missing one is made from the person's old ~/.herdr/instructions file, else the
     defaults; an unedited earlier worker default gets today's."""
-    path = os.path.join(TEMPLATES, f"{role}.md")
+    path = os.path.join(TEMPLATES, ROLE_FILES.get(role, f"{role}.md"))
     head = TEMPLATE_HEADS[role]
     try:
         with open(path) as f:

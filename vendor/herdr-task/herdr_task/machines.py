@@ -34,7 +34,7 @@ from .news import news_send, send_or_hold, typing
 # current is skipped, an older copy never replaces a newer one, and a template someone changed
 # there is kept (--force replaces it). Nothing else there is touched.
 
-ROLES = ("assistant", "worker", "reviewer")
+ROLES = ("collie-coordinator", "collie-worker", "collie-reviewer")
 ARTIFACT_HOME = ".local/share/collie/artifacts"
 STAMP = ".herdr/tools.json"
 MACHINES = os.path.join(STORE, ".machines.json")

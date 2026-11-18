@@ -1,5 +1,5 @@
 """The one-time "Enjoying Shepherdr?" card (SHEP-79): an Assistant may ask the person, once ever, to
-star Shepherdr on GitHub, at a good moment it judges by its instructions (assistant.md).
+star Shepherdr on GitHub, at a good moment it judges by its instructions (collie-coordinator.md).
 
 What's kept is Everywhere's `star_prompt` in the settings file (~/.config/collie/settings.json), so it
 travels to every machine as the other settings do (the window's push, the web host's sync):
