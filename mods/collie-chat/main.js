@@ -3183,9 +3183,21 @@ export default class Chat extends View {
       run("pane.focus", { pane: existing.pane });
       return;
     }
-    // terminal.keep with no place opens a new tab; Herdr focuses it. No exec round-trip here: the
-    // command runs in the app, so a click cannot fail on PATH/stdio.
-    run("terminal.keep", { terminal: h.address });
+    // terminal.keep with no place opens a new tab. Ask the CLI so we get its tab id back and can
+    // focus it; a failure is a bottom-right toast, never a silent click.
+    cx.spawn(async (cx) => {
+      try {
+        const r = await exec("herdr-app", ["do", "terminal.keep", "--terminal", h.address]);
+        let out = {};
+        try { out = JSON.parse(r.stdout || "{}"); } catch {}
+        if (out.error || !out.tab) throw new Error(out.error || r.stderr || "Herdr didn't create a Helper tab");
+        run("tab.rename", { id: out.tab, name: "Helper" });
+        run("tab.select", { id: out.tab });
+        if (out.pane) run("pane.focus", { pane: out.pane });
+      } catch (e) {
+        toast({ title: "Helper didn't open", body: String(e?.message ?? e), level: "error" });
+      }
+    });
     cx.notify();
   }
 
