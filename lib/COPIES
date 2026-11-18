@@ -9,3 +9,4 @@ inbox-settings.js: collie-settings
 ui.js: collie-inbox collie-tabs collie-chrome collie-settings collie-artifacts
 core/task-artifacts.js: collie-inbox collie-artifacts
 core/spaces.js: collie-inbox collie-tabs
+helper-pane.js: collie-tabs

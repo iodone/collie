@@ -85,12 +85,12 @@ bun "$ROOT/.local/share/collie/service/main.ts"
 
 ## Coordinator 与 New / Build
 
-每个 space 有一个逻辑 coordinator，由共享 Coordinator Host 按需调用，不常驻空转进程。配置位于 `$HOME/.local/state/collie/coordinator.json`：
+每个 space 有一个 Coordinator chat 和一个常驻 Coordinator helper。外面的 ingress 只进 helper；service 启动时和每 30 秒按 live Coordinator 确保 helper 存在，之后一直复用同一个 kept terminal。配置位于 `$HOME/.local/state/collie/coordinator.json`：
 
 ```json
 {
   "everywhere": {
-    "coordinator": { "cli": "codex", "model": "default", "effort": "high" }
+    "coordinator": { "cli": "codex", "model": "default", "effort": "high", "helper": "hidden" }
   },
   "spaces": {
     "collie": {
@@ -149,6 +149,9 @@ collie-secret names --json                               # 只有名字、why、
 collie-secret rm GITHUB_TOKEN
 ```
 
+- `helper` 只有 `hidden` / `visible`：`hidden` 不显示 helper terminal，`visible` 在右侧 `panel-body` 里显示并选中它；没有 `off`。space 下的 `coordinator.helper` 覆盖 Everywhere。
+- helper 的 job / Decision 在 `$HOME/.local/state/collie/helper/<space>/{jobs,decisions}/`；这是交互式 agent 没有 stdout 时的文件 IPC。service 校验 Decision 后写 Ledger，helper 自己不能写 Ledger/policy，也不能直接 spawn。
+- 找不到 Coordinator terminal、helper 启动失败或 120 秒内没有 Decision 时，事件变成 waiting Card；不会退回每个事件起一次 CLI。
 - `ask` 只把 `collie.secret.ask.NAME=<why>` 留在该终端上；chat 的卡片（`mods/collie-chat/secret-card.js`）保存后回报 agent「Kept: NAME」，agent 再按名字用。
 - 值短于 4 个字符不掩码（否则会把输出里每个字母都替换掉）。
 - 与 shepherdr 的 `herdr-secret` 相比，机器级别（Everywhere / 某台机器 / 某个 space）、远端保管与 FIFO 应答（`serve` / `install --on` / `mark-remote` / `where`）、`env` 子命令都没有移植。
@@ -181,6 +184,8 @@ collie status
 collie service status
 herdr-app ls
 hc get <coordinator>
+hc ls --label herdr.role=helper --label herdr.job.space=<space>
+hc read collie-helper-<space>
 ```
 
 `collie doctor` 只检查安装完整性；`collie status` 才看运行状态。`collie-supervisor` 整个删除，不保留公共命令或内部入口。

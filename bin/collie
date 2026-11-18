@@ -455,6 +455,23 @@ def layout_mods(value) -> set[str]:
     return found
 
 
+def without_dynamic_terminals(value):
+    """A layout's runtime terminal blocks (ticket/helper) are added by mods, not source."""
+    if isinstance(value, list):
+        return [without_dynamic_terminals(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    if isinstance(value.get("content"), dict) and "terminal" in value["content"]:
+        return None
+    out = {}
+    for key, item in value.items():
+        if key == "children" and isinstance(item, list):
+            out[key] = [clean for child in item if (clean := without_dynamic_terminals(child)) is not None]
+        else:
+            out[key] = without_dynamic_terminals(item)
+    return out
+
+
 def doctor(args) -> int:
     root = args.root.expanduser().resolve()
     validate_root(root)
@@ -493,10 +510,23 @@ def doctor(args) -> int:
         check(True, "initial ruleset is valid JSON")
     except InstallError as exc:
         check(False, str(exc))
+    source = Path(manifest.get("source", ""))
     for rel, expected in sorted(manifest.get("files", {}).items()):
         path = target_path(root, rel)
         if not path.is_file():
             check(False, f"missing {path}")
+        elif rel.startswith(".config/herdr-app/layouts/"):
+            # Mods add terminal blocks to a layout at runtime (ticket Terminal, helper pane).
+            # Compare the authored layout, not those generated blocks.
+            current = read_json(path)
+            authored_path = source / rel.replace(".config/herdr-app/", "", 1)
+            authored = read_json(authored_path) if authored_path.is_file() else None
+            layout_ok = without_dynamic_terminals(current) == without_dynamic_terminals(authored)
+            check(layout_ok, f"layout structure {rel}")
+            pending = path.with_name(path.name + ".new")
+            if pending.exists() and not layout_ok:
+                check(False, f"pending update requires review: {pending}")
+            continue
         elif sha256(path) != expected:
             check(False, f"modified {path}")
         else:

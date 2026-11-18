@@ -8,6 +8,8 @@ export interface CoordinatorConfig {
   effort?: string;
   args?: string[];
   resume_args?: string[];
+  /** Optional interactive argv for the persistent helper; defaults to the CLI's interactive mode. */
+  helper_args?: string[];
 }
 
 export interface CoordinatorRunnerInput {
