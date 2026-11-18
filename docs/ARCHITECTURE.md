@@ -264,9 +264,9 @@ hc run --bg --json --keep --cwd <folder>
 3. agent 没有自己的 pane；`herdr.chat` 告诉所有 Herdr 客户端它被哪个 chat 显示。
 4. app 关闭/重启：Herdr 的 kept terminal 保留；`collie-chat` 通过 `herdr.chat.slot` / `herdr.chat.origin` 找回它，不新建 agent。
 
-### Job session：headless 与可见 helper
+### Coordinator helper：headless job 的正确形态
 
-当前 `job session` 不是 Herdr terminal：
+先纠正一个实现事实：**当前的 job runner 不是 Coordinator session**。
 
 ```text
 service
@@ -276,41 +276,49 @@ service
   → service 写 Ledger
 ```
 
-因此它：
+它：
 
-- 没有 pane / tab；
-- 没有 `herdr.role` label；
-- 不可见，不会打断 Coordinator chat；
-- 但和 chat 使用同一份 `collie-coordinator.md`、settings、policy 和 Ledger。
+- 每次事件都起一个新的 CLI 进程；
+- 没有 Herdr terminal、没有 `herdr.role`；
+- 没有跨事件的会话记忆；
+- 只是复用 Coordinator 的 role prompt / policy / snapshot 的**一次性判断 worker**。
 
-job session 不是 policy session；policy 对 chat 和 job 都是输入。
-
-如果要把 job 变成可见：
+所以它不能被称为“同一个 Coordinator 的第二个 session”。如果要求一个持续、可观察、不会每事件重起的判断会话，应该改成 **Coordinator helper**：
 
 ```text
-hc run --bg --parent <coordinator-terminal>
-  --label herdr.role=helper
-  --label herdr.job=<job-id>
-  -- <coordinator role prompt>
+Coordinator chat (herdr.role=coordinator)
+  └─ Coordinator helper (herdr.role=helper, parent=coordinator)
+       ├─ 常驻 terminal / session
+       ├─ 读同一份 collie-coordinator 提示词、policy、Ledger 快照
+       ├─ Ingress 的 job 进入其队列
+       ├─ 输出 proposed Decision JSON
+       └─ service 校验并写 Ledger
 ```
 
-它仍然只能是 **helper / advisory**：
+#### 约束
 
-- 读 policy 和 snapshot；
-- 输出 proposed Decision JSON；
-- 由 service 校验并写 Ledger；
-- **不能**自己写 Ledger、不能标 `herdr.role=coordinator`、不能独立派 task。
+- helper **不是第二个 Coordinator**：不能写 Ledger、不能写 policy、不能独立 spawn task。
+- helper 使用 `herdr.role=helper`，不能使用 `herdr.role=coordinator`；一个 space 仍只有一个 Coordinator。
+- 输出由 service 校验；Decision 仍由 service/Coordinator 写。
+- 主 chat 和 helper 都加载 policy；没有单独的 policy session。
+- helper 串行处理 job，避免同一 space 并发判断。
 
-默认建议保持 headless；如果需要在 Collie 中观察 job，未来可在 `collie-settings` 增加：
+#### 可见性
+
+可以作为设置项：
 
 ```text
 Coordinator
-  Job session: Headless (default) | Visible helper
+  Helper: Off (one-shot headless) | Persistent (hidden) | Persistent (visible)
 ```
 
-当前设置没有这个开关；也没有 policy session 开关。
+- `Off`：保留当前一次性 headless runner；
+- `Persistent (hidden)`：常驻 helper terminal，但没有 pane，不打断 chat；
+- `Persistent (visible)`：在 Coordinator tab 下开一个 helper pane，或放入右侧 pane；只显示 helper，不新增 Coordinator。
 
-### worker / reviewer 的启动
+当前 `collie-settings → Coordinator` 还没有这个开关；这是下一步实现项，不是现有行为。
+
+### worker / reviewer 的启动### worker / reviewer 的启动
 
 `collie-task launch()` 用 `hc run`，不让每个 task 占 tab：
 
