@@ -181,9 +181,9 @@ export default class Tabs extends View {
       .on_mouse_up("left", () => { this.pressed = null; })
       .on_scroll_wheel(e => { if (Math.abs(e.delta.y) >= 1) run(e.delta.y > 0 ? "tab.prev" : "tab.next"); })
       .child(h_flex().id("tab-scroll").flex_1().min_w(0).h_full().items_center().gap(3).overflow_x_scrollbar().children(shown.map(item)))
-      .child(button("tab-new", "+", () => openOverlay({ mod: "new-menu", kind: "popup", width: 250 })))
-      // No Coordinator tab yet: a visible way back, not only the collie-tabs.coordinator command.
-      .when(!coordinatorTab(space), (el) => el.child(button("tab-coordinator", "Coordinator", () => openCoordinator(space, true))))
+      .child(button("tab-new", "+", () => coordinatorTab(space)
+        ? openOverlay({ mod: "new-menu", kind: "popup", width: 250 })
+        : openOverlay({ mod: "collie-menu", kind: "popup", width: 250, props: { mode: "new", target: { space: space.id } } })))
       .child(panelButton("files", "Files", "mods/collie-files/file.svg"))
       .child(panelButton("collie", "Inbox", "mods/collie-chrome/files.svg", [waiting, 0]))
       .child(panelButton("artifacts", "Artifacts", "mods/collie-artifacts/artifacts.svg"))

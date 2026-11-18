@@ -32,7 +32,6 @@ export default class InboxSettings extends View {
     cx.spawn(async (cx) => {
       try {
         const next = mergeCoordinator(this.cfg, {
-          cli: this.cfg.everywhere?.coordinator?.cli ?? "codex",
           model: this.model.content().text.trim(),
           effort: this.cfg.everywhere?.coordinator?.effort ?? "high",
           helper: this.cfg.everywhere?.coordinator?.helper ?? "hidden",
@@ -76,9 +75,6 @@ export default class InboxSettings extends View {
     const saved = this.savedAt ? div().text_size(TEXT.label).text_color(t.dim).child("Saved") : null;
     return v_flex()
       .child(div().pb(6).text_size(TEXT.title).font_semibold().text_color(t.foreground).child("Coordinator"))
-      .child(this.row(t, "Agent CLI", "The Coordinator helper session that turns a Case into a Decision.",
-        segmented("coordinator-cli", [["codex", "Codex"], ["claude", "Claude"]], current.cli ?? "codex",
-          (cli, _e, cx) => this.save({ cli }, cx))))
       .child(this.row(t, "Helper", "Ingress goes to one persistent helper session per space. When it is live, the Coordinator pane gets a Helper page beside Chat and Terminal; there is no Off.",
         segmented("coordinator-helper", [["hidden", "Hidden"], ["visible", "Visible"]], current.helper ?? "hidden",
           (helper, _e, cx) => this.save({ helper }, cx))))

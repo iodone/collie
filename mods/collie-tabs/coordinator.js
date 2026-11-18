@@ -138,6 +138,13 @@ function runningAssistant(space, ps = panes()) {
 // it; else the view stays. settings ({ agent, model, effort, fast, perm }, from the New space
 // dialog): what it starts with. A machine that's offline gets it once it's back (watchNewSpaces).
 export async function openCoordinator(space, show = true, settings = null) {
+  // One Coordinator per space: a second copy would split the chat from its workers.
+  const existing = coordinatorTab(space);
+  if (existing) {
+    if (!space.active) run("space.select", { id: space.id });
+    if (show) run("tab.select", { id: existing.id });
+    return;
+  }
   if (space.machine && !machineReady(space.machine)) {
     setShared("coordinator.pending", { ...(shared("coordinator.pending") ?? {}), [space.id]: { settings, at: Date.now() } });
     toast({ title: `${space.machine} is offline`, body: "Its Assistant starts when it's back." });
@@ -151,11 +158,8 @@ export async function openCoordinator(space, show = true, settings = null) {
     const everywhere = cfg.everywhere?.coordinator ?? {};
     const local = cfg.spaces?.[space.id]?.coordinator ?? {};
     const selected = { ...everywhere, ...local };
-    if (!selected.cli) {
-      toast({ title: "Configure Inbox Coordinator first", body: "Open Collie settings and choose Codex or Claude.", level: "error" });
-      return;
-    }
-    settings = { agent: selected.cli, model: selected.model ?? "default", effort: selected.effort ?? "high" };
+    // The chat's model picker switches agents; the first start is always Claude.
+    settings = { agent: "claude", model: selected.model ?? "default", effort: selected.effort ?? "high" };
   }
   const slot = `coord-${space.id}-${Math.random().toString(36).slice(2, 10)}`;
   settings = settings.agent
