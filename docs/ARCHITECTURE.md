@@ -155,6 +155,150 @@ Decision，三态之一：
 
 ---
 
+## 5.5 Herdr 集成契约（实现侧）
+
+Collie 不拥有终端、tab、pane、space；这些全部是 Herdr core 的事实。Collie 只做三件事：
+
+1. 把 Coordinator 的判断写成 Ledger 里的 Decision；
+2. 通过 `collie-task` 调 `hc` 启动 / 观察 agent；
+3. 用 label 把 Herdr 的 terminal 映射回 Coordinator / Work / Inbox。
+
+### 职责边界
+
+| 能力 | 归属 | Collie 怎么用 |
+|:--|:--|:--|
+| space / tab / pane / terminal 生命周期 | Herdr core | `herdr-app` 命令、`hc`；不自己维护第二份 |
+| agent 进程启动 / 保活 | Herdr core (`hc`) | `hc run --bg --keep`；`--parent` 建立父子关系 |
+| agent 身份 / 任务归属 | Herdr labels | `hc label` 写；`hc ls --label` 读 |
+| 终端screen / wait / reap | Herdr core | `hc read` / `hc wait` / `hc get` |
+| Decision / policy / Inbox 投影 | Collie | Ledger + service + mods |
+| task store / scheduler / ready | Collie (`collie-task`) | 作为 Work 的执行事实源 |
+| 窗口布局与 overlay | Herdr UI | `tab.new` / `layout.select` / `openOverlay` |
+
+### 关键 label
+
+`herdr.role` 只标“非默认执行角色”；普通 worker 没有 `herdr.role`，默认就是 worker。
+
+| label | 写在谁身上 | 谁写 | 谁读 / 用途 |
+|:--|:--|:--|:--|
+| `herdr.role=coordinator` | 每个 space 的 Assistant terminal | `collie-chat` 启动 / `restart.sh` | `collie-tabs` 找当前 Coordinator；Inbox 的 Needs you / unread |
+| `herdr.role=reviewer` | reviewer terminal | `collie-task` `launch()` | 区分 reviewer 与 worker；避免把 reviewer 当 worker |
+| `herdr.role=helper` | subagent / helper terminal | Herdr agent template | `collie-chat` 把 helper 挂在父 agent 下 |
+| `herdr.task=<slug>#<id>` | task 的 worker / reviewer / helper | `collie-task` `launch()` | `hc ls --label` 找任务 agent；artifacts / status |
+| `herdr.task.space=<space>` | task terminal | `collie-task` `launch()` | 任务所在 space；**不要**用 Herdr 给 pane 的 `herdr.space` |
+| `herdr.coordinator=<tab>` | task terminal | `collie-task` `launch()` | 任务归属 Coordinator tab；restart 后仍能找到 |
+| `herdr.coordinator.space=<space>` | Coordinator terminal | `collie-chat` 启动 / `restart.sh` | 找回 space 的 Assistant |
+| `herdr.coordinator.tab=<tab>` | Coordinator terminal | `collie-chat` / `restart.sh` | Coordinator 所在 tab |
+| `herdr.chat=<pane>` | 被 chat “park” 的 agent | `collie-chat` 启动 / `agent.js` | agent 没有自己的 pane，chat 代替它显示 terminal |
+| `herdr.chat.slot=<slot>` | Coordinator chat 的 agent | `collie-chat` | app 重启 / chat rehydrate 后找回同一个 agent |
+| `herdr.chat.origin=<origin>` | Coordinator chat 的 agent | `collie-chat` | draft / 历史归属的稳定 key |
+| `herdr.chat.read=<turn>` | Assistant terminal | `collie-chat` | 未读标记；Inbox / sidebar 的 unread |
+| `herdr.typing=<ms>` | chat 的 agent terminal | `collie-chat` | 人正在输入，news 暂缓 |
+| `herdr.alert=<json>` | 任意 agent terminal | `collie-task alert` / tick | toast、声音、Needs you |
+| `herdr.task.space` vs `herdr.space` | 见上 | — | `herdr.space` 是 Herdr pane 的 space；task 不要覆盖它 |
+
+### 角色与职责
+
+| Herdr 身份 | label | Collie 职责 | 写什么 |
+|:--|:--|:--|:--|
+| **Coordinator** | `herdr.role=coordinator`；另有 `herdr.coordinator.space` / `herdr.coordinator.tab` / `herdr.chat*` | 判断、出 Decision、回答 Card、派 work；不占 `herdr.task` | Decision / Card；通过 service 派 task |
+| **Worker** | `herdr.task=<key>`、`herdr.task.space`、`herdr.coordinator`；**普通 worker 没有 `herdr.role`** | 在自己的 worktree 执行一个 task；结束用 `collie-task ready` | task 事实 / `ready` / `status` |
+| **Reviewer** | 同一个 `herdr.task`，另加 `herdr.role=reviewer` | read-only 评审同一 task 的 commit；用 `collie-task reviewed` 记轮次 | review round / findings |
+| **Helper** | `herdr.role=helper`，`parent` 指向 worker/reviewer | 父 agent 的子任务；不是第二个 worker | 自己的 screen / log，不写 task 状态 |
+| **人** | 无 agent label | 看 Inbox、回答 Card、验收、关 tab | Card answer / 人的显式命令 |
+
+`herdr.role` 只在**非默认角色**上写：worker 靠 `herdr.task` 识别，不需要 `worker` 字符串。
+
+### 具体调用路径
+
+```mermaid
+sequenceDiagram
+  actor P as 人
+  participant C as Coordinator chat<br/>(collie-chat)
+  participant S as collie service
+  participant K as collie-task
+  participant H as herdr-core / hc
+  participant L as Ledger
+
+  P->>C: New / Build
+  C->>S: collie ticket create<br/>（Unix socket /ticket）
+  S->>L: Decision(open, spawn_task)
+  S->>K: add / start
+  K->>H: hc run --bg --keep<br/>--label herdr.task=...<br/>--parent <coordinator>
+  H-->>K: terminal address
+  K-->>S: task facts (ready)
+  S->>L: Receipt + Decision 更新
+  C->>H: hc ls --label herdr.task=...<br/>hc get / hc read
+  H-->>C: live / status / screen
+  C->>C: Inbox = Decision + task 事实的投影
+```
+
+### Coordinator chat 的启动
+
+1. `collie-tabs` 用 `app("tab.new", { mod: "collie-chat", props: { role: "coordinator", template: "collie-coordinator", space, folder, slot, settings } })` 建 tab。
+2. chat 第一条消息再启动 agent：
+
+```text
+hc run --bg --json --keep --cwd <folder>
+  --label herdr.chat=<pane>
+  --label herdr.chat.slot=<slot>
+  --label herdr.chat.origin=slot:<slot>
+  --label herdr.role=coordinator
+  --label herdr.coordinator.space=<space>
+  --label herdr.coordinator.tab=<tab>
+  -- <agent argv>
+```
+
+3. agent 没有自己的 pane；`herdr.chat` 告诉所有 Herdr 客户端它被哪个 chat 显示。
+4. app 关闭/重启：Herdr 的 kept terminal 保留；`collie-chat` 通过 `herdr.chat.slot` / `herdr.chat.origin` 找回它，不新建 agent。
+
+### worker / reviewer 的启动
+
+`collie-task launch()` 用 `hc run`，不让每个 task 占 tab：
+
+```text
+hc run --bg --json --keep --cwd <worktree-or-folder> --name <task-name>
+  --label herdr.task=<slug>#<id>
+  --label herdr.task.space=<space>
+  --label herdr.agent=<claude|codex>
+  --label herdr.coordinator=<coordinator-tab>
+  [--label herdr.role=reviewer]
+  --parent <coordinator-terminal> --outlive-parent
+  -- <worker/reviewer argv>
+```
+
+- worker 没有 `herdr.role` → 默认 worker。
+- reviewer 加 `herdr.role=reviewer`，不能冒充 worker。
+- `--parent` 让 agent 成为 Coordinator 的子 terminal；`--outlive-parent` 让 Coordinator 重启时 worker 不丢。
+- `collie-task ready` 只写 task 事实；service 轮询 `collie-task show` 生成 receipt，Inbox 现算；它不直接改 Inbox。
+
+### 窗口 / Inbox 怎么读
+
+- Inbox 是 mod：`hc ls/get` 读 terminals，按 `herdr.task` 找 task agent，按 `herdr.role` 区分 Coordinator / reviewer / helper。
+- Ticket 的 Terminal tab 不自己画 terminal：它把 layout 的 block `content.terminal` 设为 agent address，让 Herdr 画真实 terminal。
+- Artifacts 由 `collie-artifact` store + `collie-artifacts` mod 读；Chat 的 publish 记录只用于找到 artifact，不复制内容。
+- 没有 live agent 时 Terminal 置灰；Inbox 仍显示 Todo/Needs you/Settled。
+
+### 重启 / 关闭
+
+- 关窗口：Herdr kept terminals 保留；Coordinator / worker 不依赖 Collie 进程。
+- `collie-task tick`：恢复 queued/scheduled、revive session、处理 alert；service 不在时窗口自己 tick。
+- `restart.sh`：用原 terminal 的 label（`herdr.chat.slot`、`herdr.coordinator.space`、`herdr.task` 等）原地重启，不创建新 Coordinator。
+- 没有 `collie-supervisor`，没有第二个 ensure 循环。
+
+### 谁写状态
+
+| 写入 | 位置 | 规则 |
+|:--|:--|:--|
+| Decision | `queue.json` / Ledger | 只有 `collie ticket` / service 写；mod 只读投影 |
+| task | `~/.local/share/collie/tasks` | 只有 `collie-task` 写；旧 shep store 已归档 |
+| label | Herdr terminal | `hc label` / `collie-task` / `collie-chat` 写 |
+| UI 投影 | Inbox / Ticket | 只读，不写回 task / Ledger |
+
+这就是 Collie 基于 Herdr 的实现契约：**Herdr 管资源和身份，Collie 管判断、授权和工作投影；中间用 `hc` + label 串联。**
+
+---
+
 ## 6. 状态
 
 状态只回答“球在谁手里”。内部步骤不升为持久状态。
