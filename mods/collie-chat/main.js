@@ -3188,31 +3188,43 @@ export default class Chat extends View {
     this.helperOpenAt = now;
     toast({ title: "Helper", body: "Opening the Helper tab…", level: "info" });
     let live = terminals().find((x) => x.address === h.address && x.state === "live");
-    // The row can outlive its helper (finished rows stay an hour). Bind it to the current live Helper
-    // in the same space instead of doing nothing on a dead address.
+    // A finished row outlives its Helper; bind it to the live Helper in this space.
     if (!live && h.role === "helper") {
       const old = terminals().find((x) => x.address === h.address);
       const space = old?.labels?.["herdr.job.space"] ?? old?.labels?.["herdr.space"];
       live = terminals().find((x) => x.state === "live" && x.labels?.["herdr.role"] === "helper"
         && (x.labels?.["herdr.job.space"] === space || x.labels?.["herdr.space"] === space)) ?? null;
     }
-    if (!live) {
-      toast({ title: "Helper isn't running", body: "Start the Coordinator first.", level: "info" });
-      return;
-    }
-    h = { ...h, address: live.address };
-    const existing = panes().find((p) => p.terminal === h.address);
-    if (existing) {
+    if (!live) { toast({ title: "Helper isn't running", body: "Start the Coordinator first.", level: "info" }); return; }
+    const tabExists = (id) => Boolean(id) && spaces().some((sp) => sp.tabs.some((t) => t.id === id));
+    const existing = panes().find((p) => p.terminal === live.address);
+    // A pane record can outlive its tab; never select/rename a dead tab id.
+    if (existing && tabExists(existing.tab)) {
+      run("tab.rename", { id: existing.tab, name: "Helper" });
       run("tab.select", { id: existing.tab });
-      cx.spawn(async () => { await exec("herdr-app", ["do", "tab.select", "--id", existing.tab]).catch(() => {}); });
       toast({ title: "Helper", body: "Focused the Helper tab.", level: "info" });
       return;
     }
-    toast({ title: "Opening Helper", body: "Creating the Helper tab.", level: "info" });
-    // Ask the pane header to create/focus the tab; also issue the keep directly so a missing header
-    // cannot make the click look dead.
-    setShared("collie-pane-chat.helper", { terminal: h.address, at: Date.now() });
-    run("terminal.keep", { terminal: h.address });
+    cx.spawn(async (cx) => {
+      try {
+        const r = await exec("herdr-app", ["do", "terminal.keep", "--terminal", live.address]);
+        let out = {};
+        try { out = JSON.parse(r.stdout || "{}"); } catch {}
+        let tab = out.tab;
+        // terminal.keep can return before the tab is in spaces(); wait, then trust the pane's tab.
+        for (let i = 0; (i < 20) && !tabExists(tab); i++) {
+          const p = panes().find((x) => x.terminal === live.address && tabExists(x.tab));
+          if (p) { tab = p.tab; break; }
+          await cx.sleep(50);
+        }
+        if (!tabExists(tab)) throw new Error(out.error || r.stderr || "Herdr didn't create a Helper tab");
+        run("tab.rename", { id: tab, name: "Helper" });
+        run("tab.select", { id: tab });
+        toast({ title: "Helper", body: "Opened the Helper tab.", level: "info" });
+      } catch (e) {
+        toast({ title: "Helper didn't open", body: String(e?.message ?? e), level: "error" });
+      }
+    });
     cx.notify();
   }
 

@@ -302,10 +302,11 @@ export default class Pane extends View {
   openHelperTab(terminal, cx) {
     const live = terminals().find((x) => x.address === terminal && x.state === "live");
     if (!live) { notify({ title: "Helper isn't running", body: "Start the Coordinator first.", level: "info" }); return; }
+    const tabExists = (id) => Boolean(id) && spaces().some((sp) => sp.tabs.some((t) => t.id === id));
     const existing = panes().find((p) => p.terminal === terminal);
-    if (existing) {
+    if (existing && tabExists(existing.tab)) {
+      run("tab.rename", { id: existing.tab, name: "Helper" });
       run("tab.select", { id: existing.tab });
-      exec("herdr-app", ["do", "tab.select", "--id", existing.tab]).catch(() => {});
       notify({ title: "Helper", body: "Focused the Helper tab.", level: "info" });
       return;
     }
@@ -314,9 +315,15 @@ export default class Pane extends View {
         const r = await exec("herdr-app", ["do", "terminal.keep", "--terminal", terminal]);
         let out = {};
         try { out = JSON.parse(r.stdout || "{}"); } catch {}
-        if (out.error || !out.tab) throw new Error(out.error || r.stderr || "Herdr didn't create a Helper tab");
-        run("tab.rename", { id: out.tab, name: "Helper" });
-        run("tab.select", { id: out.tab });
+        let tab = out.tab;
+        for (let i = 0; (i < 20) && !tabExists(tab); i++) {
+          const p = panes().find((x) => x.terminal === terminal && tabExists(x.tab));
+          if (p) { tab = p.tab; break; }
+          await cx.sleep(50);
+        }
+        if (!tabExists(tab)) throw new Error(out.error || r.stderr || "Herdr didn't create a Helper tab");
+        run("tab.rename", { id: tab, name: "Helper" });
+        run("tab.select", { id: tab });
         notify({ title: "Helper", body: "Opened the Helper tab.", level: "info" });
       } catch (e) {
         notify({ title: "Helper didn't open", body: String(e?.message ?? e), level: "error" });
@@ -324,7 +331,7 @@ export default class Pane extends View {
     });
   }
 
-  // Chat → Helper: the helper terminal takes this pane's slot. The page we leave is closed or parked (running, no
+  // Chat → Helper:  // Chat → Helper: the helper terminal takes this pane's slot. The page we leave is closed or parked (running, no
   // pane); the helper keeps its own agent and pane, so switching back does not restart it.
   toHelper(self, cx) {
     const helper = helperFor(self);
