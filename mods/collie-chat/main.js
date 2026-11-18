@@ -1569,6 +1569,9 @@ export default class Chat extends View {
         .some((a) => (a.key === st.agent || (a.run ?? [])[0] === st.agent) && a.installed !== false);
       {
         const q = (a) => (/^[\w@%+=:,./-]+$/.test(a) ? a : `'${String(a).replace(/'/g, "'\\''")}'`);
+        const b64 = (a) => typeof Buffer !== "undefined"
+          ? Buffer.from(String(a), "utf8").toString("base64")
+          : btoa(unescape(encodeURIComponent(String(a))));
         const src = (await exec("sh", ["-c", TEMPLATE + 'cat "$dir/$1.md"', "x", template], on).catch(() => null))?.stdout ?? "";
         const head = /^---\n([\s\S]*?)\n---\n?/.exec(src);
         const body = head ? src.slice(head[0].length) : src;
@@ -1578,14 +1581,10 @@ export default class Chat extends View {
         if (body.trim() && cmd) {
           words = body.trim();
           oneOff = `herdr-${template}-${Date.now().toString(36)}`;
-          // Claude takes the role template as its system prompt, not as the first chat message. A
-          // shell-quoted multi-line prompt cannot live on the template's one-line `command:`; put it
-          // in a file and expand it at launch. The one-off template keeps the body empty.
-          let system = null;
+          // Claude takes the role template as its system prompt, not as the first chat message. Encode
+          // it in the one-line template command: no temporary system-prompt file, no multiline YAML.
           if (/(^|\s)claude(?:\s|$)/.test(cmd) && !/--(?:append-)?system-prompt/.test(cmd)) {
-            system = `${oneOff}.system`;
-            await exec("sh", ["-c", TEMPLATE + 'printf "%s" "$2" > "$dir/$1.md"', "x", system, words], on);
-            cmd = `${cmd} --append-system-prompt "$(cat "$HOME/.config/herdr-core/templates/${system}.md")"`;
+            cmd = `${cmd} --append-system-prompt "$(printf %s '${b64(words)}' | base64 -d)"`;
             words = "";
           }
           const file = `---\nname: ${oneOff}\ndescription: A one-off ${template} start with chosen settings (mods/collie-chat), removed after use.\ncommand: ${cleanCommand(cmd)}\n---\n${words}`;
@@ -1600,7 +1599,7 @@ export default class Chat extends View {
         ...(rec?.tab ? ["--label", `herdr.coordinator.tab=${String(rec.tab).split("/").pop()}`] : []),
         launch, ...(task ? [task] : [])];
       const r = await hc(args).catch((e) => ({ code: 1, stderr: String(e?.message ?? e), stdout: "" }));
-      if (oneOff) exec("sh", ["-c", TEMPLATE + 'rm -f "$dir/$1.md" "$dir/$1.system.md"', "x", oneOff], on);
+      if (oneOff) exec("sh", ["-c", TEMPLATE + 'rm -f "$dir/$1.md"', "x", oneOff], on);
       let out = {};
       try { out = JSON.parse(r.stdout || "{}"); } catch {}
       // hc waits to hand the agent its first message and gives up while the CLI shows a screen of

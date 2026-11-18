@@ -45,12 +45,6 @@ describe("Coordinator Host", () => {
     expect(() => mergeCoordinator({}, { cli: "codex", model: "default", effort: "extreme" })).toThrow("invalid effort");
   });
 
-  test("Helper 只有 Hidden/Visible，默认 Hidden，并可被 space 覆盖", () => {
-    const next = mergeCoordinator({}, { cli: "codex", model: "default", effort: "high", helper: "visible" });
-    expect(next.everywhere.coordinator.helper).toBe("visible");
-    expect(mergeCoordinator({}, { cli: "codex", model: "default", effort: "high" }).everywhere.coordinator.helper).toBe("hidden");
-    expect(() => mergeCoordinator({}, { cli: "codex", model: "default", effort: "high", helper: "off" })).toThrow("hidden or visible");
-  });
 
   test("headless 输出 Decision 与 session，resume 使用原 session", async () => {
     const calls: any[] = [];

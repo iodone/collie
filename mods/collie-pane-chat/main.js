@@ -16,7 +16,7 @@
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import {
-  props, run, theme, home, exec, hc, notify, nextCommand, shared, setShared, readTextFile,
+  props, run, theme, home, exec, hc, notify, nextCommand, shared, setShared,
   panes as livePanes, terminals as liveTerminals, spaces as liveSpaces,
 } from "herdr";
 
@@ -111,12 +111,6 @@ const roleIn = (self, role) => {
 };
 const coordinatorFor = (self) => roleIn(self, "coordinator");
 const helperFor = (self) => roleIn(self, "helper");
-const helperVisible = (cfg, space) => {
-  const id = String(space ?? "");
-  const local = cfg?.spaces?.[id]?.coordinator?.helper ?? cfg?.spaces?.[id]?.helper;
-  const everywhere = cfg?.everywhere?.coordinator?.helper ?? cfg?.everywhere?.helper;
-  return (local ?? everywhere) === "visible";
-};
 async function waitPane(pred, cx, ms = 1500) {
   for (const end = Date.now() + ms; Date.now() < end; await cx.sleep(50)) {
     const found = panes().find(pred);
@@ -161,37 +155,7 @@ export default class Pane extends View {
   init(_props, cx) {
     this.hovered = false;
     this.busy = false;
-    // The Helper page is opt-in: follow Coordinator settings' helper = visible (default hidden).
-    this.helperCfg = null;
-    this.helperCfgRaw = null;
-    const loadHelper = async (cx) => {
-      const raw = await readTextFile(`${home()}/.local/state/collie/coordinator.json`).catch(() => null);
-      if (raw === this.helperCfgRaw) return;
-      this.helperCfgRaw = raw;
-      try { this.helperCfg = raw ? JSON.parse(raw) : null; } catch { this.helperCfg = null; }
-      cx.notify();
-    };
-    cx.spawn(async (cx) => { await loadHelper(cx); });
-    cx.timer.every(2000, (cx) => cx.spawn(async (cx) => { await loadHelper(cx); }));
-    // A copy just started (the swap's new pane) may still be handed the toggle that made it: it would swap
-    // straight back. Toggles go to copies at least 2 s old, one swap per 3 s.
     this.born = Date.now();
-    // A Helper row or the Coordinator header asks this pane to open the Helper tab.
-    cx.timer.every(200, (cx) => {
-      const req = shared("collie-pane-chat.helper");
-      if (!req || Date.now() - (req.at ?? 0) > 3000) return;
-      setShared("collie-pane-chat.helper", null);
-      this.openHelperTab(req.terminal, cx);
-    });
-    // A Helper row in the chat asks this pane to show its Helper page (shared "collie-pane-chat.page").
-    cx.timer.every(200, (cx) => {
-      const req = shared("collie-pane-chat.page");
-      if (!req || Date.now() - (req.at ?? 0) > 3000) return;
-      const self = this.me();
-      if (!self || (req.pane && self.pane !== req.pane) || (req.tab && self.tab !== req.tab)) return;
-      setShared("collie-pane-chat.page", null);
-      if (req.page === "helper") this.toHelper(self, cx);
-    });
     // "collie-pane-chat.toggle" (a key, or `herdr-app do`): the focused pane switches. At most 5 s per wait (one
     // pending nextCommand), so a reload's old build ends at its next cx use instead of staying in memory.
     cx.spawn(async (cx) => {
@@ -331,77 +295,6 @@ export default class Pane extends View {
     });
   }
 
-  // Chat → Helper:  // Chat → Helper: the helper terminal takes this pane's slot. The page we leave is closed or parked (running, no
-  // pane); the helper keeps its own agent and pane, so switching back does not restart it.
-  toHelper(self, cx) {
-    const helper = helperFor(self);
-    const coord = coordinatorFor(self);
-    if (!helper || !coord || self.terminal === helper.address || this.busy) return;
-    const existing = panes().find((p) => p.terminal === helper.address);
-    if (existing) { run("pane.focus", { pane: existing.pane }); return; }
-    this.busy = true;
-    cx.spawn(async (cx) => {
-      try {
-        await app("pane.focus", { pane: self.pane });
-        await app("terminal.keep", { terminal: helper.address, place: "right" });
-        if (!(await waitPane((x) => x.terminal === helper.address, cx))) throw new Error("Herdr didn't open the Helper page");
-        // Last: removing the page we came from leaves the helper in the slot.
-        if (self.mod === CHAT) await app("pane.close", { pane: self.pane });
-        else if (self.terminal) await app("terminal.park", { terminal: self.terminal });
-      } catch (e) {
-        toast({ title: "Helper didn't open", body: plainError(e), level: "error" });
-      }
-      this.busy = false;
-      cx.notify();
-    });
-  }
-
-  // Helper → Chat: open the Coordinator's chat in the helper pane's slot, then park the helper.
-  toCoordinatorChat(self, cx) {
-    const coord = coordinatorFor(self);
-    const helper = helperFor(self);
-    if (!coord || this.busy) return;
-    const open = chatOf(coord.address);
-    if (open) { run("pane.focus", { pane: open }); return; }
-    this.busy = true;
-    cx.spawn(async (cx) => {
-      try {
-        await app("pane.focus", { pane: self.pane });
-        const out = await app("pane.split", { direction: "right", pane: self.pane, mod: CHAT, props: { terminal: coord.address } });
-        if (!out.pane || !(await waitPane((x) => x.pane === out.pane, cx))) throw new Error("Herdr didn't open the chat");
-        await hc(["label", coord.address, `${LABEL}=${out.pane}`]);
-        // Last: parking the helper removes this header together with its pane.
-        if (helper) await app("terminal.park", { terminal: helper.address });
-      } catch (e) {
-        toast({ title: "Chat didn't open", body: plainError(e), level: "error" });
-      }
-      this.busy = false;
-      cx.notify();
-    });
-  }
-
-  // Helper → Terminal: put the Coordinator terminal in the helper pane's slot, then park the helper.
-  toCoordinatorTerminal(self, cx) {
-    const coord = coordinatorFor(self);
-    const helper = helperFor(self);
-    if (!coord || this.busy) return;
-    const own = panes().find((p) => p.terminal === coord.address);
-    if (own) { run("pane.focus", { pane: own.pane }); return; }
-    this.busy = true;
-    cx.spawn(async (cx) => {
-      try {
-        await app("pane.focus", { pane: self.pane });
-        await app("terminal.keep", { terminal: coord.address, place: "right" });
-        if (!(await waitPane((x) => x.terminal === coord.address, cx))) throw new Error("Herdr didn't bring the terminal back");
-        if (helper) await app("terminal.park", { terminal: helper.address });
-      } catch (e) {
-        toast({ title: "Terminal didn't come back", body: plainError(e), level: "error" });
-      }
-      this.busy = false;
-      cx.notify();
-    });
-  }
-
   // A chat pane's ✕ does what an agent pane's does: ends the agent, and the pane goes (no dialog in collie).
   closeChat(chat) {
     const terminal = agentOf(chat);
@@ -409,12 +302,10 @@ export default class Pane extends View {
     run("pane.close", { pane: chat });
   }
 
-  // Chat | Terminal | Helper: three pages of the Coordinator pane, only one visible at a time.
-  switcher(id, page, onChat, onTerminal, onHelper, canHelper) {
-    const options = [[CHAT, "Chat"], ["terminal", "Terminal"], ...(canHelper ? [["helper", "Helper"]] : [])];
-    return segmented(id, options, page, (v, _e, cx) => {
+  // Chat | Terminal.
+  switcher(id, page, onChat, onTerminal) {
+    return segmented(id, [[CHAT, "Chat"], ["terminal", "Terminal"]], page, (v, _e, cx) => {
       if (v === CHAT) return onChat(cx);
-      if (v === "helper") return onHelper(cx);
       return onTerminal(cx);
     });
   }
@@ -432,25 +323,20 @@ export default class Pane extends View {
     const chatMode = self.mod === CHAT;
     const agent = chatMode ? agentOf(self.pane) : null;
     const entry = agent ? { terminal: agent } : null;
-    // A Helper page is the helper terminal itself; Chat is a chat pane; otherwise it is the Coordinator terminal.
     const helper = helperFor(self);
-    const helperMode = Boolean(helper && self.terminal === helper.address);
-    const page = chatMode ? CHAT : helperMode ? "helper" : "terminal";
-    const coord = chatMode ? (agent ? terminals().find((x) => x.address === agent) : coordinatorFor(self)) : coordinatorFor(self);
+    const page = chatMode ? CHAT : "terminal";
     const p = (entry && parked(entry.terminal)) ?? self;
     const lazy = chatMode && !entry && lazySlot(self.pane);
     const prog = ((p.program?.agent || p.program?.shell) && p.program.name) || p.title || p.program?.name || "Shell";
     // A Coordinator reads as its space, never its role or what it runs: the space's name, then its folder, quieter.
     const isAssistant = Boolean(lazy) || terminals().find((x) => x.address === (agent ?? self.terminal))?.labels?.["herdr.role"] === "coordinator";
     const space = isAssistant ? spaces().find((s) => s.tabs?.some((x) => x.id === self.tab)) : null;
-    const name = helperMode ? "Helper" : isAssistant ? spaceName(space, home()) : chatMode && p === self ? "Chat" : prog;
+    const name = isAssistant ? spaceName(space, home()) : chatMode && p === self ? "Chat" : prog;
     const pic = icon(p.program, 14, t.dim);
     const st = p.status;
     const pane = self.pane;
-    // Chat | Terminal | Helper belongs to the Coordinator only; worker panes keep their plain header.
+    // Chat | Terminal belongs to the Coordinator only; worker panes keep their plain header.
     const canSwitch = isAssistant;
-    // Only a Coordinator pane has the Helper page; other agents in the same space do not.
-    const canHelper = false;
     return h_flex()
       .id(`pane-head-${pane}`)
       .size_full()
@@ -480,17 +366,13 @@ export default class Pane extends View {
         .child(this.button(t, `ph-r-${pane}`, "split-right", "pane.split", { direction: "right", pane }))
         .child(this.button(t, `ph-d-${pane}`, "split-down", "pane.split", { direction: "down", pane }))
         .child(this.button(t, `ph-z-${pane}`, self.zoomed ? "unzoom" : "zoom", "pane.zoom", { pane }))
-        .when(!isAssistant && !helperMode, (el) => el.child(chatMode && entry
+        .when(!isAssistant, (el) => el.child(chatMode && entry
           ? this.button(t, `ph-x-${pane}`, "close", null, null, () => this.closeChat(pane))
           : this.button(t, `ph-x-${pane}`, "close", "pane.close", { pane }))))
       .when(canSwitch, (el) => el.child(this.switcher(`ph-mode-${pane}`, page,
-        // Chat: from a Coordinator terminal, the existing split/park swap; from Helper, target the Coordinator.
-        (cx) => (helperMode ? this.toCoordinatorChat(self, cx) : this.toChat(self, cx)),
-        // Terminal: from Chat, the existing swap; from Helper, target the Coordinator terminal.
-        (cx) => (helperMode ? this.toCoordinatorTerminal(self, cx)
-          : lazy && !agentOf(pane) ? setShared("collie-chat.startreq", { pane, at: Date.now() }) : this.toTerminal(pane, cx)),
-        (cx) => this.toHelper(self, cx),
-        canHelper)))
+        (cx) => this.toChat(self, cx),
+        // No agent yet: the chat starts it (no first message) and then shows its terminal (mods/collie-chat).
+        (cx) => (lazy && !agentOf(pane) ? setShared("collie-chat.startreq", { pane, at: Date.now() }) : this.toTerminal(pane, cx)))))
       // Coordinator header: jump to the persistent Helper tab.
       .when(isAssistant && Boolean(helper), (el) => el.child(h_flex().id(`ph-helper-${pane}`).h(24).px(8).flex_none().gap(5)
         .items_center().justify_center().rounded(RADIUS.control).cursor_pointer().text_color(t.dim)

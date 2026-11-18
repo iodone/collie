@@ -120,7 +120,8 @@ else
     # Claude takes the role template as a system prompt; other CLIs still get it as the first message.
     if [[ "$line" == claude* || "$line" == */claude\ * ]] && [[ "$line" != *"--append-system-prompt"* ]]; then
       [[ "$line" == *"--permission-mode"* ]] || line="$line --permission-mode auto"
-      line="$line --append-system-prompt $(printf '%q' "$body")"
+      body64=$(printf '%s' "$body" | base64 | tr -d '\n')
+      line="$line --append-system-prompt \"\$(printf %s '$body64' | base64 -d)\""
     else
       msg="$body"$'\n\n'"$handoff"
     fi
