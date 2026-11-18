@@ -102,11 +102,11 @@ bun "$ROOT/.local/share/collie/service/main.ts"
 ```
 
 `chat` 是 Coordinator chat 的 picker 记住的选择：下一次空 chat 从这里起步，首条消息按它启动。`model: null` 表示
-用 CLI 自己的默认模型（不加 `--model`）。它只属于聊天，和 headless coordinator 的 `everywhere.coordinator` 相互独立。
+用 CLI 自己的默认模型（不加 `--model`）。它只属于聊天，和 Coordinator helper 的 `everywhere.coordinator` 相互独立。
 
 space 配置覆盖 Everywhere；未配置有效 `cli` 时不会静默选择另一款 agent。CLI 只返回 Decision JSON，spawn、护栏和 delivery 仍由 service 执行。
 
-人的 New / Build、steering、回答 Card 都直接在 coordinator chat 里说；Inbox 只显示 `回复` 按钮，点击后把该 Work 的上下文发给 coordinator chat 并聚焦，由 LLM 先解释和建议。`collie-request` 仍保留为 API/channel 入口，不占机器 job turn 预算。`Decision.run.coordinator_ref` 保存会话引用，供 Card answer 恢复。没有配置 coordinator 时，New / Build 会明确报错，不会降级到 shepherdr Assistant。
+人的 New / Build、steering、回答 Card 都直接在 coordinator chat 里说；Inbox 只显示 `回复` 按钮，点击后把该 Work 的上下文发给 coordinator chat 并聚焦，由 LLM 先解释和建议。`collie-request` 仍保留为 API/channel 入口，不占 Coordinator helper 的 job 队列。`Decision.run.coordinator_ref` 保存会话引用，供 Card answer 恢复。没有配置 coordinator 时，New / Build 会明确报错，不会降级到 shepherdr Assistant。
 
 ## 状态与队列
 

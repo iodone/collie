@@ -26,7 +26,7 @@ flowchart TB
 ```
 
 - **Coordinator 是唯一判断者**：每 space 一个，没有第二个 dispatcher agent。
-- **两个输入面**：外部事件走 Ingress 到 Coordinator 的 headless job；人的对话直接进 Coordinator 的 chat。
+- **两个输入面**：外部事件走 Ingress 到 Coordinator helper；人的对话直接进 Coordinator 的 chat。
 - **一个出口**：Coordinator 的 Decision 只有两种执行形态——派 work，或发外部命令。
 
 ---
@@ -35,10 +35,10 @@ flowchart TB
 
 | 输入 | 路径 | 作用 |
 |:--|:--|:--|
-| **外部事件** | GitLab / GitHub / cron / bot IM → Ingress（验签、去重、归并、定 space）→ Coordinator 的 **job turn** | 机器事实进系统，由 Coordinator 判断 |
+| **外部事件** | GitLab / GitHub / cron / bot IM → Ingress（验签、去重、归并、定 space）→ Coordinator 的 **helper** | 机器事实进系统，由 Coordinator 判断 |
 | **人的对话** | UI / IM 里的人 → 直接进 Coordinator 的 **chat turn** | 新建、调整、叫停、回答、追问；**不经过 Ingress** |
 
-- chat turn 与 job turn 是同一个 Coordinator 的两种 session：chat 是人看得见的会话，job 是不打断 chat 的 headless 运行。
+- 每 space 一个 Coordinator；chat 是人看的会话，helper 是常驻的第二个 session，专门接收 ingress，不打断 chat。
 - 人的输入不套 Event 的 `dedupe / merge / hops / route`；它是对话，Coordinator 直接理解并行动。
 - **IM 的边界**：人发的 IM 是 chat；机器/bot 发的 IM 是外部事件。判断依据是 actor/channel 的语义，不是“IM 都算事件”。
 - **space 的边界**：外部事件由 source/channel 映射给出 space；人的 chat 所在的空间就是本次对话的 space。映射不出来的事件不猜，报配置错误并通知管理员。
@@ -115,10 +115,10 @@ Collie 的人对话是 Coordinator 的直接输入，不进 Ingress；这是有�
 
 ## 5. Coordinator 与 Policy
 
-**每 space 一个 Coordinator**，两种 session：
+**每 space 一个 Coordinator**，两个常驻 session：
 
 - **chat turn**：人看得见的会话；新建、steering、回答。
-- **job turn**：headless；处理外部事件，不打断 chat。
+- **helper**：常驻、可隐藏/可见；处理外部事件，不打断 chat。
 
 两者共用同一份 Ledger、policy 和 Work。
 
@@ -264,35 +264,16 @@ hc run --bg --json --keep --cwd <folder>
 3. agent 没有自己的 pane；`herdr.chat` 告诉所有 Herdr 客户端它被哪个 chat 显示。
 4. app 关闭/重启：Herdr 的 kept terminal 保留；`collie-chat` 通过 `herdr.chat.slot` / `herdr.chat.origin` 找回它，不新建 agent。
 
-### Coordinator helper：headless job 的正确形态
+### Coordinator helper：ingress 的唯一执行 session
 
-先纠正一个实现事实：**当前的 job runner 不是 Coordinator session**。
-
-```text
-service
-  → runCoordinator()
-  → spawn <claude -p | codex exec> 子进程
-  → 读 stdout，解析 Decision JSON
-  → service 写 Ledger
-```
-
-它：
-
-- 每次事件都由 service 直接 `spawn` 一次 `claude -p` / `codex exec`，**不经过 `hc run`**；
-- 没有 Herdr terminal、没有 `herdr.role`、没有 tab/pane；
-- 没有跨事件的会话记忆；
-- 只是复用 Coordinator 的 role prompt / policy / snapshot 的**一次性判断 worker**。
-
-`Off` 模式不要用 `hc`：`hc run` 会创建 terminal / label / 生命周期，正是我们要避免的；一次性的判断是普通 service 子进程，不需要 Herdr session。
-
-所以它不能被称为“同一个 Coordinator 的第二个 session”。如果要求一个持续、可观察、不会每事件重起的判断会话，应该改成 **Coordinator helper**：
+**不设计 headless/Off 模式。** 每个 space 的 ingress 全部投递到常驻的 Coordinator helper。
 
 ```text
-Coordinator chat (herdr.role=coordinator)
+Coordinator chat (herdr.role=coordinator, 人可见)
   └─ Coordinator helper (herdr.role=helper, parent=coordinator)
-       ├─ 常驻 terminal / session
-       ├─ 读同一份 collie-coordinator 提示词、policy、Ledger 快照
-       ├─ Ingress 的 job 进入其队列
+       ├─ 常驻 session，不每事件重起
+       ├─ 读同一份 collie-coordinator prompt / policy / Ledger 快照
+       ├─ Ingress 的 job 进入其串行队列
        ├─ 输出 proposed Decision JSON
        └─ service 校验并写 Ledger
 ```
@@ -301,31 +282,26 @@ Coordinator chat (herdr.role=coordinator)
 
 - helper **不是第二个 Coordinator**：不能写 Ledger、不能写 policy、不能独立 spawn task。
 - helper 使用 `herdr.role=helper`，不能使用 `herdr.role=coordinator`；一个 space 仍只有一个 Coordinator。
-- 输出由 service 校验；Decision 仍由 service/Coordinator 写。
+- 输出由 service 校验；Decision 仍由 service 写。
 - 主 chat 和 helper 都加载 policy；没有单独的 policy session。
 - helper 串行处理 job，避免同一 space 并发判断。
+- 主 chat 不接收 ingress；人只在自己的 chat 里对话和回答 Card。
 
 #### 可见性
 
-可以作为设置项：
-
 ```text
 Coordinator
-  Helper: Off (one-shot headless) | Hidden (persistent) | Visible (persistent pane)
+  Helper: Hidden (default) | Visible
 ```
 
 | 选项 | 设置说明 | 实现 |
 |:--|:--|:--|
-| **Off** | 每个 ingress 事件启动一次 codex/claude 子进程，不占 terminal，不打断 chat | service 直接 `spawn` CLI，不走 `hc` |
-| **Hidden** | 常驻 Coordinator helper，但没有 pane；ingress 都进它的队列 | `hc run` + `herdr.role=helper` + `parent=coordinator` |
-| **Visible** | 常驻 helper，并把它的 pane 放在 Coordinator tab / 右侧 pane | 同上，再创建可见 pane |
+| **Hidden** | 常驻 helper，但没有 pane；ingress 都进它的队列 | `hc run` + `herdr.role=helper` + `parent=coordinator`，无可见 pane |
+| **Visible** | 常驻 helper，并把 pane 放在 Coordinator tab / 右侧 pane | 同一个 helper，增加可见 pane |
 
-- 推荐默认 `Off`，需要持久记忆/观察时切 `Hidden`；`Visible` 只用于调试和观察。
-- `Off` 下主 chat 仍是人的通道；ingress 不会进入 chat。
+当前实现状态：`runCoordinator()` 仍是一次性 service 子进程，尚未迁移到常驻 helper。迁移完成后删除 one-shot 路径；`Helper` 设置只有 `Hidden / Visible`，没有 `Off`。
 
-当前 `collie-settings → Coordinator` 还没有这个开关；这是下一步实现项，不是现有行为。
-
-### worker / reviewer 的启动### worker / reviewer 的启动
+### worker / reviewer 的启动
 
 `collie-task launch()` 用 `hc run`，不让每个 task 占 tab：
 
