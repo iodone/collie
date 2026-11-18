@@ -17,7 +17,7 @@ flowchart TB
     C <--> L
   end
   subgraph INNER["内循环 · 执行与交付"]
-    D --> T["herdr-task<br/>worker / reviewer"]
+    D --> T["collie-task<br/>worker / reviewer"]
     T --> R["Receipt<br/>summary · details · proof"]
     R --> C
   end
@@ -61,8 +61,8 @@ steering 不产生新的 Work 状态，也不一定产生新 Decision；它写�
 |:--|:--|:--|
 | **Event** | 外部发生的事实；去重后不可变 | source / Ingress |
 | **Decision** | Coordinator 对一次事件的判断：做什么、为什么 | Coordinator |
-| **Work** | 一个 Decision 要求交付的工作，执行归 herdr-task | service / herdr-task |
-| **Receipt** | herdr-task `ready` 的 summary / details / proof + 风险 | herdr-task |
+| **Work** | 一个 Decision 要求交付的工作，执行归 collie-task | service / collie-task |
+| **Receipt** | collie-task `ready` 的 summary / details / proof + 风险 | collie-task |
 | **Policy** | 内置默认 policy + 用户可编辑的 per-space policy（自然语言） | 人；Coordinator 只能起草 |
 | **Ledger** | 只追加的事实日志；Decision、Work 投影、Receipt 都从它来 | service |
 
@@ -201,20 +201,34 @@ stateDiagram-v2
 
 - `kind=review` 只是 Working 的一个属性，不存在独立的 review 状态。
 - `kind=merge` 同理；合并是 Working 的一个阶段。
-- Todo 的 herdr-task 原因（`todo / queued / scheduled`）写在行内，不升为状态。
+- Todo 的 collie-task 原因（`queued / scheduled / todo`）写在行内，不升为状态。
 - **ack ≠ settled**：打开、展开都不结案；只有 Card answer 的 outcome 才结案。
 
-### 6.3 由 Decision 到 Work
+### 6.3 由 Decision + task 到 Work
 
-| Decision | Work |
-|:--|:--|
-| `open`，没有 agent 在跑 | **Todo** |
-| `open`，有 live worker / reviewer | **Working**（按 kind） |
-| `open`，失败重试中 | **Working**（行内显示重试） |
-| `waiting` | **Needs you** |
-| `settled` | **Settled** |
+Work/Ticket 不是第四个对象，也不是第二套持久状态机。它是下面三个输入的纯函数：
 
-Work 的状态是投影，不写回 Ledger；Decision 是唯一持久状态机。
+- `Decision.state`：`open / waiting / settled`
+- `task` 事实（`collie-task`）：`queued / scheduled / todo / running / ready / merging / done`
+- live agents：worker / reviewer / blocked
+
+| Decision | live / task | Ticket | 说明 |
+|:--|:--|:--|:--|
+| `settled` | 任意 | **Settled** | Decision 结案优先于 task 状态 |
+| `waiting` | 任意 | **Needs you** | 人持有下一步：提问、授权、验收、失败处理 |
+| `open` | live blocked | **Needs you** | agent 被阻塞，等人回答 |
+| `open` | live worker / reviewer | **Working** | `kind=build / review / merge` 只是行内属性 |
+| `open` | task `queued` / `scheduled` / `todo` | **Todo** | 没有 agent 在跑；排队原因写第二行 |
+| `open` | task `running` / `ready` / `merging` / `done` | **Working** | task 在跑或已交付，Decision 尚未结案 |
+| `open` | 有 `run.task_ref`，task 暂不可读 | **Working** | 远端/结束/未同步时保留 Work，不伪造 task |
+| `open` | 没有 task | 不是 Ticket | 例如 `ask` / `hold` / `emit_command` / `noop` |
+
+补充：
+
+- `Needs you` 的 `waiting` 与 task 的 `ready` 是两个维度：task 完成不等于验收完成；验收走 Card answer，Decision 才能 `settled`。
+- `Todo → Working → Needs you → Working` 是 Work 投影的流转，不是写回 Ledger 的状态机；底层 task 仍由 `collie-task` 维护。
+- **Ticket 必须有 Decision**。只有 `collie-task` 而没有 Decision 的孤儿 task 不进 Inbox；用 `collie-ticket adopt` 补一条 `actions: []` 的 Decision，不重复 spawn。
+- Work 的状态是投影，不写回 Ledger；Decision 是唯一持久状态机。
 
 ---
 
@@ -228,7 +242,7 @@ sequenceDiagram
   participant S as GitLab / GitHub / cron / bot IM
   participant I as Ingress
   participant C as Coordinator
-  participant T as herdr-task
+  participant T as collie-task
   participant E as Delivery
   participant U as 人
 
@@ -258,7 +272,7 @@ sequenceDiagram
   participant U as 人
   participant C as Coordinator（chat）
   participant L as Ledger
-  participant T as herdr-task
+  participant T as collie-task
 
   U->>C: 新建 / 改优先级 / 暂停 / 取消 / 追加指令 / 回答
   C->>L: 读最近的 Decision / Work
@@ -297,7 +311,7 @@ stateDiagram-v2
 
 ### 7.4 回执与验收
 
-- `herdr-task ready` 交回 Receipt。
+- `collie-task ready` 交回 Receipt。
 - `risk.auto_accept = true` → Decision `settled`，Work `Settled`。
 - `risk.auto_accept = false` → Decision `waiting` + accept Card，Work `Needs you`。
 - 人的回答：
@@ -405,7 +419,7 @@ Inbox 不是第二个操作台。每行右侧只有一个 **回复** 按钮：
 | 来源插件 | autoloop `plugins/github/source.ts`、`plugins/gitlab/source.ts` | 验签、归一、发 Event；来源自己连进来 | 按 type 直接匹配规则 |
 | 通道 / 卡片 / 投递 | autoloop `plugins/feishu/channel.ts`、`plugins/delivery/*` | 卡片发送、回答回调、投递重试与版本 | 把人的回答做成 Event |
 | 执行进程监督 | autoloop `worker/run.ts`、`worker/contract.ts` | 进程组、超时、退出判定、结果回交 | 10 态 run 状态机 |
-| Work 执行 | `vendor/herdr-task` + collie templates | 调 CLI；worktree、worker/reviewer、label、ready 三件套 | 不改任务状态；不接 shep Accept |
+| Work 执行 | `vendor/herdr-task`（CLI 名 `collie-task`）+ collie templates | 调 CLI；worktree、worker/reviewer、label、ready 三件套 | 不改任务状态；不接 shep Accept |
 | Coordinator 会话与恢复 | `vendor/herdr-task/herdr_task/revive.py` + `collie-task tick` | 原会话恢复、label、handover | 不复制 herdr 的 Assistant 交互 |
 | Task 头部与状态点 | shepherdr `mods/chat/panel.js`、`lib/dot.js`、`lib/ui.js` | 头部布局、segmented、task dot、光晕 | 不移植 Chat/Files/Changes/Browser |
 | 产物 | `mods/collie-artifacts/*`（`main.js` 列表 + `bar.js` viewer 工具栏）、`lib/artview.js`、`core/task-artifacts.js`、vendored `bin/collie-artifact` | 列表、viewer、版本、Mark up | 不需要 shepherdr 的 artifacts / task-artifacts mod |

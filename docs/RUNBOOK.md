@@ -25,7 +25,7 @@
 - collie 自带 vendored `collie-task` / `collie-artifact`，不要求安装 shepherdr 的 `tasks` / `chat` / `artifacts` add-on；
 - Inbox 使用独立 layout；Ticket 详情的 Terminal 用 herdr 的 terminal block，Artifacts 用 collie 自有的 `collie-artifacts`（列表与 viewer 工具栏同一个 mod）。
 
-安装器在写入前检查 bundled `collie-task`、`bun`、`git`；不再读取 shepherdr 的 `installed.json` 或 `herdr-task --version`。
+安装器在写入前检查 bundled `collie-task`、`bun`、`git`；不再读取 shepherdr 的 `installed.json`。
 
 ## 安装
 
@@ -169,7 +169,7 @@ Coordinator 参考 shepherdr 的 Assistant，但尽量只依赖 herdr-core：
 - 持续记录原 argv、cwd、session 和 log。
 - kept terminal 退回 shell 时，在同一 terminal 恢复原 session。
 - session log 不存在时新建 session，并带 handover，不伪造恢复成功。
-- 恢复由 `herdr-task tick` 触发：service 在时由 service 每 15 秒 tick；service 不在时窗口自己 tick。
+- 恢复由 `collie-task tick` 触发：service 在时由 service 每 15 秒 tick；service 不在时窗口自己 tick。
 - 普通关闭 Coordinator Tab 不能直接 `tab.settle`；有 worker 时问 stop/keep，无 worker 也只会关 tab。
 - 停止就是显式关闭 tab，或 `hc rm` 掉终端；没有 `collie coordinator stop`，因为 service 不做 auto-ensure。
 - 没有 `collie coordinator ensure`；终端被删后不自动重建，人重新打开 coordinator tab。
