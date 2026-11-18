@@ -1577,13 +1577,17 @@ export default class Chat extends View {
         let cmd = cmd0;
         if (body.trim() && cmd) {
           words = body.trim();
-          // Claude takes the role template as its system prompt, not as the first chat message. The
-          // one-off template keeps the body empty in that case: hc must not deliver it as user text.
+          oneOff = `herdr-${template}-${Date.now().toString(36)}`;
+          // Claude takes the role template as its system prompt, not as the first chat message. A
+          // shell-quoted multi-line prompt cannot live on the template's one-line `command:`; put it
+          // in a file and expand it at launch. The one-off template keeps the body empty.
+          let system = null;
           if (/(^|\s)claude(?:\s|$)/.test(cmd) && !/--(?:append-)?system-prompt/.test(cmd)) {
-            cmd = `${cmd} --append-system-prompt ${q(words)}`;
+            system = `${oneOff}.system`;
+            await exec("sh", ["-c", TEMPLATE + 'printf "%s" "$2" > "$dir/$1.md"', "x", system, words], on);
+            cmd = `${cmd} --append-system-prompt "$(cat "$HOME/.config/herdr-core/templates/${system}.md")"`;
             words = "";
           }
-          oneOff = `herdr-${template}-${Date.now().toString(36)}`;
           const file = `---\nname: ${oneOff}\ndescription: A one-off ${template} start with chosen settings (mods/collie-chat), removed after use.\ncommand: ${cleanCommand(cmd)}\n---\n${words}`;
           await exec("sh", ["-c", TEMPLATE + 'printf "%s" "$2" > "$dir/$1.md"', "x", oneOff, file], on);
           launch = oneOff;
@@ -1596,7 +1600,7 @@ export default class Chat extends View {
         ...(rec?.tab ? ["--label", `herdr.coordinator.tab=${String(rec.tab).split("/").pop()}`] : []),
         launch, ...(task ? [task] : [])];
       const r = await hc(args).catch((e) => ({ code: 1, stderr: String(e?.message ?? e), stdout: "" }));
-      if (oneOff) exec("sh", ["-c", TEMPLATE + 'rm -f "$dir/$1.md"', "x", oneOff], on);
+      if (oneOff) exec("sh", ["-c", TEMPLATE + 'rm -f "$dir/$1.md" "$dir/$1.system.md"', "x", oneOff], on);
       let out = {};
       try { out = JSON.parse(r.stdout || "{}"); } catch {}
       // hc waits to hand the agent its first message and gives up while the CLI shows a screen of
