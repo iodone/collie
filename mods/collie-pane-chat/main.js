@@ -16,7 +16,7 @@
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import {
-  props, run, theme, home, exec, hc, notify, nextCommand, shared, setShared,
+  props, run, theme, home, exec, hc, notify, nextCommand, shared, setShared, readTextFile,
   panes as livePanes, terminals as liveTerminals, spaces as liveSpaces,
 } from "herdr";
 
@@ -111,6 +111,20 @@ const roleIn = (self, role) => {
 };
 const coordinatorFor = (self) => roleIn(self, "coordinator");
 const helperFor = (self) => roleIn(self, "helper");
+const helperVisible = (cfg, space) => {
+  const id = String(space ?? "");
+  const local = cfg?.spaces?.[id]?.coordinator?.helper ?? cfg?.spaces?.[id]?.helper;
+  const everywhere = cfg?.everywhere?.coordinator?.helper ?? cfg?.everywhere?.helper;
+  return (local ?? everywhere) === "visible";
+};
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+async function waitPane(pred, ms = 1500) {
+  for (const end = Date.now() + ms; Date.now() < end; await sleep(50)) {
+    const found = panes().find(pred);
+    if (found) return found;
+  }
+  return null;
+}
 
 // One app command, waited for (the swap's steps must go in order).
 async function app(name, args) {
@@ -148,6 +162,18 @@ export default class Pane extends View {
   init(_props, cx) {
     this.hovered = false;
     this.busy = false;
+    // The Helper page is opt-in: follow Coordinator settings' helper = visible (default hidden).
+    this.helperCfg = null;
+    this.helperCfgRaw = null;
+    const loadHelper = async (cx) => {
+      const raw = await readTextFile(`${home()}/.local/state/collie/coordinator.json`).catch(() => null);
+      if (raw === this.helperCfgRaw) return;
+      this.helperCfgRaw = raw;
+      try { this.helperCfg = raw ? JSON.parse(raw) : null; } catch { this.helperCfg = null; }
+      cx.notify();
+    };
+    cx.spawn(async (cx) => { await loadHelper(cx); });
+    cx.timer.every(2000, (cx) => cx.spawn(async (cx) => { await loadHelper(cx); }));
     // A copy just started (the swap's new pane) may still be handed the toggle that made it: it would swap
     // straight back. Toggles go to copies at least 2 s old, one swap per 3 s.
     this.born = Date.now();
@@ -213,7 +239,7 @@ export default class Pane extends View {
     cx.spawn(async (cx) => {
       try {
         const out = await app("pane.split", { direction: "right", pane: p.pane, mod: CHAT, props: { terminal } });
-        if (!out.pane) throw new Error("Herdr didn't open the chat");
+        if (!out.pane || !(await waitPane((x) => x.pane === out.pane))) throw new Error("Herdr didn't open the chat");
         // The agent knows its chat: if that pane goes with its tab or space, the agents list ends the agent, as
         // closing its own pane would have.
         await hc(["label", terminal, `${LABEL}=${out.pane}`]);
@@ -248,6 +274,7 @@ export default class Pane extends View {
       try {
         await app("pane.focus", { pane: chat });
         await app("terminal.keep", { terminal, place: "right" });
+        if (!(await waitPane((x) => x.terminal === terminal))) throw new Error("Herdr didn't bring the terminal back");
         await hc(["label", terminal, `${LABEL}=`]);
         // Last: closing the chat removes this header too.
         await app("pane.close", { pane: chat });
@@ -272,6 +299,7 @@ export default class Pane extends View {
       try {
         await app("pane.focus", { pane: self.pane });
         await app("terminal.keep", { terminal: helper.address, place: "right" });
+        if (!(await waitPane((x) => x.terminal === helper.address))) throw new Error("Herdr didn't open the Helper page");
         // Last: removing the page we came from leaves the helper in the slot.
         if (self.mod === CHAT) await app("pane.close", { pane: self.pane });
         else if (self.terminal) await app("terminal.park", { terminal: self.terminal });
@@ -295,7 +323,7 @@ export default class Pane extends View {
       try {
         await app("pane.focus", { pane: self.pane });
         const out = await app("pane.split", { direction: "right", pane: self.pane, mod: CHAT, props: { terminal: coord.address } });
-        if (!out.pane) throw new Error("Herdr didn't open the chat");
+        if (!out.pane || !(await waitPane((x) => x.pane === out.pane))) throw new Error("Herdr didn't open the chat");
         await hc(["label", coord.address, `${LABEL}=${out.pane}`]);
         // Last: parking the helper removes this header together with its pane.
         if (helper) await app("terminal.park", { terminal: helper.address });
@@ -319,6 +347,7 @@ export default class Pane extends View {
       try {
         await app("pane.focus", { pane: self.pane });
         await app("terminal.keep", { terminal: coord.address, place: "right" });
+        if (!(await waitPane((x) => x.terminal === coord.address))) throw new Error("Herdr didn't bring the terminal back");
         if (helper) await app("terminal.park", { terminal: helper.address });
       } catch (e) {
         toast({ title: "Terminal didn't come back", body: plainError(e), level: "error" });
@@ -376,7 +405,7 @@ export default class Pane extends View {
     // Chat | Terminal | Helper belongs to the Coordinator only; worker panes keep their plain header.
     const canSwitch = isAssistant || helperMode;
     // Only a Coordinator pane has the Helper page; other agents in the same space do not.
-    const canHelper = (isAssistant || helperMode) && Boolean(coord && helper);
+    const canHelper = (isAssistant || helperMode) && Boolean(coord && helper) && helperVisible(this.helperCfg, spaceOf(self));
     return h_flex()
       .id(`pane-head-${pane}`)
       .size_full()
