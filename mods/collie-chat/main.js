@@ -3181,6 +3181,7 @@ export default class Chat extends View {
     const existing = panes().find((p) => p.terminal === h.address);
     if (existing) {
       run("tab.select", { id: existing.tab });
+      toast({ title: "Helper", body: "Switched to the Helper tab.", level: "info" });
       return;
     }
     // terminal.keep with no place opens a new tab. Ask the CLI so we get its tab id back and can
@@ -3190,9 +3191,15 @@ export default class Chat extends View {
         const r = await exec("herdr-app", ["do", "terminal.keep", "--terminal", h.address]);
         let out = {};
         try { out = JSON.parse(r.stdout || "{}"); } catch {}
-        if (out.error || !out.tab) throw new Error(out.error || r.stderr || "Herdr didn't create a Helper tab");
+        if (out.error || !out.tab) {
+          // The app command can be pending; if it did not return a tab, ask the app directly once.
+          run("terminal.keep", { terminal: h.address });
+          toast({ title: "Opening Helper", body: "The terminal.keep request is pending.", level: "info" });
+          return;
+        }
         run("tab.rename", { id: out.tab, name: "Helper" });
         run("tab.select", { id: out.tab });
+        toast({ title: "Helper opened", body: "New Helper tab.", level: "info" });
       } catch (e) {
         toast({ title: "Helper didn't open", body: String(e?.message ?? e), level: "error" });
       }

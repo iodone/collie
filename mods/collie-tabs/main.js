@@ -132,9 +132,8 @@ export default class Tabs extends View {
     const item = (c, i) => {
       const program = panes().find(p => p.tab === c.id && p.program?.agent)?.program ?? panes().find(p => p.tab === c.id)?.program;
       const name = tabName(c.name, program?.name);
-      // Coordinator and Helper tabs are permanent keep sessions: no close × on the tab.
-      const locked = isCoordinatorTab(c.id) || terminals().some((k) => k.labels?.["herdr.role"] === "helper"
-        && (k.labels?.["herdr.tab"] === c.id || panes().some((p) => p.tab === c.id && p.terminal === k.address)));
+      // Coordinator is permanent; Helper keeps its × (× parks it, it does not end the session).
+      const locked = isCoordinatorTab(c.id);
       return h_flex().id(`tab-${c.id}`).h(H.sm).px(8).gap(6).rounded(RADIUS.control).items_center().flex_none().text_size(TEXT.body)
         .border(1).border_color(c.active ? t.border : t.chrome).bg(c.active ? t.raised : t.chrome).text_color(c.active ? t.foreground : t.muted)
         .cursor_pointer().hover(s => s.bg(t.hover))
