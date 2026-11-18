@@ -117,9 +117,8 @@ const helperVisible = (cfg, space) => {
   const everywhere = cfg?.everywhere?.coordinator?.helper ?? cfg?.everywhere?.helper;
   return (local ?? everywhere) === "visible";
 };
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-async function waitPane(pred, ms = 1500) {
-  for (const end = Date.now() + ms; Date.now() < end; await sleep(50)) {
+async function waitPane(pred, cx, ms = 1500) {
+  for (const end = Date.now() + ms; Date.now() < end; await cx.sleep(50)) {
     const found = panes().find(pred);
     if (found) return found;
   }
@@ -239,7 +238,7 @@ export default class Pane extends View {
     cx.spawn(async (cx) => {
       try {
         const out = await app("pane.split", { direction: "right", pane: p.pane, mod: CHAT, props: { terminal } });
-        if (!out.pane || !(await waitPane((x) => x.pane === out.pane))) throw new Error("Herdr didn't open the chat");
+        if (!out.pane || !(await waitPane((x) => x.pane === out.pane, cx))) throw new Error("Herdr didn't open the chat");
         // The agent knows its chat: if that pane goes with its tab or space, the agents list ends the agent, as
         // closing its own pane would have.
         await hc(["label", terminal, `${LABEL}=${out.pane}`]);
@@ -274,7 +273,7 @@ export default class Pane extends View {
       try {
         await app("pane.focus", { pane: chat });
         await app("terminal.keep", { terminal, place: "right" });
-        if (!(await waitPane((x) => x.terminal === terminal))) throw new Error("Herdr didn't bring the terminal back");
+        if (!(await waitPane((x) => x.terminal === terminal, cx))) throw new Error("Herdr didn't bring the terminal back");
         await hc(["label", terminal, `${LABEL}=`]);
         // Last: closing the chat removes this header too.
         await app("pane.close", { pane: chat });
@@ -299,7 +298,7 @@ export default class Pane extends View {
       try {
         await app("pane.focus", { pane: self.pane });
         await app("terminal.keep", { terminal: helper.address, place: "right" });
-        if (!(await waitPane((x) => x.terminal === helper.address))) throw new Error("Herdr didn't open the Helper page");
+        if (!(await waitPane((x) => x.terminal === helper.address, cx))) throw new Error("Herdr didn't open the Helper page");
         // Last: removing the page we came from leaves the helper in the slot.
         if (self.mod === CHAT) await app("pane.close", { pane: self.pane });
         else if (self.terminal) await app("terminal.park", { terminal: self.terminal });
@@ -323,7 +322,7 @@ export default class Pane extends View {
       try {
         await app("pane.focus", { pane: self.pane });
         const out = await app("pane.split", { direction: "right", pane: self.pane, mod: CHAT, props: { terminal: coord.address } });
-        if (!out.pane || !(await waitPane((x) => x.pane === out.pane))) throw new Error("Herdr didn't open the chat");
+        if (!out.pane || !(await waitPane((x) => x.pane === out.pane, cx))) throw new Error("Herdr didn't open the chat");
         await hc(["label", coord.address, `${LABEL}=${out.pane}`]);
         // Last: parking the helper removes this header together with its pane.
         if (helper) await app("terminal.park", { terminal: helper.address });
@@ -347,7 +346,7 @@ export default class Pane extends View {
       try {
         await app("pane.focus", { pane: self.pane });
         await app("terminal.keep", { terminal: coord.address, place: "right" });
-        if (!(await waitPane((x) => x.terminal === coord.address))) throw new Error("Herdr didn't bring the terminal back");
+        if (!(await waitPane((x) => x.terminal === coord.address, cx))) throw new Error("Herdr didn't bring the terminal back");
         if (helper) await app("terminal.park", { terminal: helper.address });
       } catch (e) {
         toast({ title: "Terminal didn't come back", body: plainError(e), level: "error" });

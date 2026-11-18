@@ -117,7 +117,12 @@ else
   msg=$handoff
   if [ "$role" = coordinator ]; then
     body=$(awk 'f>=2 {print} /^---[[:space:]]*$/ {f++}' "$tpl")
-    msg="$body"$'\n\n'"$handoff"
+    # Claude takes the role template as a system prompt; other CLIs still get it as the first message.
+    if [[ "$line" == claude* || "$line" == */claude\ * ]] && [[ "$line" != *"--append-system-prompt"* ]]; then
+      line="$line --append-system-prompt $(printf '%q' "$body")"
+    else
+      msg="$body"$'\n\n'"$handoff"
+    fi
   fi
   # hc delivers a template's first message once the agent is ready, so the
   # handoff goes in a one-off template, removed once it has started.

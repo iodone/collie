@@ -1573,11 +1573,18 @@ export default class Chat extends View {
         const head = /^---\n([\s\S]*?)\n---\n?/.exec(src);
         const body = head ? src.slice(head[0].length) : src;
         const own = /^command:[ \t]*(.+)$/m.exec(head?.[1] ?? "")?.[1]?.trim();
-        const cmd = st?.agent && there ? agent.argvFor(st, { agent: null, argv: [] }).argv.map(q).join(" ") : own;
+        const cmd0 = st?.agent && there ? agent.argvFor(st, { agent: null, argv: [] }).argv.map(q).join(" ") : own;
+        let cmd = cmd0;
         if (body.trim() && cmd) {
           words = body.trim();
+          // Claude takes the role template as its system prompt, not as the first chat message. The
+          // one-off template keeps the body empty in that case: hc must not deliver it as user text.
+          if (/(^|\s)claude(?:\s|$)/.test(cmd) && !/--(?:append-)?system-prompt/.test(cmd)) {
+            cmd = `${cmd} --append-system-prompt ${q(words)}`;
+            words = "";
+          }
           oneOff = `herdr-${template}-${Date.now().toString(36)}`;
-          const file = `---\nname: ${oneOff}\ndescription: A one-off ${template} start with chosen settings (mods/collie-chat), removed after use.\ncommand: ${cleanCommand(cmd)}\n---\n${body}`;
+          const file = `---\nname: ${oneOff}\ndescription: A one-off ${template} start with chosen settings (mods/collie-chat), removed after use.\ncommand: ${cleanCommand(cmd)}\n---\n${words}`;
           await exec("sh", ["-c", TEMPLATE + 'printf "%s" "$2" > "$dir/$1.md"', "x", oneOff, file], on);
           launch = oneOff;
         }
@@ -1598,7 +1605,7 @@ export default class Chat extends View {
       // idle past that screen (follow()), so the Assistant never starts without its instructions.
       const late = (r.code !== 0 || !out.address) && this.slotAgent();
       if (late) out = { address: late, first_message: { sent: false } };
-      if (out.address && out.first_message?.sent === false && words) this.firstSend = [words, task].filter(Boolean).join("\n\n");
+      if (out.address && out.first_message?.sent === false && (words || task)) this.firstSend = [words, task].filter(Boolean).join("\n\n");
       if (r.code !== 0 && !late || !out.address) {
         p.failed = (r.stderr || r.stdout || "It didn't start.").trim();
         if (!msg) toast({ title: `The ${this.role === "coordinator" ? "Assistant" : this.role} didn't start`, body: p.failed, level: "error" });
