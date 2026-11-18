@@ -484,10 +484,11 @@ export default class Pane extends View {
         (cx) => this.toHelper(self, cx),
         canHelper)))
       // Coordinator header: jump to the persistent Helper tab.
-      .when(isAssistant && Boolean(helper), (el) => el.child(h_flex().id(`ph-helper-${pane}`).size(24).flex_none()
+      .when(isAssistant && Boolean(helper), (el) => el.child(h_flex().id(`ph-helper-${pane}`).h(24).px(8).flex_none().gap(5)
         .items_center().justify_center().rounded(RADIUS.control).cursor_pointer().text_color(t.dim)
         .hover((s) => s.bg(t.hover).text_color(t.foreground))
         .on_click((e, cx) => { cx.stop_propagation(); this.openHelperTab(helper.address, cx); cx.notify(); })
-        .child(svg("mods/collie-chrome/network.svg").size(14))));
+        .child(svg("mods/collie-chrome/robot.svg").size(14))
+        .child(div().text_size(TEXT.label).child("Helper"))));
   }
 }

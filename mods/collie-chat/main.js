@@ -3172,11 +3172,20 @@ export default class Chat extends View {
   // Open the persistent ingress Helper in its own tab. It is a real terminal; closing that tab parks it
   // instead of killing it (collie-tabs closeTab), so the session and its queue survive.
   openHelperTab(h, cx) {
-    const live = terminals().find((x) => x.address === h.address && x.state === "live");
+    let live = terminals().find((x) => x.address === h.address && x.state === "live");
+    // The row can outlive its helper (finished rows stay an hour). Bind it to the current live Helper
+    // in the same space instead of doing nothing on a dead address.
+    if (!live && h.role === "helper") {
+      const old = terminals().find((x) => x.address === h.address);
+      const space = old?.labels?.["herdr.job.space"] ?? old?.labels?.["herdr.space"];
+      live = terminals().find((x) => x.state === "live" && x.labels?.["herdr.role"] === "helper"
+        && (x.labels?.["herdr.job.space"] === space || x.labels?.["herdr.space"] === space)) ?? null;
+    }
     if (!live) {
       toast({ title: "Helper isn't running", body: "Start the Coordinator first.", level: "info" });
       return;
     }
+    h = { ...h, address: live.address };
     const existing = panes().find((p) => p.terminal === h.address);
     if (existing) {
       run("tab.select", { id: existing.tab });
