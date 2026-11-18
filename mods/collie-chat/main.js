@@ -1555,7 +1555,7 @@ export default class Chat extends View {
     cx.notify();
     cx.spawn(async (cx) => {
       // Chosen settings (the New space dialog, props.settings): the template's words with that
-      // agent and its flags, as a one-off template (as restart.sh does), written beside the
+      // agent and its flags, as a one-off template (as collie coordinator restart does), written beside the
       // template on the machine it runs on. There, an agent that isn't installed leaves the
       // template's own command (what that machine's sync put there).
       // Every start goes through a one-off (SHEP-86): its command first clears a parent Claude Code
