@@ -51,11 +51,12 @@ export default class TabMenu extends View {
         run("tab.new", { space: target.space });
         cx.notify();
       }, t))
-      .child(div().mx(7).my(4).h(1).bg(t.border))
-      .child(this.row("close", "Close", "mods/collie-tabs/win-close.svg", (cx) => {
-        setShared("collie.closeTabReq", { id: target.id, at: Date.now() });
-        closeOverlay(p.overlay);
-        cx.notify();
-      }, t));
+      .when(!target.locked, (el) => el
+        .child(div().mx(7).my(4).h(1).bg(t.border))
+        .child(this.row("close", "Close", "mods/collie-tabs/win-close.svg", (cx) => {
+          setShared("collie.closeTabReq", { id: target.id, at: Date.now() });
+          closeOverlay(p.overlay);
+          cx.notify();
+        }, t)));
   }
 }

@@ -3177,10 +3177,10 @@ export default class Chat extends View {
       toast({ title: "Helper isn't running", body: "Start the Coordinator first; the Helper starts with it.", level: "info" });
       return;
     }
+    // This is a tab operation: an existing Helper pane means select its tab, never a pane split.
     const existing = panes().find((p) => p.terminal === h.address);
     if (existing) {
       run("tab.select", { id: existing.tab });
-      run("pane.focus", { pane: existing.pane });
       return;
     }
     // terminal.keep with no place opens a new tab. Ask the CLI so we get its tab id back and can
@@ -3193,7 +3193,6 @@ export default class Chat extends View {
         if (out.error || !out.tab) throw new Error(out.error || r.stderr || "Herdr didn't create a Helper tab");
         run("tab.rename", { id: out.tab, name: "Helper" });
         run("tab.select", { id: out.tab });
-        if (out.pane) run("pane.focus", { pane: out.pane });
       } catch (e) {
         toast({ title: "Helper didn't open", body: String(e?.message ?? e), level: "error" });
       }
