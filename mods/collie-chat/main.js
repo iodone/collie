@@ -3163,20 +3163,29 @@ export default class Chat extends View {
         .children(said === undefined ? [div().text_size(12).text_color(t.dim).child("Loading…")]
           : said.map((w) => div().w_full().pl(8).border_l(2).border_color(t.border).text_size(12).text_color(t.muted).child(w.length > 400 ? w.slice(0, 399) + "…" : w)))
         .when(Boolean(now) || (said !== undefined && !said.length), (el) => el.child(div().w_full().truncate().text_size(11.5).text_color(t.dim).child(now || "Nothing said yet.")))
-        .child(h_flex().child(this.button(`sub-open-${h.address}`, h.role === "helper" && (this.role === "coordinator" || this.t?.labels?.["herdr.role"] === "coordinator") ? "Open Helper" : WORDS.subOpen,
-          "mods/collie-chat/arrow-right.svg", "secondary", t, () => {
-            // The persistent ingress Helper has its own page in the Coordinator pane, not a thread dialog.
-            if (h.role === "helper" && (this.role === "coordinator" || this.t?.labels?.["herdr.role"] === "coordinator")) {
-              this.openHelperTab(h, cx);
-              return;
-            }
-            openOverlay({ mod: "collie-chat", kind: "dialog", width: 760, height: 0.85, props: { terminal: h.address, thread: true, title: h.label } });
-          }))));
+        .child((() => {
+          const helper = h.role === "helper";
+          const label = helper ? "Open Helper" : WORDS.subOpen;
+          // Mouse-down as well as click: a row inside the scroll list can swallow click delivery.
+          const act = (e, cx) => {
+            cx.stop_propagation();
+            if (helper) this.openHelperTab(h, cx);
+            else openOverlay({ mod: "collie-chat", kind: "dialog", width: 760, height: 0.85, props: { terminal: h.address, thread: true, title: h.label } });
+            cx.notify();
+          };
+          return h_flex().id(`sub-open-${h.address}`).h(28).flex_none().gap(6).items_center().rounded(7).cursor_pointer().text_size(12.5).font_medium()
+            .pl(7).pr(10).border_1().border_color(t.input).bg(t.background).text_color(t.foreground).hover((s) => s.bg(t.hover))
+            .on_mouse_down("left", act).on_click(act)
+            .child(svg("mods/collie-chat/arrow-right.svg").size(14).flex_none()).child(label);
+        })()));
   }
 
   // Open the persistent ingress Helper in its own tab. It is a real terminal; closing that tab parks it
   // instead of killing it (collie-tabs closeTab), so the session and its queue survive.
   openHelperTab(h, cx) {
+    const now = Date.now();
+    if (now - (this.helperOpenAt ?? 0) < 600) return;
+    this.helperOpenAt = now;
     toast({ title: "Helper", body: "Opening the Helper tab…", level: "info" });
     let live = terminals().find((x) => x.address === h.address && x.state === "live");
     // The row can outlive its helper (finished rows stay an hour). Bind it to the current live Helper
