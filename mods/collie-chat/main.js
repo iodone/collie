@@ -3146,13 +3146,39 @@ export default class Chat extends View {
           "mods/collie-chat/arrow-right.svg", "secondary", t, () => {
             // The persistent ingress Helper has its own page in the Coordinator pane, not a thread dialog.
             if (h.role === "helper" && (this.role === "coordinator" || this.t?.labels?.["herdr.role"] === "coordinator")) {
-              const pane = this.myPane();
-              const tab = panes().find((p) => p.pane === pane)?.tab ?? null;
-              setShared("collie-pane-chat.page", { page: "helper", pane, tab, at: Date.now() });
+              this.openHelperTab(h, cx);
               return;
             }
             openOverlay({ mod: "collie-chat", kind: "dialog", width: 760, height: 0.85, props: { terminal: h.address, thread: true, title: h.label } });
           }))));
+  }
+
+  // Open the persistent ingress Helper in its own tab. It is a real terminal; closing that tab parks it
+  // instead of killing it (collie-tabs closeTab), so the session and its queue survive.
+  openHelperTab(h, cx) {
+    const existing = panes().find((p) => p.terminal === h.address);
+    if (existing) {
+      run("tab.select", { id: existing.tab });
+      run("pane.focus", { pane: existing.pane });
+      return;
+    }
+    cx.spawn(async (cx) => {
+      try {
+        const r = await exec("herdr-app", ["do", "terminal.keep", "--terminal", h.address]);
+        let out = {};
+        try { out = JSON.parse(r.stdout || "{}"); } catch {}
+        const pane = out.pane ? panes().find((p) => p.pane === out.pane) : null;
+        const tab = out.tab ?? pane?.tab ?? panes().find((p) => p.terminal === h.address)?.tab;
+        if (tab) {
+          run("tab.rename", { id: tab, name: "Helper" });
+          run("tab.select", { id: tab });
+        }
+        if (pane) run("pane.focus", { pane: pane.pane });
+        else if (out.pane) run("pane.focus", { pane: out.pane });
+      } catch (e) {
+        toast({ title: "Helper didn't open", body: String(e?.message ?? e), level: "error" });
+      }
+    });
   }
 
   // A subagent's last two messages, from its own session log (core/chat-reader.js, as the web's service reads it).

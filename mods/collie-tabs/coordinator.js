@@ -470,6 +470,14 @@ export function closeTab(tabId) {
     openOverlay({ mod: "collie-close", kind: "dialog", width: 440, height: 336, props: { tab: tabId, coord: c.address } });
     return;
   }
+  // A Helper tab is a view of a persistent ingress session: park it first, so closing the tab never kills it.
+  const helper = terminals().find((k) => k.labels?.["herdr.role"] === "helper"
+    && (k.labels?.["herdr.tab"] === tabId || panes().some((p) => p.tab === tabId && p.terminal === k.address)));
+  if (helper) {
+    // Parking the only pane closes the tab; the helper terminal itself keeps running.
+    run("terminal.park", { terminal: helper.address });
+    return;
+  }
   const space = allSpaces().find((s) => s.tabs.some((x) => x.id === tabId));
   if (space?.tabs.length === 1) return closeSpace(space.id);
   run("tab.close", { id: tabId });

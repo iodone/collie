@@ -90,7 +90,7 @@ bun "$ROOT/.local/share/collie/service/main.ts"
 ```json
 {
   "everywhere": {
-    "coordinator": { "cli": "codex", "model": "default", "effort": "high", "helper": "hidden" }
+    "coordinator": { "cli": "claude", "model": "default", "effort": "high" }
   },
   "spaces": {
     "collie": {
@@ -149,7 +149,7 @@ collie-secret names --json                               # 只有名字、why、
 collie-secret rm GITHUB_TOKEN
 ```
 
-- `helper` 只有 `hidden` / `visible`：`helper` terminal 存活时，Coordinator pane 的 `Chat | Terminal | Helper` 会出现 Helper 页；切到 Helper 时 helper 占用当前 pane slot，切走时回到 parked（继续接收 ingress）。没有 `off`。space 下的 `coordinator.helper` 覆盖 Everywhere。
+- Coordinator pane 只有 `Chat | Terminal`。Coordinator chat 的 Helper 行显示 ingress helper 状态；`Open Helper` 打开独立 tab。关闭该 tab 先 `terminal.park`，session 与 ingress 队列继续运行。Settings 不再提供 Helper 配置。
 - helper 的 job / Decision 在 `$HOME/.local/state/collie/helper/<space>/{jobs,decisions}/`；这是交互式 agent 没有 stdout 时的文件 IPC。service 校验 Decision 后写 Ledger，helper 自己不能写 Ledger/policy，也不能直接 spawn。
 - 找不到 Coordinator terminal、helper 启动失败或 120 秒内没有 Decision 时，事件变成 waiting Card；不会退回每个事件起一次 CLI。
 - `ask` 只把 `collie.secret.ask.NAME=<why>` 留在该终端上；chat 的卡片（`mods/collie-chat/secret-card.js`）保存后回报 agent「Kept: NAME」，agent 再按名字用。

@@ -402,9 +402,9 @@ export default class Pane extends View {
     const st = p.status;
     const pane = self.pane;
     // Chat | Terminal | Helper belongs to the Coordinator only; worker panes keep their plain header.
-    const canSwitch = isAssistant || helperMode;
+    const canSwitch = isAssistant;
     // Only a Coordinator pane has the Helper page; other agents in the same space do not.
-    const canHelper = (isAssistant || helperMode) && Boolean(coord && helper) && helperVisible(this.helperCfg, spaceOf(self));
+    const canHelper = false;
     return h_flex()
       .id(`pane-head-${pane}`)
       .size_full()
