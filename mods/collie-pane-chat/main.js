@@ -151,6 +151,15 @@ export default class Pane extends View {
     // A copy just started (the swap's new pane) may still be handed the toggle that made it: it would swap
     // straight back. Toggles go to copies at least 2 s old, one swap per 3 s.
     this.born = Date.now();
+    // A Helper row in the chat asks this pane to show its Helper page (shared "collie-pane-chat.page").
+    cx.timer.every(200, (cx) => {
+      const req = shared("collie-pane-chat.page");
+      if (!req || Date.now() - (req.at ?? 0) > 3000) return;
+      const self = this.me();
+      if (!self || (req.pane && self.pane !== req.pane) || (req.tab && self.tab !== req.tab)) return;
+      setShared("collie-pane-chat.page", null);
+      if (req.page === "helper") this.toHelper(self, cx);
+    });
     // "collie-pane-chat.toggle" (a key, or `herdr-app do`): the focused pane switches. At most 5 s per wait (one
     // pending nextCommand), so a reload's old build ends at its next cx use instead of staying in memory.
     cx.spawn(async (cx) => {

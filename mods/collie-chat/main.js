@@ -3135,8 +3135,17 @@ export default class Chat extends View {
         .children(said === undefined ? [div().text_size(12).text_color(t.dim).child("Loading…")]
           : said.map((w) => div().w_full().pl(8).border_l(2).border_color(t.border).text_size(12).text_color(t.muted).child(w.length > 400 ? w.slice(0, 399) + "…" : w)))
         .when(Boolean(now) || (said !== undefined && !said.length), (el) => el.child(div().w_full().truncate().text_size(11.5).text_color(t.dim).child(now || "Nothing said yet.")))
-        .child(h_flex().child(this.button(`sub-open-${h.address}`, WORDS.subOpen, "mods/collie-chat/arrow-right.svg", "secondary", t, () =>
-          openOverlay({ mod: "collie-chat", kind: "dialog", width: 760, height: 0.85, props: { terminal: h.address, thread: true, title: h.label } })))));
+        .child(h_flex().child(this.button(`sub-open-${h.address}`, h.role === "helper" && (this.role === "coordinator" || this.t?.labels?.["herdr.role"] === "coordinator") ? "Open Helper" : WORDS.subOpen,
+          "mods/collie-chat/arrow-right.svg", "secondary", t, () => {
+            // The persistent ingress Helper has its own page in the Coordinator pane, not a thread dialog.
+            if (h.role === "helper" && (this.role === "coordinator" || this.t?.labels?.["herdr.role"] === "coordinator")) {
+              const pane = this.myPane();
+              const tab = panes().find((p) => p.pane === pane)?.tab ?? null;
+              setShared("collie-pane-chat.page", { page: "helper", pane, tab, at: Date.now() });
+              return;
+            }
+            openOverlay({ mod: "collie-chat", kind: "dialog", width: 760, height: 0.85, props: { terminal: h.address, thread: true, title: h.label } });
+          }))));
   }
 
   // A subagent's last two messages, from its own session log (core/chat-reader.js, as the web's service reads it).
