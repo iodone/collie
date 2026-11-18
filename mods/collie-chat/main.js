@@ -3145,7 +3145,17 @@ export default class Chat extends View {
     const head = h_flex().id(`sub-${h.address}`).w_full().h(24).px(6).gap(8).items_center().rounded(6).cursor_pointer().text_size(12)
       .when(on, (el) => el.bg(t.hover))
       .hover((s) => s.bg(t.hover))
-      .on_click((_e, cx) => { cx.stop_propagation(); if (h.ended) return; this.jobOpen = on ? null : h.id; if (!on) this.subagentWords(h.address, cx); cx.notify(); })
+      .on_click((_e, cx) => {
+        cx.stop_propagation();
+        if (h.ended) return;
+        if (h.role === "helper" && (this.role === "coordinator" || this.t?.labels?.["herdr.role"] === "coordinator")) {
+          this.openHelperTab(h, cx);
+          return;
+        }
+        this.jobOpen = on ? null : h.id;
+        if (!on) this.subagentWords(h.address, cx);
+        cx.notify();
+      })
       .child(icon)
       .child(div().min_w(0).truncate().font_medium().text_color(t.foreground).child(h.label))
       .child(div().flex_none().text_color(h.status === "needs" ? red(t) : t.dim).child(word))
