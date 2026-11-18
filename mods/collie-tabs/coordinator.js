@@ -467,7 +467,9 @@ export const restartAgent = (k, argv) => script("restart", argv ? [k.address, JS
 export function closeTab(tabId) {
   const c = coordinatorIn(tabId);
   if (c) {
-    openOverlay({ mod: "collie-close", kind: "dialog", width: 440, height: 336, props: { tab: tabId, coord: c.address } });
+    // × hides the Coordinator; it does not end the session. terminal.park keeps the process live
+    // (and, when this was its only pane, closes the tab).
+    run("terminal.park", { terminal: c.address });
     return;
   }
   // A Helper tab is a view of a persistent ingress session: park it first, so closing the tab never kills it.

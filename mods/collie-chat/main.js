@@ -3162,23 +3162,10 @@ export default class Chat extends View {
       run("pane.focus", { pane: existing.pane });
       return;
     }
-    cx.spawn(async (cx) => {
-      try {
-        const r = await exec("herdr-app", ["do", "terminal.keep", "--terminal", h.address]);
-        let out = {};
-        try { out = JSON.parse(r.stdout || "{}"); } catch {}
-        const pane = out.pane ? panes().find((p) => p.pane === out.pane) : null;
-        const tab = out.tab ?? pane?.tab ?? panes().find((p) => p.terminal === h.address)?.tab;
-        if (tab) {
-          run("tab.rename", { id: tab, name: "Helper" });
-          run("tab.select", { id: tab });
-        }
-        if (pane) run("pane.focus", { pane: pane.pane });
-        else if (out.pane) run("pane.focus", { pane: out.pane });
-      } catch (e) {
-        toast({ title: "Helper didn't open", body: String(e?.message ?? e), level: "error" });
-      }
-    });
+    // terminal.keep with no place opens a new tab; Herdr focuses it. No exec round-trip here: the
+    // command runs in the app, so a click cannot fail on PATH/stdio.
+    run("terminal.keep", { terminal: h.address });
+    cx.notify();
   }
 
   // A subagent's last two messages, from its own session log (core/chat-reader.js, as the web's service reads it).
