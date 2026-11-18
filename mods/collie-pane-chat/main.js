@@ -256,15 +256,21 @@ export default class Pane extends View {
   // Chat → Terminal: the agent's terminal gets a pane beside the chat, then the chat closes, so the terminal is back
   // in the same spot.
   toTerminal(chat, cx) {
-    const terminal = agentOf(chat);
+    const pane = panes().find((x) => x.pane === chat);
+    // A Coordinator chat can be attached to the space's coordinator without carrying herdr.chat in
+    // every reload path: fall back to the Coordinator terminal rather than closing the chat with no target.
+    const terminal = agentOf(chat) ?? (this.role === "coordinator" && pane ? coordinatorFor(pane)?.address : null) ?? null;
     const live = Boolean(terminal);
-    // Not running, or still in a pane of its own (a chat opened beside it): just close the chat.
+    // Still in a pane of its own (a chat opened beside it): just close the chat. With no terminal at
+    // all, keep the chat: closing it would empty the tab.
     const own = live && panes().find((x) => x.terminal === terminal);
-    if (!live || own) {
+    if (!live) { toast({ title: "No terminal yet", body: "Start the Coordinator first.", level: "info" }); return; }
+    if (own) {
       const zoomed = panes().find((x) => x.pane === chat)?.zoomed;
       run("pane.close", { pane: chat });
-      if (terminal) hc(["label", terminal, `${LABEL}=`]);
-      if (own) { if (zoomed && own.zoomed) run("pane.zoom", { pane: own.pane }); run("pane.focus", { pane: own.pane }); }
+      hc(["label", terminal, `${LABEL}=`]);
+      if (zoomed && own.zoomed) run("pane.zoom", { pane: own.pane });
+      run("pane.focus", { pane: own.pane });
       return;
     }
     if (this.busy) return;

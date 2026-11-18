@@ -71,7 +71,7 @@ describe("Coordinator helper terminal", () => {
     expect(helperCliArgs({ cli: "codex", model: "gpt-5", effort: "high" }))
       .toEqual(["codex", "--model", "gpt-5", "-c", 'model_reasoning_effort="high"', "--no-daemon", "--sandbox", "workspace-write", "--ask-for-approval", "on-request"]);
     expect(helperCliArgs({ cli: "claude", model: "default", effort: "medium" }))
-      .toEqual(["claude", "--effort", "medium", "--permission-mode", "acceptEdits"]);
+      .toEqual(["claude", "--effort", "medium", "--permission-mode", "auto"]);
     expect(helperCliArgs({ cli: "codex", model: "default" }, "/state"))
       .toContain("--add-dir");
     expect(helperCliArgs({ cli: "codex", model: "default" }, "/state").slice(-2)).toEqual(["--add-dir", "/state"]);

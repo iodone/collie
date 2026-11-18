@@ -87,7 +87,7 @@ export function helperCliArgs(config: CoordinatorConfig, stateDir?: string): str
     "claude",
     ...(config.model && config.model !== "default" ? ["--model", config.model] : []),
     ...(config.effort ? ["--effort", config.effort] : []),
-    "--permission-mode", "acceptEdits",
+    "--permission-mode", "auto",
     ...addDir,
   ];
 }

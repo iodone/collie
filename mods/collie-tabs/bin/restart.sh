@@ -119,6 +119,7 @@ else
     body=$(awk 'f>=2 {print} /^---[[:space:]]*$/ {f++}' "$tpl")
     # Claude takes the role template as a system prompt; other CLIs still get it as the first message.
     if [[ "$line" == claude* || "$line" == */claude\ * ]] && [[ "$line" != *"--append-system-prompt"* ]]; then
+      [[ "$line" == *"--permission-mode"* ]] || line="$line --permission-mode auto"
       line="$line --append-system-prompt $(printf '%q' "$body")"
     else
       msg="$body"$'\n\n'"$handoff"

@@ -163,7 +163,7 @@ export async function openCoordinator(space, show = true, settings = null) {
   }
   const slot = `coord-${space.id}-${Math.random().toString(36).slice(2, 10)}`;
   settings = settings.agent
-    ? { ...settings, perm: settings.perm ?? (settings.agent === "claude" ? "plan" : "read-only") }
+    ? { ...settings, perm: settings.perm ?? "auto" }
     : null;
   if (!settings) {
     toast({ title: "Configure Inbox Coordinator first", body: "Open Collie settings and choose Codex or Claude.", level: "error" });
