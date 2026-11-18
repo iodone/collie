@@ -278,10 +278,12 @@ service
 
 它：
 
-- 每次事件都起一个新的 CLI 进程；
-- 没有 Herdr terminal、没有 `herdr.role`；
+- 每次事件都由 service 直接 `spawn` 一次 `claude -p` / `codex exec`，**不经过 `hc run`**；
+- 没有 Herdr terminal、没有 `herdr.role`、没有 tab/pane；
 - 没有跨事件的会话记忆；
 - 只是复用 Coordinator 的 role prompt / policy / snapshot 的**一次性判断 worker**。
+
+`Off` 模式不要用 `hc`：`hc run` 会创建 terminal / label / 生命周期，正是我们要避免的；一次性的判断是普通 service 子进程，不需要 Herdr session。
 
 所以它不能被称为“同一个 Coordinator 的第二个 session”。如果要求一个持续、可观察、不会每事件重起的判断会话，应该改成 **Coordinator helper**：
 
@@ -309,12 +311,17 @@ Coordinator chat (herdr.role=coordinator)
 
 ```text
 Coordinator
-  Helper: Off (one-shot headless) | Persistent (hidden) | Persistent (visible)
+  Helper: Off (one-shot headless) | Hidden (persistent) | Visible (persistent pane)
 ```
 
-- `Off`：保留当前一次性 headless runner；
-- `Persistent (hidden)`：常驻 helper terminal，但没有 pane，不打断 chat；
-- `Persistent (visible)`：在 Coordinator tab 下开一个 helper pane，或放入右侧 pane；只显示 helper，不新增 Coordinator。
+| 选项 | 设置说明 | 实现 |
+|:--|:--|:--|
+| **Off** | 每个 ingress 事件启动一次 codex/claude 子进程，不占 terminal，不打断 chat | service 直接 `spawn` CLI，不走 `hc` |
+| **Hidden** | 常驻 Coordinator helper，但没有 pane；ingress 都进它的队列 | `hc run` + `herdr.role=helper` + `parent=coordinator` |
+| **Visible** | 常驻 helper，并把它的 pane 放在 Coordinator tab / 右侧 pane | 同上，再创建可见 pane |
+
+- 推荐默认 `Off`，需要持久记忆/观察时切 `Hidden`；`Visible` 只用于调试和观察。
+- `Off` 下主 chat 仍是人的通道；ingress 不会进入 chat。
 
 当前 `collie-settings → Coordinator` 还没有这个开关；这是下一步实现项，不是现有行为。
 
