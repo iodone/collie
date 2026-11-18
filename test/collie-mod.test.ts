@@ -80,6 +80,8 @@ describe("mods/collie-inbox pure queue projection", () => {
     expect(ticketStage({ ...base, state: "open" }, { state: "running" }, { worker: true, reviewer: true })).toBe("working");
     expect(ticketStage({ ...base, state: "open" }, { state: "running" }, { worker: true, blocked: true })).toBe("needs");
     expect(ticketStage({ ...base, state: "open", run: { task_ref: "HAT-42" } }, null)).toBe("working");
+    expect(ticketStage({ ...base, state: "open", run: { task_ref: "HAT-42" } }, { state: "queued" })).toBe("todo");
+    expect(ticketStage({ ...base, state: "open", run: { task_ref: "HAT-42" } }, { state: "scheduled" })).toBe("todo");
     expect(ticketStage({ ...base, state: "settled", settled: { at: "2026-11-13T11:00:00Z" } }, null)).toBe("settled");
     expect(Object.keys(STAGE_WORD)).toEqual(["needs", "todo", "working", "settled"]);
     expect(ticketNeed({ ...base, receipt_ref: "rc_stage" })).toBe("ready");

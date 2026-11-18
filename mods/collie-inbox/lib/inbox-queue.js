@@ -78,9 +78,11 @@ export function ticketStage(decision, target, live = {}) {
   if (state === "waiting") return "needs";
   if (live.blocked) return "needs";
   if (live.reviewer || live.worker) return "working";
+  const task = String(target?.state ?? "");
+  // A readable queued/scheduled/todo task is still Todo, even though the Decision has a task_ref.
+  if (["queued", "scheduled", "todo"].includes(task)) return "todo";
   // A task_ref without a readable task (remote, ended, or a seeded ticket) still means a Work ran.
   if (decision?.run?.task_ref) return "working";
-  const task = String(target?.state ?? "");
   if (["running", "ready", "merging", "done"].includes(task)) return "working";
   return "todo";
 }

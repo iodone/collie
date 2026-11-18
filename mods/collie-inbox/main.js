@@ -146,7 +146,34 @@ function openTicket(decision, target, receipt, cx) {
   if (live && !ready) cx.spawn(async (cx) => { await showTerminal(cx); cx.notify(); });
 }
 
-async function navigation(decisions) {
+async function loadTasks() {
+  try {
+    const result = await exec(CLI(), ["list", "--all", "--json", "--slim"]);
+    return result.code === 0 ? JSON.parse(result.stdout || "[]") : [];
+  } catch { return []; }
+}
+
+// A task the coordinator started directly (collie-task) has no Decision. Project it as a
+// synthetic ticket so Inbox still shows it; real Decisions win when both name the same task.
+function taskDecisions(groups, decisions) {
+  const known = new Set(decisions.map((d) => d.run?.task_ref).filter(Boolean));
+  const out = [];
+  for (const group of groups) {
+    for (const task of group.tasks ?? []) {
+      if (!task?.key || known.has(task.key) || task.archived || task.state === "done") continue;
+      out.push({
+        id: `task:${task.key}`, key: task.key, space: task.space ?? null, state: "open",
+        run: { task_ref: task.key, kind: task.review_gate ? "review" : "build" },
+        why: task.reason ?? task.status_text ?? `Task ${task.ref ?? task.id}`,
+        decided_at: task.created ?? task.started ?? Date.now(),
+        synthetic: true,
+      });
+    }
+  }
+  return out;
+}
+
+async function navigation(decisions, groups = null) {
   const linked = decisions.filter((d) => d.receipt_ref || d.run?.task_ref);
   if (!linked.length) return new Map();
   const receipts = await Promise.all(linked.map(async (decision) => {
@@ -156,11 +183,7 @@ async function navigation(decisions) {
     }
     return { decision_ref: decision.id, task: { id: decision.run.task_ref } };
   }));
-  let groups = [];
-  try {
-    const result = await exec(CLI(), ["list", "--all", "--json", "--slim"]);
-    if (result.code === 0) groups = JSON.parse(result.stdout || "[]");
-  } catch { groups = []; }
+  groups ??= await loadTasks();
   const entries = await Promise.all(linked.map(async (decision, i) => {
     const receipt = receipts[i];
     let target = taskTarget(decision, receipt, groups);
@@ -190,7 +213,8 @@ function filterAction(id, label, selected, onClick, t) {
     .child(label);
 }
 
-function ticketRef(decision) {
+function ticketRef(decision, target = null) {
+  if (target?.ref) return String(target.ref).toUpperCase();
   const taskRef = decision.run?.task_ref;
   if (taskRef && /-\d+$/.test(taskRef)) return taskRef.toUpperCase();
   const numeric = Number(String(decision.id).replace(/\D/g, "")) || 0;
@@ -301,8 +325,10 @@ export default class Inbox extends View {
     this.loading = true;
     cx.spawn(async (cx) => {
       try {
-        this.decisions = parseQueue(await readTextFile(queuePath(home())));
-        const links = await navigation(this.decisions);
+        const queued = parseQueue(await readTextFile(queuePath(home())));
+        const groups = await loadTasks();
+        this.decisions = [...queued, ...taskDecisions(groups, queued)];
+        const links = await navigation(this.decisions, groups);
         this.targets = new Map([...links].map(([id, value]) => [id, value.target]));
         this.receipts = new Map([...links].map(([id, value]) => [id, value.receipt]));
         this.staged = this.decisions.map((decision) => ({
@@ -425,7 +451,7 @@ export default class Inbox extends View {
         .child(h().h(20).min_w(0).items_center()
           .child(div().flex_1().min_w(0).truncate().text_color(stage === "settled" ? t.muted : t.foreground).child(title)))
         .child(h().h(16).min_w(0).gap(6).items_center().text_size(12)
-          .child(div().flex_none().font_family(ID_FONT).text_size(11).text_color(t.dim).child(ticketRef(decision)))
+          .child(div().flex_none().font_family(ID_FONT).text_size(11).text_color(t.dim).child(ticketRef(decision, target)))
           .child(stateChip(t, stage, need, kind, decision.settled?.outcome))
           .child(div().flex_shrink_1().min_w(0).truncate().text_color(t.muted).child(reason ?? ""))
           .when(!bare, (el) => el.child(div().flex_shrink(1000).min_w(0).truncate().text_color(t.dim).child(`· ${decision.space}`)))))
