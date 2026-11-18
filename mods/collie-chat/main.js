@@ -3058,7 +3058,12 @@ export default class Chat extends View {
   background(t, st, rcx) {
     const now = Date.now();
     // its own helper agents in herdr first (SHEP-54: a reviewer it started as its hc child), then the CLI's
-    const kids = shared("collie-chat.helpers") === false || this.phase === "ended" ? [] : subagentsOf(terminals(), this.addr, now).map((k) => ({ ...k, kind: "child", id: `c:${k.address}`, label: k.title }));
+    const space = this.assistant();
+    const allKids = shared("collie-chat.helpers") === false || this.phase === "ended" ? [] : subagentsOf(terminals(), this.addr, now).map((k) => ({ ...k, kind: "child", id: `c:${k.address}`, label: k.title }));
+    // A finished Helper is history; while a live Helper exists in this space, that is the row.
+    const liveHelper = space && terminals().find((k) => k.state === "live" && k.labels?.["herdr.role"] === "helper"
+      && (k.labels?.["herdr.job.space"] === space || k.labels?.["herdr.space"] === space));
+    const kids = allKids.filter((k) => !(k.role === "helper" && k.ended && liveHelper));
     const shown = [...kids, ...(shared("collie-chat.helpers") === false ? [] : this.helpers().map((h) => ({ ...h, kind: "agent" }))), ...this.jobs()];
     if (!shown.length) return null;
     const ago = (at) => {
@@ -3188,8 +3193,10 @@ export default class Chat extends View {
     h = { ...h, address: live.address };
     const existing = panes().find((p) => p.terminal === h.address);
     if (existing) {
-      run("tab.select", { id: existing.tab });
-      toast({ title: "Helper", body: "Focused the Helper tab.", level: "info" });
+      cx.spawn(async () => {
+        await exec("herdr-app", ["do", "tab.select", "--id", existing.tab]).catch(() => {});
+        toast({ title: "Helper", body: "Focused the Helper tab.", level: "info" });
+      });
       return;
     }
     toast({ title: "Opening Helper", body: "Creating the Helper tab.", level: "info" });
