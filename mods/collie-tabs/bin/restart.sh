@@ -96,8 +96,13 @@ tpl=$HOME/.config/herdr-core/templates/collie-coordinator.md
 # A coordinator restarted without an argv: the assistant template's own command and words.
 own=""
 [ -z "$argv" ] && [ "$role" = coordinator ] && own=$(awk '/^---[[:space:]]*$/ {f++; next} f == 1 && sub(/^command:[ \t]*/, "") {print; exit}' "$tpl" 2>/dev/null)
+# Bash 3.2 (macOS /bin/bash) has no mapfile.
+read_cmd() {
+  cmd=()
+  while IFS= read -r line; do cmd+=("$line"); done < <(jq -r '.[]' <<<"$argv")
+}
 if [ -n "${HERDR_RESTART_RESUME:-}" ] && [ -n "$argv" ]; then
-  mapfile -t cmd < <(jq -r '.[]' <<<"$argv")
+  read_cmd
   [ ${#cmd[@]} -gt 0 ] || exit 1
   new=$(hc run --bg --json --no-parent --cwd "$cwd" "${labels[@]}" --label "herdr.agent=$(basename "${cmd[0]}")" -- sh -c "$clean"' exec "$@"' herdr-clean "${cmd[@]}" | jq -r '.address // empty')
 elif [ -z "$argv" ] && [ "$role" = coordinator ] && [ -z "$own" ]; then
@@ -107,7 +112,7 @@ else
     own=${own#exec }
     line=$own key=$(basename "${own%% *}")
   else
-    mapfile -t cmd < <(jq -r '.[]' <<<"$argv")
+    read_cmd
     [ ${#cmd[@]} -gt 0 ] || exit 1
     key=$(basename "${cmd[0]}")
     # Codex runs its commands outside hc without --no-daemon.

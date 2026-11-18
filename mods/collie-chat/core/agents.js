@@ -319,11 +319,27 @@ export function freshArgv(kind, argv) {
   return resumed ? out.filter((x) => x !== undefined) : null;
 }
 
+// A resumed conversation already carries its original system prompt; re-passing a large
+// --append-system-prompt with --resume makes Claude exit on current builds.
+const SYSTEM_PROMPT = new Set(["--append-system-prompt", "--system-prompt"]);
+function withoutSystem(flags) {
+  const out = [];
+  for (let i = 0; i < flags.length; i++) {
+    const a = flags[i];
+    if (SYSTEM_PROMPT.has(a)) { if (flags[i + 1] && !flags[i + 1].startsWith("-")) i++; continue; }
+    if (/^--(?:append-)?system-prompt=/.test(a)) continue;
+    out.push(a);
+  }
+  return out;
+}
+
 // How to start the chosen agent: { argv, resume } (resume: argv already continues the session).
 // `session`: the old conversation's id when it can be resumed (same agent only).
 export function argvFor(pick, old) {
   const same = pick.agent === old.agent;
-  const flags = same ? kept(pick.agent, old.argv ?? []) : [];
+  const resume = same && Boolean(old.session);
+  const keptFlags = same ? kept(pick.agent, old.argv ?? []) : [];
+  const flags = resume ? withoutSystem(keptFlags) : keptFlags;
   if (pick.agent === "claude") {
     const a = ["claude", ...flags];
     if (pick.model) a.push("--model", pick.model);
@@ -331,7 +347,7 @@ export function argvFor(pick, old) {
     a.push("--settings", JSON.stringify({ fastMode: Boolean(pick.fast) }));
     if (pick.perm === "bypassPermissions") a.push("--dangerously-skip-permissions");
     else if (pick.perm) a.push("--permission-mode", pick.perm === "manual" ? "default" : pick.perm);
-    if (same && old.session) return { argv: [...a, "--resume", old.session], resume: true, base: a };
+    if (resume) return { argv: [...a, "--resume", old.session], resume: true, base: a };
     return { argv: a, resume: false, base: a };
   }
   // Codex runs its commands outside hc without --no-daemon (as collie-task and restart.sh add).
