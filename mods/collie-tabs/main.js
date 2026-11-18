@@ -1,6 +1,6 @@
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { panes, run, openOverlay, theme, window, shared, setShared, layout, settings, nextCommand, readTextFile, writeTextFile, appHome, home, terminals } from "herdr";
+import { panes, run, openOverlay, theme, window, shared, setShared, layout, settings, nextCommand, readTextFile, writeTextFile, appHome } from "herdr";
 import { spacesWithChats as spaces, sweep } from "./parked.js";
 import { isCoordinatorTab, closeTab, watchNewSpaces, newSpace, openCoordinator, renameTab, renameSpace } from "./coordinator.js";
 import { startTick, tickOnChange } from "./tick.js";
@@ -9,7 +9,6 @@ import { countBadge, H, TEXT, RADIUS } from "./lib/ui.js";
 // A tab's name (what runs in it while Herdr named it): core/menus.js, as the web app's tab bar names it.
 import { tabName } from "./core/menus.js";
 import { inRender } from "./live.js";
-import { FALLBACK, PANEL, STACK, TERM, helperTerminal, helperVisibility, pointHelper } from "./lib/helper-pane.js";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -38,11 +37,6 @@ export default class Tabs extends View {
     startTick(cx);
     // What needs the person, for Inbox's "Needs you" and the red counts (inbox-engine.js).
     startInbox(cx);
-    // Keep the Coordinator helper's right-panel block in step with its setting and terminal.
-    this.helperVisible = false;
-    this.helperShown = null;
-    this.helperPrevious = FALLBACK;
-    cx.timer.every(1500, (cx) => cx.spawn(async () => { await this.syncHelper(cx); }));
     // Ctrl+Shift+W comes here so a coordinator with live workers asks first, like its x.
     // At most 5 s per wait (one pending nextCommand), so a reload's old build ends at its next
     // cx use instead of staying in memory.
@@ -86,51 +80,6 @@ export default class Tabs extends View {
         if (c.startsWith("alert-")) toAlert({ terminal: c.slice(6).replace(/~/g, "/") });
       }
     });
-  }
-
-  async syncHelper(cx) {
-    const space = spaces().find((s) => s.active);
-    if (!space) return;
-    let config = {};
-    try { config = JSON.parse(await readTextFile(`${home()}/.local/state/collie/coordinator.json`).catch(() => "null") ?? "{}"); }
-    catch { config = {}; }
-    const visible = helperVisibility(config, String(space.id).split("/").pop()) === "visible";
-    const helper = helperTerminal(terminals(), space.id);
-    const stack = find(layout(), STACK);
-    if (visible && helper) {
-      if (find(layout(), TERM)?.content?.terminal !== helper.address) await this.pointHelper(helper.address, cx);
-      if (!this.helperVisible || this.helperShown !== helper.address || stack?.active !== TERM) {
-        if (stack?.active !== TERM) this.helperPrevious = stack?.active ?? FALLBACK;
-        run("layout.select", { stack: STACK, child: TERM });
-      }
-      // A hidden panel is a separate bit from the stack's active child; Visible always reopens it.
-      run("layout.show", { id: PANEL });
-      this.helperVisible = true;
-      this.helperShown = helper.address;
-    } else {
-      if (find(layout(), STACK)?.active === TERM) run("layout.select", { stack: STACK, child: this.helperPrevious ?? FALLBACK });
-      this.helperVisible = false;
-      this.helperShown = null;
-    }
-  }
-
-  async pointHelper(address, cx) {
-    if (!shared("layout")) return;
-    const path = `${appHome()}/layouts/${shared("layout")}.json`;
-    for (let attempt = 0; ; attempt += 1) {
-      const text = await readTextFile(path);
-      const tree = JSON.parse(text ?? "null");
-      const result = pointHelper(tree, address);
-      if (!result.body) return;
-      if (!result.changed) break;
-      try { await writeTextFile(path, JSON.stringify(result.tree, null, 2), text); break; }
-      catch (error) { if (attempt >= 2) throw error; }
-    }
-    for (let attempt = 0; attempt < 30 && find(layout(), TERM)?.content?.terminal !== address; attempt += 1) {
-      const { promise, resolve } = Promise.withResolvers();
-      cx.timer.after(100, resolve);
-      await promise;
-    }
   }
 
   // The side panel is remembered per space: switching shows that space's choice
@@ -208,7 +157,7 @@ export default class Tabs extends View {
     const panel = find(root, "panel"), body = find(root, "panel-body");
     // The panel's pages, all collie's own: Files, Inbox, Artifacts (the layout mounts them as
     // "files", "collie" and "artifacts"). Shep's pages are gone.
-    const enabled = ["files", "collie", "artifacts", TERM];
+    const enabled = ["files", "collie", "artifacts"];
     const waiting = shared("inbox.queue")?.waiting ?? 0;
     this.syncPanel(space, panel, body, enabled);
     // The side panel's button: icon first; the label when the bar has room (the open one keeps

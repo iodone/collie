@@ -149,7 +149,7 @@ collie-secret names --json                               # 只有名字、why、
 collie-secret rm GITHUB_TOKEN
 ```
 
-- `helper` 只有 `hidden` / `visible`：`hidden` 不显示 helper terminal，`visible` 在右侧 `panel-body` 里显示并选中它；没有 `off`。space 下的 `coordinator.helper` 覆盖 Everywhere。
+- `helper` 只有 `hidden` / `visible`：`helper` terminal 存活时，Coordinator pane 的 `Chat | Terminal | Helper` 会出现 Helper 页；切到 Helper 时 helper 占用当前 pane slot，切走时回到 parked（继续接收 ingress）。没有 `off`。space 下的 `coordinator.helper` 覆盖 Everywhere。
 - helper 的 job / Decision 在 `$HOME/.local/state/collie/helper/<space>/{jobs,decisions}/`；这是交互式 agent 没有 stdout 时的文件 IPC。service 校验 Decision 后写 Ledger，helper 自己不能写 Ledger/policy，也不能直接 spawn。
 - 找不到 Coordinator terminal、helper 启动失败或 120 秒内没有 Decision 时，事件变成 waiting Card；不会退回每个事件起一次 CLI。
 - `ask` 只把 `collie.secret.ask.NAME=<why>` 留在该终端上；chat 的卡片（`mods/collie-chat/secret-card.js`）保存后回报 agent「Kept: NAME」，agent 再按名字用。

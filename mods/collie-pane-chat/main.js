@@ -91,6 +91,27 @@ const lazySlot = (pane) => Object.values(shared("coordinator.slots") ?? {}).find
 // The agent a chat pane shows.
 const agentOf = (chat) => terminals().find((x) => x.labels?.[LABEL] === chat && x.state === "live")?.address ?? null;
 
+// The Coordinator tab's three pages are Chat, Terminal and Helper. The service marks the Coordinator and its
+// helper with their space, so either page can find the other without a shared tab label.
+const spaceOf = (self) => {
+  const address = self.mod === CHAT ? agentOf(self.pane) : self.terminal;
+  const direct = terminals().find((x) => x.address === address)?.labels?.["herdr.space"] ?? null;
+  if (direct) return direct;
+  // A Coordinator slot's chat has no agent label yet; its tab says the space.
+  const space = spaces().find((s) => s.tabs?.some((t) => t.id === self.tab));
+  return space ? String(space.id).split("/").pop() : null;
+};
+const roleIn = (self, role) => {
+  const space = spaceOf(self);
+  if (!space) return null;
+  const inSpace = (x) => x.labels?.["herdr.space"] === space
+    || x.labels?.["herdr.coordinator.space"] === space
+    || x.labels?.["herdr.job.space"] === space;
+  return terminals().find((x) => x.state === "live" && x.labels?.["herdr.role"] === role && inSpace(x)) ?? null;
+};
+const coordinatorFor = (self) => roleIn(self, "coordinator");
+const helperFor = (self) => roleIn(self, "helper");
+
 // One app command, waited for (the swap's steps must go in order).
 async function app(name, args) {
   const r = await exec("herdr-app", ["do", name, ...Object.entries(args).flatMap(([k, v]) => [`--${k}`, typeof v === "string" ? v : JSON.stringify(v)])]);
@@ -187,7 +208,6 @@ export default class Pane extends View {
         // The agent knows its chat: if that pane goes with its tab or space, the agents list ends the agent, as
         // closing its own pane would have.
         await hc(["label", terminal, `${LABEL}=${out.pane}`]);
-        run("pane.focus", { pane: out.pane });
         // Last: parking removes this pane, and this header with it. The chat turns core keep back on once the park
         // has gone through (mods/collie-chat).
         await app("terminal.park", { terminal });
@@ -218,11 +238,79 @@ export default class Pane extends View {
     cx.spawn(async (cx) => {
       try {
         await app("pane.focus", { pane: chat });
-        const out = await app("terminal.keep", { terminal, place: "right" });
+        await app("terminal.keep", { terminal, place: "right" });
         await hc(["label", terminal, `${LABEL}=`]);
-        if (out.pane) run("pane.focus", { pane: out.pane });
         // Last: closing the chat removes this header too.
         await app("pane.close", { pane: chat });
+      } catch (e) {
+        toast({ title: "Terminal didn't come back", body: plainError(e), level: "error" });
+      }
+      this.busy = false;
+      cx.notify();
+    });
+  }
+
+  // Chat → Helper: the helper terminal takes this pane's slot. The page we leave is closed or parked (running, no
+  // pane); the helper keeps its own agent and pane, so switching back does not restart it.
+  toHelper(self, cx) {
+    const helper = helperFor(self);
+    const coord = coordinatorFor(self);
+    if (!helper || !coord || self.terminal === helper.address || this.busy) return;
+    const existing = panes().find((p) => p.terminal === helper.address);
+    if (existing) { run("pane.focus", { pane: existing.pane }); return; }
+    this.busy = true;
+    cx.spawn(async (cx) => {
+      try {
+        await app("pane.focus", { pane: self.pane });
+        await app("terminal.keep", { terminal: helper.address, place: "right" });
+        // Last: removing the page we came from leaves the helper in the slot.
+        if (self.mod === CHAT) await app("pane.close", { pane: self.pane });
+        else if (self.terminal) await app("terminal.park", { terminal: self.terminal });
+      } catch (e) {
+        toast({ title: "Helper didn't open", body: plainError(e), level: "error" });
+      }
+      this.busy = false;
+      cx.notify();
+    });
+  }
+
+  // Helper → Chat: open the Coordinator's chat in the helper pane's slot, then park the helper.
+  toCoordinatorChat(self, cx) {
+    const coord = coordinatorFor(self);
+    const helper = helperFor(self);
+    if (!coord || this.busy) return;
+    const open = chatOf(coord.address);
+    if (open) { run("pane.focus", { pane: open }); return; }
+    this.busy = true;
+    cx.spawn(async (cx) => {
+      try {
+        await app("pane.focus", { pane: self.pane });
+        const out = await app("pane.split", { direction: "right", pane: self.pane, mod: CHAT, props: { terminal: coord.address } });
+        if (!out.pane) throw new Error("Herdr didn't open the chat");
+        await hc(["label", coord.address, `${LABEL}=${out.pane}`]);
+        // Last: parking the helper removes this header together with its pane.
+        if (helper) await app("terminal.park", { terminal: helper.address });
+      } catch (e) {
+        toast({ title: "Chat didn't open", body: plainError(e), level: "error" });
+      }
+      this.busy = false;
+      cx.notify();
+    });
+  }
+
+  // Helper → Terminal: put the Coordinator terminal in the helper pane's slot, then park the helper.
+  toCoordinatorTerminal(self, cx) {
+    const coord = coordinatorFor(self);
+    const helper = helperFor(self);
+    if (!coord || this.busy) return;
+    const own = panes().find((p) => p.terminal === coord.address);
+    if (own) { run("pane.focus", { pane: own.pane }); return; }
+    this.busy = true;
+    cx.spawn(async (cx) => {
+      try {
+        await app("pane.focus", { pane: self.pane });
+        await app("terminal.keep", { terminal: coord.address, place: "right" });
+        if (helper) await app("terminal.park", { terminal: helper.address });
       } catch (e) {
         toast({ title: "Terminal didn't come back", body: plainError(e), level: "error" });
       }
@@ -238,10 +326,14 @@ export default class Pane extends View {
     run("pane.close", { pane: chat });
   }
 
-  // Chat | Terminal.
-  switcher(id, chatMode, onChat, onTerminal) {
-    return segmented(id, [[CHAT, "Chat"], ["terminal", "Terminal"]], chatMode ? CHAT : "terminal",
-      (v, _e, cx) => (v === CHAT ? onChat(cx) : onTerminal(cx)));
+  // Chat | Terminal | Helper: three pages of the Coordinator pane, only one visible at a time.
+  switcher(id, page, onChat, onTerminal, onHelper, canHelper) {
+    const options = [[CHAT, "Chat"], ["terminal", "Terminal"], ...(canHelper ? [["helper", "Helper"]] : [])];
+    return segmented(id, options, page, (v, _e, cx) => {
+      if (v === CHAT) return onChat(cx);
+      if (v === "helper") return onHelper(cx);
+      return onTerminal(cx);
+    });
   }
 
   // One copy of Herdr's live lists for the whole render (above): past ~50 ms Herdr stops it.
@@ -257,17 +349,23 @@ export default class Pane extends View {
     const chatMode = self.mod === CHAT;
     const agent = chatMode ? agentOf(self.pane) : null;
     const entry = agent ? { terminal: agent } : null;
+    // A Helper page is the helper terminal itself; Chat is a chat pane; otherwise it is the Coordinator terminal.
+    const helper = helperFor(self);
+    const helperMode = Boolean(helper && self.terminal === helper.address);
+    const page = chatMode ? CHAT : helperMode ? "helper" : "terminal";
+    const coord = chatMode ? (agent ? terminals().find((x) => x.address === agent) : coordinatorFor(self)) : coordinatorFor(self);
     const p = (entry && parked(entry.terminal)) ?? self;
     const lazy = chatMode && !entry && lazySlot(self.pane);
     const prog = ((p.program?.agent || p.program?.shell) && p.program.name) || p.title || p.program?.name || "Shell";
     // A Coordinator reads as its space, never its role or what it runs: the space's name, then its folder, quieter.
     const isAssistant = Boolean(lazy) || terminals().find((x) => x.address === (agent ?? self.terminal))?.labels?.["herdr.role"] === "coordinator";
     const space = isAssistant ? spaces().find((s) => s.tabs?.some((x) => x.id === self.tab)) : null;
-    const name = isAssistant ? spaceName(space, home()) : chatMode && p === self ? "Chat" : prog;
+    const name = helperMode ? "Helper" : isAssistant ? spaceName(space, home()) : chatMode && p === self ? "Chat" : prog;
     const pic = icon(p.program, 14, t.dim);
     const st = p.status;
     const pane = self.pane;
-    const canSwitch = chatMode ? Boolean(entry) || Boolean(lazy) : chatty(self);
+    const canSwitch = chatMode ? Boolean(entry) || Boolean(lazy) : chatty(self) || helperMode || Boolean(coord);
+    const canHelper = Boolean(coord && helper);
     return h_flex()
       .id(`pane-head-${pane}`)
       .size_full()
@@ -300,9 +398,13 @@ export default class Pane extends View {
         .child(chatMode && entry
           ? this.button(t, `ph-x-${pane}`, "close", null, null, () => this.closeChat(pane))
           : this.button(t, `ph-x-${pane}`, "close", "pane.close", { pane })))
-      .when(canSwitch, (el) => el.child(this.switcher(`ph-mode-${pane}`, chatMode,
-        (cx) => this.toChat(self, cx),
-        // No agent yet: the chat starts it (no first message) and then shows its terminal (mods/collie-chat).
-        (cx) => (lazy && !agentOf(pane) ? setShared("collie-chat.startreq", { pane, at: Date.now() }) : this.toTerminal(pane, cx)))));
+      .when(canSwitch, (el) => el.child(this.switcher(`ph-mode-${pane}`, page,
+        // Chat: from a Coordinator terminal, the existing split/park swap; from Helper, target the Coordinator.
+        (cx) => (helperMode ? this.toCoordinatorChat(self, cx) : this.toChat(self, cx)),
+        // Terminal: from Chat, the existing swap; from Helper, target the Coordinator terminal.
+        (cx) => (helperMode ? this.toCoordinatorTerminal(self, cx)
+          : lazy && !agentOf(pane) ? setShared("collie-chat.startreq", { pane, at: Date.now() }) : this.toTerminal(pane, cx)),
+        (cx) => this.toHelper(self, cx),
+        canHelper)));
   }
 }

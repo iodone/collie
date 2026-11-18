@@ -79,7 +79,7 @@ export default class InboxSettings extends View {
       .child(this.row(t, "Agent CLI", "The Coordinator helper session that turns a Case into a Decision.",
         segmented("coordinator-cli", [["codex", "Codex"], ["claude", "Claude"]], current.cli ?? "codex",
           (cli, _e, cx) => this.save({ cli }, cx))))
-      .child(this.row(t, "Helper", "Ingress goes to one persistent helper session per space. Hidden keeps its terminal out of sight; Visible shows it in the right panel. There is no Off.",
+      .child(this.row(t, "Helper", "Ingress goes to one persistent helper session per space. When it is live, the Coordinator pane gets a Helper page beside Chat and Terminal; there is no Off.",
         segmented("coordinator-helper", [["hidden", "Hidden"], ["visible", "Visible"]], current.helper ?? "hidden",
           (helper, _e, cx) => this.save({ helper }, cx))))
       .child(this.row(t, "Model", "Use the CLI default or name a model for this coordinator.",
