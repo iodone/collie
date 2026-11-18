@@ -153,6 +153,40 @@ async function loadTasks() {
   } catch { return []; }
 }
 
+// Tasks can exist without a Ledger decision (direct collie-task adds, adopted work). The Inbox is
+// still the workbench for the space: project those tasks as synthetic tickets rather than hiding
+// them until a Decision exists.
+function orphanTickets(decisions, groups) {
+  const linked = new Set();
+  for (const decision of decisions) {
+    const ref = decision?.run?.task_ref;
+    if (ref) linked.add(String(ref));
+  }
+  const out = [];
+  for (const group of Array.isArray(groups) ? groups : []) {
+    for (const task of group?.tasks ?? []) {
+      const keys = [task.key, task.ref, task.id].filter((x) => x !== undefined && x !== null).map(String);
+      if (!task.space || keys.some((key) => linked.has(key))) continue;
+      const at = task.ready_at ?? task.started ?? task.created ?? task.agents?.at(-1)?.at ?? Date.now();
+      const done = task.state === "done";
+      out.push({
+        id: `task:${task.key ?? task.ref ?? task.id}`,
+        state: done ? "settled" : "open",
+        decided_at: new Date(at).toISOString(),
+        ...(done ? { settled: { at: new Date(at).toISOString(), outcome: "done" } } : {}),
+        space: task.space,
+        title: task.title ?? task.ref ?? `#${task.id}`,
+        why: task.why ?? null,
+        synthetic: true,
+        run: { task_ref: task.key ?? task.ref ?? String(task.id),
+          // Orphan tasks have no Decision.run.kind; their title is the only review/build cue left.
+          kind: /\b(review|评审)\b/i.test(String(task.title ?? "")) ? "review" : "build" },
+      });
+    }
+  }
+  return out;
+}
+
 async function navigation(decisions, groups = null) {
   const linked = decisions.filter((d) => d.receipt_ref || d.run?.task_ref);
   if (!linked.length) return new Map();
@@ -305,8 +339,9 @@ export default class Inbox extends View {
     this.loading = true;
     cx.spawn(async (cx) => {
       try {
-        this.decisions = parseQueue(await readTextFile(queuePath(home())));
+        const parsed = parseQueue(await readTextFile(queuePath(home())));
         const groups = await loadTasks();
+        this.decisions = [...parsed, ...orphanTickets(parsed, groups)];
         const links = await navigation(this.decisions, groups);
         this.targets = new Map([...links].map(([id, value]) => [id, value.target]));
         this.receipts = new Map([...links].map(([id, value]) => [id, value.receipt]));
