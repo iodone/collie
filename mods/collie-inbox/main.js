@@ -153,26 +153,6 @@ async function loadTasks() {
   } catch { return []; }
 }
 
-// A task the coordinator started directly (collie-task) has no Decision. Project it as a
-// synthetic ticket so Inbox still shows it; real Decisions win when both name the same task.
-function taskDecisions(groups, decisions) {
-  const known = new Set(decisions.map((d) => d.run?.task_ref).filter(Boolean));
-  const out = [];
-  for (const group of groups) {
-    for (const task of group.tasks ?? []) {
-      if (!task?.key || known.has(task.key) || task.archived || task.state === "done") continue;
-      out.push({
-        id: `task:${task.key}`, key: task.key, space: task.space ?? null, state: "open",
-        run: { task_ref: task.key, kind: task.review_gate ? "review" : "build" },
-        why: task.reason ?? task.status_text ?? `Task ${task.ref ?? task.id}`,
-        decided_at: task.created ?? task.started ?? Date.now(),
-        synthetic: true,
-      });
-    }
-  }
-  return out;
-}
-
 async function navigation(decisions, groups = null) {
   const linked = decisions.filter((d) => d.receipt_ref || d.run?.task_ref);
   if (!linked.length) return new Map();
@@ -325,9 +305,8 @@ export default class Inbox extends View {
     this.loading = true;
     cx.spawn(async (cx) => {
       try {
-        const queued = parseQueue(await readTextFile(queuePath(home())));
+        this.decisions = parseQueue(await readTextFile(queuePath(home())));
         const groups = await loadTasks();
-        this.decisions = [...queued, ...taskDecisions(groups, queued)];
         const links = await navigation(this.decisions, groups);
         this.targets = new Map([...links].map(([id, value]) => [id, value.target]));
         this.receipts = new Map([...links].map(([id, value]) => [id, value.receipt]));

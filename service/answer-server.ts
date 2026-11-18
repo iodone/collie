@@ -16,7 +16,7 @@ export function startAnswerServer(service: InboxService, socketPath: string) {
       }));
       return;
     }
-    if (request.method !== "POST" || !["/answer", "/request", "/ticket"].includes(request.url ?? "")) {
+    if (request.method !== "POST" || !["/answer", "/request", "/ticket", "/ticket/adopt"].includes(request.url ?? "")) {
       response.writeHead(404).end();
       return;
     }
@@ -32,7 +32,9 @@ export function startAnswerServer(service: InboxService, socketPath: string) {
           ? await service.request(input.space, input.goal, input.ticket_refs ?? [])
           : request.url === "/ticket"
             ? await service.createTicket({ space: input.space, title: input.title, brief: input.brief, kind: input.kind })
-            : await service.answerCard(input.decisionId, input.answer, input.coordinatorAddress);
+            : request.url === "/ticket/adopt"
+              ? await service.adoptTicket({ space: input.space, task_ref: input.task_ref, title: input.title, brief: input.brief, kind: input.kind })
+              : await service.answerCard(input.decisionId, input.answer, input.coordinatorAddress);
         response.writeHead(200, { "content-type": "application/json" });
         response.end(JSON.stringify(result));
       } catch (error) {

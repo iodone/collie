@@ -170,3 +170,28 @@ describe("collie-ticket create", () => {
     });
   });
 });
+
+describe("collie-ticket adopt", () => {
+  test("POST /ticket/adopt links an existing task with no spawn and projects Inbox", async () => {
+    const dir = scratch();
+    const agent = fakeAgent();
+    const service = new InboxService({ stateDir: dir, ruleset, agent: { run: agent.run } });
+    const socket = await serve(service, dir);
+
+    const response = await post(socket, "/ticket/adopt", {
+      space: "collie", task_ref: "work-system-weaver#72", title: "Review miergo!168", kind: "review",
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ ticket_ref: "work-system-weaver#72", adopted: true });
+    expect(agent.calls).toEqual([]);
+    const decision = service.ledger.history("decision").filter((item) => item.id === response.body.decision_id).at(-1);
+    expect(decision).toMatchObject({ state: "open", actions: [], run: { task_ref: "work-system-weaver#72", kind: "review" } });
+    expect(JSON.parse(readFileSync(join(dir, "queue.json"), "utf8")).decisions).toContainEqual(decision);
+
+    const again = await post(socket, "/ticket/adopt", {
+      space: "collie", task_ref: "work-system-weaver#72", title: "Review miergo!168", kind: "review",
+    });
+    expect(again.body).toMatchObject({ decision_id: response.body.decision_id, adopted: false });
+  });
+});

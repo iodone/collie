@@ -6,6 +6,7 @@
  * (state=open, one spawn_task, run.kind) and dispatches the worker once. There is no
  * second headless coordinator turn here, unlike collie-request.
  */
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -23,6 +24,7 @@ const stateDir = value("--state-dir") ?? join(homedir(), ".local", "state", "col
 const usage = [
   "usage:",
   "  collie-ticket create --space S --title T --brief FILE|- [--kind build|review] [--json] [--state-dir DIR]",
+  "  collie-ticket adopt --space S --task REF|KEY --folder DIR [--kind build|review] [--state-dir DIR]",
   "  collie-ticket show --decision ID|--ticket REF [--json] [--state-dir DIR]",
 ].join("\n");
 
@@ -31,10 +33,10 @@ function fail(message: string, code = 1): never {
   process.exit(code);
 }
 
-function create(payload: Record<string, unknown>): Promise<any> {
+function post(payload: Record<string, unknown>, path = "/ticket"): Promise<any> {
   return new Promise((resolve, reject) => {
     const req = request({
-      socketPath: join(stateDir, "service.sock"), path: "/ticket", method: "POST",
+      socketPath: join(stateDir, "service.sock"), path, method: "POST",
       headers: { "content-type": "application/json" },
     }, (res) => {
       let body = "";
@@ -69,7 +71,28 @@ if (command === "create") {
     brief = readFileSync(source, "utf8");
   }
   try {
-    const result = await create({ space, title, brief, kind });
+    const result = await post({ space, title, brief, kind });
+    console.log(JSON.stringify(result));
+  } catch (error) {
+    fail(`collie-ticket: ${error instanceof Error ? error.message : String(error)}`);
+  }
+} else if (command === "adopt") {
+  const space = value("--space");
+  const taskRef = value("--task");
+  const folder = value("--folder");
+  const kind = value("--kind") ?? "build";
+  if (!space || !taskRef || !folder) fail(usage, 2);
+  if (kind !== "build" && kind !== "review") fail(`collie-ticket: --kind must be build or review`, 2);
+  const taskBin = process.env.COLLIE_TASK_CLI ?? join(import.meta.dir, "collie-task");
+  let task: any;
+  try {
+    task = JSON.parse(execFileSync(taskBin, ["show", taskRef, "--folder", folder, "--json"], { encoding: "utf8" }));
+  } catch (error) {
+    fail(`collie-ticket: can't read task ${taskRef}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!task?.key && !task?.ref) fail(`collie-ticket: task ${taskRef} has no key/ref`, 1);
+  try {
+    const result = await post({ space, task_ref: task.key ?? task.ref, title: task.title ?? taskRef, brief: task.prompt, kind }, "/ticket/adopt");
     console.log(JSON.stringify(result));
   } catch (error) {
     fail(`collie-ticket: ${error instanceof Error ? error.message : String(error)}`);

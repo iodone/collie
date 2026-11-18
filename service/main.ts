@@ -216,6 +216,57 @@ export class InboxService {
     return { decision_id: executed.id, ticket_ref: executed.run?.task_ref ?? null };
   }
 
+  /**
+   * Repair entry: a `collie-task` exists but has no Decision (the coordinator used the task
+   * CLI directly). Create a Decision that links it, with no spawn action, so Inbox/Ticket can
+   * project the existing Work without duplicating it.
+   */
+  async adoptTicket(input: { space?: string; task_ref?: string; title?: string; brief?: string; kind?: string }): Promise<Json> {
+    const space = input.space;
+    if (typeof space !== "string" || !/^[a-z0-9][a-z0-9_-]{1,63}$/.test(space)) throw new Error("invalid space");
+    const taskRef = input.task_ref;
+    if (typeof taskRef !== "string" || !taskRef.trim() || taskRef.length > 240) throw new Error("invalid task_ref");
+    const title = input.title;
+    if (typeof title !== "string" || !/^(?![\s-])[^{}\r\n]{1,200}$/.test(title)) throw new Error("invalid title");
+    const kind = input.kind ?? "build";
+    if (kind !== "build" && kind !== "review") throw new Error("kind must be build or review");
+    const existing = this.ledger.decisions.find((decision) => decision.run?.task_ref === taskRef && decision.state !== "settled");
+    if (existing) return { decision_id: existing.id, ticket_ref: taskRef, adopted: false };
+
+    const brief = typeof input.brief === "string" && input.brief.trim() ? input.brief.slice(0, 200_000) : `# ${title}\n\nAdopted existing task ${taskRef}.`;
+    const at = (this.#options.now ?? (() => new Date()))().toISOString();
+    const id = ledgerId("ev");
+    const directory = join(this.stateDir, "tickets");
+    mkdirSync(directory, { recursive: true });
+    const dataRef = join(directory, `${id}.md`);
+    writeFileSync(dataRef, brief, { mode: 0o600 });
+    const event = {
+      id, source: "im", key: `human:ticket:adopt:${id}`, type: "human.ticket_requested",
+      object: { kind: "none", id }, title,
+      data_ref: dataRef, data_digest: `sha256:${createHash("sha256").update(brief).digest("hex")}`,
+      hops: 0, received_at: at,
+      merge: { lane_key: `coordinator:none:${id}`, object_key: `none:${id}`, first_seen_at: at, occurrences: 1 },
+      space_candidates: [space],
+    };
+    const dispatch: Dispatch = { kind: "coordinator", laneKey: event.merge.lane_key, space, event };
+    const decision = await coordinate(dispatch, {
+      ledger: this.ledger, ruleset: this.#options.ruleset, stream: "chat_turn",
+      policy: this.#policy(space),
+      onDecision: () => this.#projectQueue(),
+      spaceNote: `接入已有 task：${title}`,
+      decide: () => ({
+        state: "open",
+        why: `接入已有 task：${title}`.slice(0, 140),
+        actions: [],
+        run: { task_ref: taskRef, kind },
+      }),
+      ...(this.#options.now ? { now: this.#options.now } : {}),
+      ...(this.#options.rolePromptRef ? { rolePromptRef: this.#options.rolePromptRef } : {}),
+    });
+    this.#projectQueue();
+    return { decision_id: decision.id, ticket_ref: taskRef, adopted: true };
+  }
+
   async #dispatch(dispatch: Dispatch): Promise<Json> {
     if (dispatch.kind === "record_only") return this.#recordOnly(dispatch);
     if (dispatch.kind === "coordinator") {

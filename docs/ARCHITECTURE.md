@@ -329,6 +329,8 @@ mods/collie-artifacts/             # Ticket Artifacts + viewer
 
 Chat 的 secrets 走 `bin/collie-secret` 和 `~/.local/share/collie/secrets/vault.json`；voice / dictation / call 在 Collie 中关闭（`VOICE=false`），不读 shep 的 secret/service 路径。
 
+Task 如果没有 Decision，就不是 Ticket，Inbox 不伪造行。修复用 `collie-ticket adopt --space S --task REF --folder DIR`：它写一条 `actions: []`、`run.task_ref` 指向已有 task 的 Decision，让 Work 回到四态投影，不重复 spawn。
+
 ### 过滤器
 
 ```text
