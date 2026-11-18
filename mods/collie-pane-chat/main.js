@@ -176,6 +176,13 @@ export default class Pane extends View {
     // A copy just started (the swap's new pane) may still be handed the toggle that made it: it would swap
     // straight back. Toggles go to copies at least 2 s old, one swap per 3 s.
     this.born = Date.now();
+    // A Helper row or the Coordinator header asks this pane to open the Helper tab.
+    cx.timer.every(200, (cx) => {
+      const req = shared("collie-pane-chat.helper");
+      if (!req || Date.now() - (req.at ?? 0) > 3000) return;
+      setShared("collie-pane-chat.helper", null);
+      this.openHelperTab(req.terminal, cx);
+    });
     // A Helper row in the chat asks this pane to show its Helper page (shared "collie-pane-chat.page").
     cx.timer.every(200, (cx) => {
       const req = shared("collie-pane-chat.page");
@@ -288,6 +295,31 @@ export default class Pane extends View {
       }
       this.busy = false;
       cx.notify();
+    });
+  }
+
+  // Coordinator header: focus the Helper tab, or create one; never a split pane.
+  openHelperTab(terminal, cx) {
+    const live = terminals().find((x) => x.address === terminal && x.state === "live");
+    if (!live) { notify({ title: "Helper isn't running", body: "Start the Coordinator first.", level: "info" }); return; }
+    const existing = panes().find((p) => p.terminal === terminal);
+    if (existing) {
+      run("tab.select", { id: existing.tab });
+      notify({ title: "Helper", body: "Focused the Helper tab.", level: "info" });
+      return;
+    }
+    cx.spawn(async (cx) => {
+      try {
+        const r = await exec("herdr-app", ["do", "terminal.keep", "--terminal", terminal]);
+        let out = {};
+        try { out = JSON.parse(r.stdout || "{}"); } catch {}
+        if (out.error || !out.tab) throw new Error(out.error || r.stderr || "Herdr didn't create a Helper tab");
+        run("tab.rename", { id: out.tab, name: "Helper" });
+        run("tab.select", { id: out.tab });
+        notify({ title: "Helper", body: "Opened the Helper tab.", level: "info" });
+      } catch (e) {
+        notify({ title: "Helper didn't open", body: String(e?.message ?? e), level: "error" });
+      }
     });
   }
 
@@ -440,7 +472,7 @@ export default class Pane extends View {
         .child(this.button(t, `ph-r-${pane}`, "split-right", "pane.split", { direction: "right", pane }))
         .child(this.button(t, `ph-d-${pane}`, "split-down", "pane.split", { direction: "down", pane }))
         .child(this.button(t, `ph-z-${pane}`, self.zoomed ? "unzoom" : "zoom", "pane.zoom", { pane }))
-        .when(!isAssistant, (el) => el.child(chatMode && entry
+        .when(!isAssistant && !helperMode, (el) => el.child(chatMode && entry
           ? this.button(t, `ph-x-${pane}`, "close", null, null, () => this.closeChat(pane))
           : this.button(t, `ph-x-${pane}`, "close", "pane.close", { pane }))))
       .when(canSwitch, (el) => el.child(this.switcher(`ph-mode-${pane}`, page,
@@ -450,6 +482,12 @@ export default class Pane extends View {
         (cx) => (helperMode ? this.toCoordinatorTerminal(self, cx)
           : lazy && !agentOf(pane) ? setShared("collie-chat.startreq", { pane, at: Date.now() }) : this.toTerminal(pane, cx)),
         (cx) => this.toHelper(self, cx),
-        canHelper)));
+        canHelper)))
+      // Coordinator header: jump to the persistent Helper tab.
+      .when(isAssistant && Boolean(helper), (el) => el.child(h_flex().id(`ph-helper-${pane}`).size(24).flex_none()
+        .items_center().justify_center().rounded(RADIUS.control).cursor_pointer().text_color(t.dim)
+        .hover((s) => s.bg(t.hover).text_color(t.foreground))
+        .on_click((e, cx) => { cx.stop_propagation(); this.openHelperTab(helper.address, cx); cx.notify(); })
+        .child(svg("mods/collie-chrome/network.svg").size(14))));
   }
 }
