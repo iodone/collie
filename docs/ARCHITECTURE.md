@@ -209,6 +209,18 @@ Collie 不拥有终端、tab、pane、space；这些全部是 Herdr core 的事�
 
 `herdr.role` 只在**非默认角色**上写：worker 靠 `herdr.task` 识别，不需要 `worker` 字符串。
 
+### 角色模板归属
+
+Herdr core 的 `~/.config/herdr-core/templates/` 是角色提示词目录；`hc templates` 直接列出其中的 `.md`。Collie 只安装自己的三份：
+
+| 文件 | 用途 |
+|:--|:--|
+| `collie-coordinator.md` | Collie space 的 Coordinator |
+| `worker.md` | task worker |
+| `reviewer.md` | read-only reviewer |
+
+`assistant.md`、旧 `dev/worker.md` 是 Shepherdr 安装物，不再属于 Collie 的运行栈；已归档移除。模板只提供角色文字，`herdr.role` 等标签由启动方在 `hc run` / `hc label` 时写入，模板 frontmatter 不包含标签。
+
 ### 具体调用路径
 
 ```mermaid

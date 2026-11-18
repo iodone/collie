@@ -29,7 +29,8 @@
   ],
   "templates": [
     "collie-coordinator.md",
-    "dev/worker.md"
+    "worker.md",
+    "reviewer.md"
   ],
   "keys": {},
   "switch": {
