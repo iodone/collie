@@ -304,6 +304,7 @@ export default class Pane extends View {
     if (!live) { notify({ title: "Helper isn't running", body: "Start the Coordinator first.", level: "info" }); return; }
     const existing = panes().find((p) => p.terminal === terminal);
     if (existing) {
+      run("tab.select", { id: existing.tab });
       exec("herdr-app", ["do", "tab.select", "--id", existing.tab]).catch(() => {});
       notify({ title: "Helper", body: "Focused the Helper tab.", level: "info" });
       return;
