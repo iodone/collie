@@ -203,7 +203,7 @@ def resume_argv(argv, session):
 # web Chat can't find the conversation) and skips the folder-trust prompt. hc can only add
 # variables, so the launch unsets them first: CLAUDECODE, CLAUDE_PID and CLAUDE_CODE_*, keeping the
 # person's own Claude Code config (_USE_*, _SKIP_*, _DISABLE_*, _OAUTH_*..., CLAUDE_CONFIG_DIR).
-# The same line is core/clean-env.js CLEAN_ENV and mods/coordinator/restart.sh's (test_repo keeps
+# The same line is core/clean-env.js CLEAN_ENV and bin/collie's (test_repo keeps
 # them equal).
 CLEAN_ENV = ("for v in $(env | sed -nE 's/^(CLAUDECODE|CLAUDE_PID|CLAUDE_CODE_[A-Za-z0-9_]+)=.*/\\1/p' | "
              "grep -vE '^CLAUDE_CODE_(USE|SKIP|DISABLE|ENABLE|MAX|OAUTH|CLIENT|API)_'); do unset \"$v\"; done;")

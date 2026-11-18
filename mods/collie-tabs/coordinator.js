@@ -458,10 +458,6 @@ export const taskOf = (k) => k?.labels?.["herdr.task"] ?? null;
 export const switchTask = (k, agentKey) =>
   script("task", [taskOf(k), k.foreground?.cwd ?? k.cwd, parentOf(k) ?? "", ...(agentKey ? [agentKey] : [])]);
 
-// Restarts the agent `k` in its tab: with `argv`, as that agent; without, as it was
-// (a coordinator from the template again, so edited instructions apply).
-export const restartAgent = (k, argv) => script("restart", argv ? [k.address, JSON.stringify(argv)] : [k.address]);
-
 // Closes a tab. A coordinator always asks first (stop/keep workers); a space's last tab closes
 // the space, so it asks as Close space does (our confirm, not Herdr's).
 export function closeTab(tabId) {
@@ -526,4 +522,3 @@ export function besideRow(row, menu, width, right) {
 }
 
 // Ends a coordinator's tab; "stop" ends its workers first.
-export const closeCoordinator = (tabId, coord, mode) => script("close", [tabId, coord.address, mode]);

@@ -350,7 +350,7 @@ export function argvFor(pick, old) {
     if (resume) return { argv: [...a, "--resume", old.session], resume: true, base: a };
     return { argv: a, resume: false, base: a };
   }
-  // Codex runs its commands outside hc without --no-daemon (as collie-task and restart.sh add).
+  // Codex runs its commands outside hc without --no-daemon (as collie-task and collie coordinator restart add).
   const a = [...flags, "--no-daemon"];
   if (pick.model) a.push("-m", pick.model);
   if (pick.effort) a.push("-c", `model_reasoning_effort="${pick.effort}"`);
