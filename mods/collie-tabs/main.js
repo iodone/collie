@@ -2,7 +2,7 @@ import { View, div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import { panes, run, openOverlay, theme, window, shared, setShared, layout, settings, nextCommand, readTextFile, writeTextFile, appHome } from "herdr";
 import { spacesWithChats as spaces, sweep } from "./parked.js";
-import { isCoordinatorTab, closeTab, watchNewSpaces, newSpace, openCoordinator, renameTab, renameSpace } from "./coordinator.js";
+import { isCoordinatorTab, coordinatorTab, closeTab, watchNewSpaces, newSpace, openCoordinator, renameTab, renameSpace } from "./coordinator.js";
 import { startTick, tickOnChange } from "./tick.js";
 import { startInbox, countsByTab, readyByTab, showInbox, toAlert } from "./inbox-engine.js";
 import { countBadge, H, TEXT, RADIUS } from "./lib/ui.js";
@@ -182,6 +182,8 @@ export default class Tabs extends View {
       .on_scroll_wheel(e => { if (Math.abs(e.delta.y) >= 1) run(e.delta.y > 0 ? "tab.prev" : "tab.next"); })
       .child(h_flex().id("tab-scroll").flex_1().min_w(0).h_full().items_center().gap(3).overflow_x_scrollbar().children(shown.map(item)))
       .child(button("tab-new", "+", () => openOverlay({ mod: "new-menu", kind: "popup", width: 250 })))
+      // No Coordinator tab yet: a visible way back, not only the collie-tabs.coordinator command.
+      .when(!coordinatorTab(space), (el) => el.child(button("tab-coordinator", "Coordinator", () => openCoordinator(space, true))))
       .child(panelButton("files", "Files", "mods/collie-files/file.svg"))
       .child(panelButton("collie", "Inbox", "mods/collie-chrome/files.svg", [waiting, 0]))
       .child(panelButton("artifacts", "Artifacts", "mods/collie-artifacts/artifacts.svg"))
