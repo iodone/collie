@@ -117,7 +117,14 @@ else
   msg=$handoff
   if [ "$role" = coordinator ]; then
     body=$(awk 'f>=2 {print} /^---[[:space:]]*$/ {f++}' "$tpl")
-    msg="$body"$'\n\n'"$handoff"
+    # Claude takes the role template as a system prompt; other CLIs still get it as the first message.
+    if [[ "$line" == claude* || "$line" == */claude\ * ]] && [[ "$line" != *"--append-system-prompt"* ]]; then
+      [[ "$line" == *"--permission-mode"* ]] || line="$line --permission-mode auto"
+      body64=$(printf '%s' "$body" | base64 | tr -d '\n')
+      line="$line --append-system-prompt \"\$(printf %s '$body64' | base64 -d)\""
+    else
+      msg="$body"$'\n\n'"$handoff"
+    fi
   fi
   # hc delivers a template's first message once the agent is ready, so the
   # handoff goes in a one-off template, removed once it has started.

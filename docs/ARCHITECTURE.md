@@ -118,7 +118,7 @@ Collie 的人对话是 Coordinator 的直接输入，不进 Ingress；这是有�
 **每 space 一个 Coordinator**，两个常驻 session：
 
 - **chat turn**：人看得见的会话；新建、steering、回答。
-- **helper**：常驻、可隐藏/可见；处理外部事件，不打断 chat。
+- **helper**：常驻、不占 pane；从 Coordinator chat 的 Helper 行打开独立 tab，关闭 tab 只 `park`，session 不结束。
 
 两者共用同一份 Ledger、policy 和 Work。
 
@@ -183,7 +183,8 @@ Collie 不拥有终端、tab、pane、space；这些全部是 Herdr core 的事�
 |:--|:--|:--|:--|
 | `herdr.role=coordinator` | 每个 space 的 Assistant terminal | `collie-chat` 启动 / `restart.sh` | `collie-tabs` 找当前 Coordinator；Inbox 的 Needs you / unread |
 | `herdr.role=reviewer` | reviewer terminal | `collie-task` `launch()` | 区分 reviewer 与 worker；避免把 reviewer 当 worker |
-| `herdr.role=helper` | subagent / helper terminal | Herdr agent template | `collie-chat` 把 helper 挂在父 agent 下 |
+| `herdr.role=helper` | Coordinator helper / 子 agent | service `ensureHelper` / Herdr agent template | service 找回 ingress helper；Coordinator chat 的 Helper 行可打开它的独立 tab |
+| `herdr.job.space=<space>` | Coordinator helper | service `ensureHelper` | 按 space 找回 helper，避免同机重复启动 |
 | `herdr.task=<slug>#<id>` | task 的 worker / reviewer / helper | `collie-task` `launch()` | `hc ls --label` 找任务 agent；artifacts / status |
 | `herdr.task.space=<space>` | task terminal | `collie-task` `launch()` | 任务所在 space；**不要**用 Herdr 给 pane 的 `herdr.space` |
 | `herdr.coordinator=<tab>` | task terminal | `collie-task` `launch()` | 任务归属 Coordinator tab；restart 后仍能找到 |
@@ -287,19 +288,20 @@ Coordinator chat (herdr.role=coordinator, 人可见)
 - helper 串行处理 job，避免同一 space 并发判断。
 - 主 chat 不接收 ingress；人只在自己的 chat 里对话和回答 Card。
 
-#### 可见性
+#### 入口
 
 ```text
-Coordinator
-  Helper: Hidden (default) | Visible
+Coordinator chat: Helper row → Open Helper → independent Helper tab
 ```
 
-| 选项 | 设置说明 | 实现 |
-|:--|:--|:--|
-| **Hidden** | 常驻 helper，但没有 pane；ingress 都进它的队列 | `hc run` + `herdr.role=helper` + `parent=coordinator`，无可见 pane |
-| **Visible** | 常驻 helper，并把 pane 放在 Coordinator tab / 右侧 pane | 同一个 helper，增加可见 pane |
+- Coordinator pane 只保留 `Chat | Terminal`；没有 Helper 页。
+- Coordinator chat 的 Helper 子终端行仍显示状态；`Open Helper` 用 `terminal.keep` 打开独立 tab。
+- 关闭 Helper tab 时先 `terminal.park`：helper 继续运行，session 和 ingress 队列不结束。
+- Settings 不再有 Helper 配置；helper 常驻，不提供 `Off`。
 
-当前实现状态：`runCoordinator()` 仍是一次性 service 子进程，尚未迁移到常驻 helper。迁移完成后删除 one-shot 路径；`Helper` 设置只有 `Hidden / Visible`，没有 `Off`。
+当前实现：ingress 的 `#dispatch` 只走常驻 helper。service 用 `hc ls --label herdr.role=helper --label herdr.job.space=<space>` 找回 terminal；没有时以 `hc run --bg --keep --parent <coordinator> --label herdr.role=helper --label herdr.job.space=<space> --label herdr.coordinator=<tab>` 启动，并把 `collie-coordinator` 角色提示词作为首条消息送入。每个 job 写 `~/.local/state/collie/helper/<space>/jobs/<id>.json`，`hc send` 只发路径，helper 把 Decision 写到 `decisions/<id>.json`；service 校验 schema/actions 后写 Ledger。`runCoordinator()` 已不再被 service 调用；service 的请求与 ingress 都走 helper。
+
+剩余限制（file-based IPC 的边界）：helper 是交互式 agent，没有 stdout 协议，service 只能等 decision 文件；默认 120 秒超时，超时/非法输出会转成 waiting Card，而不是再起一次性 CLI。helper 在可见 terminal 里向人提问时，service 不会代答；角色提示词只在启动时送入，改提示词后需重启 helper。helper 是 Coordinator 的子 terminal，Coordinator 被删后它会结束；service 启动时和之后每 30 秒按 live Coordinator 与 labels 重建缺失的 helper，下一次 ingress 也会再确认。`--keep` 留下的 shell 顶着 labels 时会被识别为非 helper 并清掉，不会出现第二个 helper。
 
 ### worker / reviewer 的启动
 

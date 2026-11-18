@@ -45,6 +45,7 @@ describe("Coordinator Host", () => {
     expect(() => mergeCoordinator({}, { cli: "codex", model: "default", effort: "extreme" })).toThrow("invalid effort");
   });
 
+
   test("headless 输出 Decision 与 session，resume 使用原 session", async () => {
     const calls: any[] = [];
     const result = await runCoordinator({

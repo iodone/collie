@@ -1569,15 +1569,25 @@ export default class Chat extends View {
         .some((a) => (a.key === st.agent || (a.run ?? [])[0] === st.agent) && a.installed !== false);
       {
         const q = (a) => (/^[\w@%+=:,./-]+$/.test(a) ? a : `'${String(a).replace(/'/g, "'\\''")}'`);
+        const b64 = (a) => typeof Buffer !== "undefined"
+          ? Buffer.from(String(a), "utf8").toString("base64")
+          : btoa(unescape(encodeURIComponent(String(a))));
         const src = (await exec("sh", ["-c", TEMPLATE + 'cat "$dir/$1.md"', "x", template], on).catch(() => null))?.stdout ?? "";
         const head = /^---\n([\s\S]*?)\n---\n?/.exec(src);
         const body = head ? src.slice(head[0].length) : src;
         const own = /^command:[ \t]*(.+)$/m.exec(head?.[1] ?? "")?.[1]?.trim();
-        const cmd = st?.agent && there ? agent.argvFor(st, { agent: null, argv: [] }).argv.map(q).join(" ") : own;
+        const cmd0 = st?.agent && there ? agent.argvFor(st, { agent: null, argv: [] }).argv.map(q).join(" ") : own;
+        let cmd = cmd0;
         if (body.trim() && cmd) {
           words = body.trim();
           oneOff = `herdr-${template}-${Date.now().toString(36)}`;
-          const file = `---\nname: ${oneOff}\ndescription: A one-off ${template} start with chosen settings (mods/collie-chat), removed after use.\ncommand: ${cleanCommand(cmd)}\n---\n${body}`;
+          // Claude takes the role template as its system prompt, not as the first chat message. Encode
+          // it in the one-line template command: no temporary system-prompt file, no multiline YAML.
+          if (/(^|\s)claude(?:\s|$)/.test(cmd) && !/--(?:append-)?system-prompt/.test(cmd)) {
+            cmd = `${cmd} --append-system-prompt "$(printf %s '${b64(words)}' | base64 -d)"`;
+            words = "";
+          }
+          const file = `---\nname: ${oneOff}\ndescription: A one-off ${template} start with chosen settings (mods/collie-chat), removed after use.\ncommand: ${cleanCommand(cmd)}\n---\n${words}`;
           await exec("sh", ["-c", TEMPLATE + 'printf "%s" "$2" > "$dir/$1.md"', "x", oneOff, file], on);
           launch = oneOff;
         }
@@ -1598,7 +1608,7 @@ export default class Chat extends View {
       // idle past that screen (follow()), so the Assistant never starts without its instructions.
       const late = (r.code !== 0 || !out.address) && this.slotAgent();
       if (late) out = { address: late, first_message: { sent: false } };
-      if (out.address && out.first_message?.sent === false && words) this.firstSend = [words, task].filter(Boolean).join("\n\n");
+      if (out.address && out.first_message?.sent === false && (words || task)) this.firstSend = [words, task].filter(Boolean).join("\n\n");
       if (r.code !== 0 && !late || !out.address) {
         p.failed = (r.stderr || r.stdout || "It didn't start.").trim();
         if (!msg) toast({ title: `The ${this.role === "coordinator" ? "Assistant" : this.role} didn't start`, body: p.failed, level: "error" });
@@ -1849,10 +1859,17 @@ export default class Chat extends View {
   async loadSpaceTasks() {
     const r = await exec("collie-task", [...(this.machine ? ["--on", this.machine] : []), "list", "--all", "--json"]).catch(() => null);
     try { const d = JSON.parse(r?.stdout ?? "null"); if (Array.isArray(d)) this.spaceTasks = d.flatMap((g) => (g.tasks ?? []).map((x) => ({ ...x, folder: g.folder }))); } catch {}
+    // Ticket transitions live in the Ledger; tasks supply execution facts only.
+    try {
+      const raw = await readTextFile(`${home()}/.local/state/collie/ledger.json`);
+      const d = JSON.parse(raw ?? "null");
+      this.spaceDecisions = (d?.entries ?? []).filter((e) => e.kind === "decision").map((e) => e.payload ?? e);
+    } catch { this.spaceDecisions = []; }
   }
 
   taskSig() {
-    return (this.spaceTasks ?? []).map((x) => `${x.ref}:${x.status}:${x.why ?? ""}:${x.report?.text ?? ""}:${x.report?.left ?? ""}`).join("|");
+    return [(this.spaceTasks ?? []).map((x) => `${x.ref}:${x.status}:${x.why ?? ""}:${x.report?.text ?? ""}:${x.report?.left ?? ""}`).join("|"),
+      (this.spaceDecisions ?? []).map((d) => `${d.id}:${d.state}:${d.run?.task_ref ?? ""}:${d.decided_at ?? ""}:${d.settled?.at ?? ""}`).join("|")].join("||");
   }
 
   // The lines: { inline: news item id → its row, extra: [{ at, row }] }. Herdr's news to the
@@ -1863,36 +1880,43 @@ export default class Chat extends View {
     const space = this.assistant();
     const inline = new Map(), extra = [];
     if (!space) return { inline, extra };
-    // A space's tasks make hundreds of lines: the last render's, unless what they're made of
-    // changed (HERD-94: a render past Herdr's 50 ms is stopped).
-    const sig = [space, this.spaceTasks, items, items.length, items[items.length - 1]?.id, this.start,
+    const sig = [space, this.spaceTasks, this.spaceDecisions, items, items.length, items[items.length - 1]?.id, this.start,
       (this.wasks ?? []).map((a) => a.ref).join(",")];
     if (this.newsMemo?.sig.every((v, i) => v === sig[i])) return this.newsMemo.out;
     const tasks = new Map();
     for (const x of this.spaceTasks ?? []) if ((x.space ?? x.queue?.space) === space && x.ref && !tasks.has(x.ref)) tasks.set(x.ref, x);
-    const all = [], said = new Set();
-    for (const it of items) if (it.kind === "news") { said.add(`${it.ref}:${it.event}`); all.push(it); }
-    // Placed before what this chat has loaded: shown once it's scrolled back to (the top).
-    const first = items.find((x) => x.at)?.at ?? 0;
-    for (const [ref, x] of tasks) for (const [event, at] of [["started", x.started], ["ready", x.ready_at], ["done", x.done_at]]) {
-      if (!Number.isFinite(at) || said.has(`${ref}:${event}`) || (at < first && this.start !== 0)) continue;
-      all.push({ id: `tn:${ref}:${event}:${at}`, at, ref, event, text: "", made: true });
+    // A ticket is the Ledger decision; a task's task_ref is `<folder-slug>#<id>`.
+    const suffix = (v) => { const s = String(v ?? ""); const i = s.lastIndexOf("#"); return i >= 0 ? s.slice(i + 1) : s; };
+    const decisions = new Map();
+    for (const d of this.spaceDecisions ?? []) {
+      if (d.space !== space && !(d.space_candidates ?? []).includes(space)) continue;
+      const key = suffix(d.run?.task_ref);
+      if (key) decisions.set(key, d);
+    }
+    const all = [];
+    for (const [ref, x] of tasks) {
+      const d = decisions.get(String(x.id)) ?? decisions.get(suffix(ref)) ?? null;
+      if (Number.isFinite(x.started)) all.push({ id: `ticket:${ref}:started:${x.started}`, at: x.started, ref, event: "started", text: "", made: true });
+      if (Number.isFinite(x.ready_at)) all.push({ id: `ticket:${ref}:ready:${x.ready_at}`, at: x.ready_at, ref, event: "ready", text: "", made: true });
+      // Done is a ticket transition, not a task timestamp: only a settled Ledger decision makes it.
+      if (d?.state === "settled") {
+        const at = Date.parse(d.settled?.at ?? d.decided_at ?? "") || x.done_at;
+        if (Number.isFinite(at)) all.push({ id: `ticket:${ref}:done:${at}`, at, ref, event: "done", text: "", made: true });
+      }
     }
     all.sort((a, b) => a.at - b.at);
     const last = new Map();
     for (const e of all) last.set(e.ref, e);
     this.needsAt = new Map();
-    for (const e of all) if ((e.event === "needs-you" || e.event === "failed") && Number.isFinite(e.at)) this.needsAt.set(e.ref, [...(this.needsAt.get(e.ref) ?? []), e.at]);
     const order = [], ordered = new Set();
     for (const e of all) {
       const x = tasks.get(e.ref);
       if (!ordered.has(e.ref)) { ordered.add(e.ref); order.push(e.ref); }
       const asks = (this.wasks ?? []).some((a) => a.ref === e.ref);
-      // Needs you, still: its words in red, and its card open just under it.
       const live = last.get(e.ref) === e && (e.event === "needs-you" || e.event === "failed") && (x?.status === "needs" || asks);
       const row = { kind: "tasknews", id: e.id, ref: e.ref, task: x ?? null, taskId: x?.id ?? null, folder: x?.folder ?? null, title: x?.title ?? "",
         ...newsWords(e, x), live, asks: live && asks };
-      if (e.made) extra.push({ at: e.at, row }); else inline.set(e.id, row);
+      extra.push({ at: e.at, row });
     }
     this.taskOrder = order;
     this.newsMemo = { sig, out: { inline, extra } };
@@ -2816,10 +2840,8 @@ export default class Chat extends View {
       case "tasknews": {
         // A task's news line (newsLines()): its mark, the id, what happened, then its words, dim;
         // a needs-you line still waiting in red. The whole line opens it in the Inbox (clickRow()).
-        const tick = (c) => div().size(12).flex_none().rounded(6).bg(c).child(svg("mods/collie-inbox/task/tick.svg").size(12).flex_none().text_color("#ffffff"));
-        const dot = (c) => div().size(8).flex_none().rounded(4).bg(c);
-        const mark = x.mark === "ready" ? tick(green()) : x.mark === "done" ? tick(t.dim)
-          : dot(x.mark === "started" ? amber() : x.mark === "needs" ? (x.live ? red() : t.dim) : t.dim);
+        const mark = taskDot(x.mark === "ready" ? "ready" : x.mark === "done" ? "done"
+          : x.mark === "needs" ? "needs" : x.mark === "started" ? "working" : "queued");
         return col(h_flex().w_full().px(6).py(QUIET_PY).gap(6).items_center().rounded(RADIUS.card).cursor_pointer()
           .text_size(TEXT.label).text_color(t.dim).hover((s) => s.bg(t.hover))
           .child(h_flex().w(14).h(14).flex_none().items_center().justify_center().child(mark))
@@ -3035,7 +3057,12 @@ export default class Chat extends View {
   background(t, st, rcx) {
     const now = Date.now();
     // its own helper agents in herdr first (SHEP-54: a reviewer it started as its hc child), then the CLI's
-    const kids = shared("collie-chat.helpers") === false || this.phase === "ended" ? [] : subagentsOf(terminals(), this.addr, now).map((k) => ({ ...k, kind: "child", id: `c:${k.address}`, label: k.title }));
+    const space = this.assistant();
+    const allKids = shared("collie-chat.helpers") === false || this.phase === "ended" ? [] : subagentsOf(terminals(), this.addr, now).map((k) => ({ ...k, kind: "child", id: `c:${k.address}`, label: k.title }));
+    // A finished Helper is history; while a live Helper exists in this space, that is the row.
+    const liveHelper = space && terminals().find((k) => k.state === "live" && k.labels?.["herdr.role"] === "helper"
+      && (k.labels?.["herdr.job.space"] === space || k.labels?.["herdr.space"] === space));
+    const kids = allKids.filter((k) => !(k.role === "helper" && k.ended && liveHelper));
     const shown = [...kids, ...(shared("collie-chat.helpers") === false ? [] : this.helpers().map((h) => ({ ...h, kind: "agent" }))), ...this.jobs()];
     if (!shown.length) return null;
     const ago = (at) => {
@@ -3135,8 +3162,69 @@ export default class Chat extends View {
         .children(said === undefined ? [div().text_size(12).text_color(t.dim).child("Loading…")]
           : said.map((w) => div().w_full().pl(8).border_l(2).border_color(t.border).text_size(12).text_color(t.muted).child(w.length > 400 ? w.slice(0, 399) + "…" : w)))
         .when(Boolean(now) || (said !== undefined && !said.length), (el) => el.child(div().w_full().truncate().text_size(11.5).text_color(t.dim).child(now || "Nothing said yet.")))
-        .child(h_flex().child(this.button(`sub-open-${h.address}`, WORDS.subOpen, "mods/collie-chat/arrow-right.svg", "secondary", t, () =>
-          openOverlay({ mod: "collie-chat", kind: "dialog", width: 760, height: 0.85, props: { terminal: h.address, thread: true, title: h.label } })))));
+        .child((() => {
+          const helper = h.role === "helper";
+          const label = helper ? "Open Helper" : WORDS.subOpen;
+          // Mouse-down as well as click: a row inside the scroll list can swallow click delivery.
+          const act = (e, cx) => {
+            cx.stop_propagation();
+            if (helper) this.openHelperTab(h, cx);
+            else openOverlay({ mod: "collie-chat", kind: "dialog", width: 760, height: 0.85, props: { terminal: h.address, thread: true, title: h.label } });
+            cx.notify();
+          };
+          return h_flex().id(`sub-open-${h.address}`).h(28).flex_none().gap(6).items_center().rounded(7).cursor_pointer().text_size(12.5).font_medium()
+            .pl(7).pr(10).border_1().border_color(t.input).bg(t.background).text_color(t.foreground).hover((s) => s.bg(t.hover))
+            .on_mouse_down("left", act).on_click(act)
+            .child(svg("mods/collie-chat/arrow-right.svg").size(14).flex_none()).child(label);
+        })()));
+  }
+
+  // Open the persistent ingress Helper in its own tab. It is a real terminal; closing that tab parks it
+  // instead of killing it (collie-tabs closeTab), so the session and its queue survive.
+  openHelperTab(h, cx) {
+    const now = Date.now();
+    if (now - (this.helperOpenAt ?? 0) < 600) return;
+    this.helperOpenAt = now;
+    toast({ title: "Helper", body: "Opening the Helper tab…", level: "info" });
+    let live = terminals().find((x) => x.address === h.address && x.state === "live");
+    // A finished row outlives its Helper; bind it to the live Helper in this space.
+    if (!live && h.role === "helper") {
+      const old = terminals().find((x) => x.address === h.address);
+      const space = old?.labels?.["herdr.job.space"] ?? old?.labels?.["herdr.space"];
+      live = terminals().find((x) => x.state === "live" && x.labels?.["herdr.role"] === "helper"
+        && (x.labels?.["herdr.job.space"] === space || x.labels?.["herdr.space"] === space)) ?? null;
+    }
+    if (!live) { toast({ title: "Helper isn't running", body: "Start the Coordinator first.", level: "info" }); return; }
+    const tabExists = (id) => Boolean(id) && spaces().some((sp) => sp.tabs.some((t) => t.id === id));
+    const existing = panes().find((p) => p.terminal === live.address);
+    // A pane record can outlive its tab; never select/rename a dead tab id.
+    if (existing && tabExists(existing.tab)) {
+      run("tab.rename", { id: existing.tab, name: "Helper" });
+      run("tab.select", { id: existing.tab });
+      toast({ title: "Helper", body: "Focused the Helper tab.", level: "info" });
+      return;
+    }
+    cx.spawn(async (cx) => {
+      try {
+        const r = await exec("herdr-app", ["do", "terminal.keep", "--terminal", live.address]);
+        let out = {};
+        try { out = JSON.parse(r.stdout || "{}"); } catch {}
+        let tab = out.tab;
+        // terminal.keep can return before the tab is in spaces(); wait, then trust the pane's tab.
+        for (let i = 0; (i < 20) && !tabExists(tab); i++) {
+          const p = panes().find((x) => x.terminal === live.address && tabExists(x.tab));
+          if (p) { tab = p.tab; break; }
+          await cx.sleep(50);
+        }
+        if (!tabExists(tab)) throw new Error(out.error || r.stderr || "Herdr didn't create a Helper tab");
+        run("tab.rename", { id: tab, name: "Helper" });
+        run("tab.select", { id: tab });
+        toast({ title: "Helper", body: "Opened the Helper tab.", level: "info" });
+      } catch (e) {
+        toast({ title: "Helper didn't open", body: String(e?.message ?? e), level: "error" });
+      }
+    });
+    cx.notify();
   }
 
   // A subagent's last two messages, from its own session log (core/chat-reader.js, as the web's service reads it).

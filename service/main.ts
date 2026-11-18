@@ -12,7 +12,8 @@ import { deliverGithub } from "../plugins/delivery/github.ts";
 import { deliverIm } from "../plugins/delivery/im.ts";
 import type { DeliveryRunner } from "../plugins/delivery/common.ts";
 import { startAnswerServer } from "./answer-server.ts";
-import { coordinatorConfig, runCoordinator, type CoordinatorRunner } from "../plugins/agent/coordinator.ts";
+import { coordinatorConfig, type CoordinatorRunner } from "../plugins/agent/coordinator.ts";
+import { defaultHelperRunner, enqueueHelperJob, ensureHelper, listCoordinators, runHelperJob, type HelperRunner } from "../plugins/agent/helper.ts";
 import { createHash } from "node:crypto";
 
 type Json = Record<string, any>;
@@ -27,6 +28,7 @@ export interface InboxServiceOptions {
   workspaces?: Record<string, { folder: string; cli?: string }>;
   delivery?: { gitlab?: DeliveryRunner; github?: DeliveryRunner; im?: DeliveryRunner };
   coordinator?: { settings?: Json; settingsPath?: string; run?: CoordinatorRunner };
+  helper?: { run?: HelperRunner; timeoutMs?: number; pollIntervalMs?: number; bootWaitMs?: number };
 }
 
 export class InboxService {
@@ -148,9 +150,11 @@ export class InboxService {
       spaceNote: ticketRefs.length ? `引用 Ticket：${ticketRefs.join("、")}` : `${space} · coordinator`,
       decide: this.#options.decide ?? (async (job: Json) => {
         if (!this.#options.coordinator) throw new Error(`space ${space} has no coordinator configured`);
-        const config = coordinatorConfig(this.#coordinatorSettings(), space);
-        const result = await runCoordinator(job, config, { ...(this.#options.coordinator.run ? { run: this.#options.coordinator.run } : {}) });
-        return { ...result.decision, run: { ...result.decision.run, coordinator_ref: result.session } };
+        try {
+          return await this.#decideWithHelper(job, space);
+        } catch (error) {
+          return this.#helperCard(error);
+        }
       }),
       ...(this.#options.now ? { now: this.#options.now } : {}),
       ...(this.#options.rolePromptRef ? { rolePromptRef: this.#options.rolePromptRef } : {}),
@@ -267,14 +271,77 @@ export class InboxService {
     return { decision_id: decision.id, ticket_ref: taskRef, adopted: true };
   }
 
+  /** The helper is the only ingress session: jobs go to one persistent terminal, never a fresh CLI. */
+  async #decideWithHelper(job: Json, space: string): Promise<Json> {
+    const config = coordinatorConfig(this.#coordinatorSettings(), space);
+    const folder = this.#options.workspaces?.[space]?.folder;
+    const result = await enqueueHelperJob(space, () => runHelperJob(job, {
+      stateDir: this.stateDir,
+      space,
+      ...(folder ? { folder } : {}),
+      config,
+      rolePromptRef: this.#options.rolePromptRef
+        ?? join(homedir(), ".config", "herdr-core", "templates", "collie-coordinator.md"),
+      ...(this.#options.helper?.run ? { run: this.#options.helper.run } : {}),
+      ...(this.#options.helper?.timeoutMs ? { timeoutMs: this.#options.helper.timeoutMs } : {}),
+      ...(this.#options.helper?.pollIntervalMs ? { pollIntervalMs: this.#options.helper.pollIntervalMs } : {}),
+      bootWaitMs: this.#options.helper?.bootWaitMs ?? 10_000,
+      ...(this.#options.now ? { now: this.#options.now } : {}),
+    }));
+    return { ...result.decision, run: { ...result.decision.run, coordinator_ref: result.address } };
+  }
+
+  /** Eagerly keep one helper per live Coordinator, so a restart doesn't wait for ingress. */
+  async ensureHelpers(): Promise<Json[]> {
+    if (!this.#options.coordinator) return [];
+    const run = this.#options.helper?.run ?? defaultHelperRunner;
+    const results = [];
+    for (const coordinator of await listCoordinators(run)) {
+      try {
+        const config = coordinatorConfig(this.#coordinatorSettings(), coordinator.space);
+        const folder = coordinator.cwd ?? this.#options.workspaces?.[coordinator.space]?.folder;
+        results.push(await enqueueHelperJob(coordinator.space, () => ensureHelper({
+          stateDir: this.stateDir,
+          space: coordinator.space,
+          ...(folder ? { folder } : {}),
+          config,
+          rolePromptRef: this.#options.rolePromptRef
+            ?? join(homedir(), ".config", "herdr-core", "templates", "collie-coordinator.md"),
+          run,
+          coordinatorAddress: coordinator.address,
+          coordinatorTab: coordinator.tab,
+          bootWaitMs: this.#options.helper?.bootWaitMs ?? 10_000,
+          ...(this.#options.now ? { now: this.#options.now } : {}),
+        })));
+      } catch (error) {
+        results.push({ space: coordinator.space, error: String(error instanceof Error ? error.message : error) });
+      }
+    }
+    return results;
+  }
+
+  #helperCard(error: unknown): Json {
+    const at = (this.#options.now ?? (() => new Date()))().toISOString();
+    const reason = String(error instanceof Error ? error.message : error)
+      .replace(/\s+/g, " ").trim().slice(0, 110) || "unknown error";
+    const question = `Coordinator helper 未就绪：${reason}`.slice(0, 200);
+    return {
+      state: "waiting", why: `Coordinator helper 未就绪：${reason}`.slice(0, 140),
+      actions: [{ kind: "ask", risk_tags: [], ask: { kind: "question", question, options: ["accept", "later", "drop"] } }],
+      card: { kind: "question", question, options: ["accept", "later", "drop"], state: "open", created_at: at, acked_at: null, answer: null, snooze_until: null, closed_at: null },
+    };
+  }
+
   async #dispatch(dispatch: Dispatch): Promise<Json> {
     if (dispatch.kind === "record_only") return this.#recordOnly(dispatch);
     if (dispatch.kind === "coordinator") {
       const decide = this.#options.decide ?? (async (job: Json) => {
         if (this.#options.coordinator) {
-          const config = coordinatorConfig(this.#coordinatorSettings(), job.space.primary);
-          const result = await runCoordinator(job, config, { ...(this.#options.coordinator.run ? { run: this.#options.coordinator.run } : {}) });
-          return { ...result.decision, run: { ...result.decision.run, coordinator_ref: result.session } };
+          try {
+            return await this.#decideWithHelper(job, job.space.primary);
+          } catch (error) {
+            return this.#helperCard(error);
+          }
         }
         const at = new Date().toISOString();
         return {
@@ -421,6 +488,16 @@ if (import.meta.main) {
     finally { draining = false; }
   };
   await drain();
+  let ensuring = false;
+  const ensure = async () => {
+    if (ensuring) return;
+    ensuring = true;
+    try { await service.ensureHelpers(); }
+    catch (error) { console.error("collie helper ensure failed:", error instanceof Error ? error.message : error); }
+    finally { ensuring = false; }
+  };
+  await ensure();
+  setInterval(ensure, 30_000);
   setInterval(drain, 1000);
   console.error(`collie service ready: ${incoming}`);
 }

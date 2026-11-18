@@ -32,7 +32,6 @@ export default class InboxSettings extends View {
     cx.spawn(async (cx) => {
       try {
         const next = mergeCoordinator(this.cfg, {
-          cli: this.cfg.everywhere?.coordinator?.cli ?? "codex",
           model: this.model.content().text.trim(),
           effort: this.cfg.everywhere?.coordinator?.effort ?? "high",
           ...patch,
@@ -75,15 +74,12 @@ export default class InboxSettings extends View {
     const saved = this.savedAt ? div().text_size(TEXT.label).text_color(t.dim).child("Saved") : null;
     return v_flex()
       .child(div().pb(6).text_size(TEXT.title).font_semibold().text_color(t.foreground).child("Coordinator"))
-      .child(this.row(t, "Agent CLI", "The Coordinator helper session that turns a Case into a Decision.",
-        segmented("coordinator-cli", [["codex", "Codex"], ["claude", "Claude"]], current.cli ?? "codex",
-          (cli, _e, cx) => this.save({ cli }, cx))))
       .child(this.row(t, "Model", "Use the CLI default or name a model for this coordinator.",
         div().w(220).child(Input.new(this.model)), saved))
       .child(this.row(t, "Effort", "How much reasoning the coordinator spends on each decision.",
         segmented("coordinator-effort", [["low", "Low"], ["medium", "Medium"], ["high", "High"], ["xhigh", "XHigh"], ["max", "Max"]],
           current.effort ?? "high", (effort, _e, cx) => this.save({ effort }, cx), { size: "lg" })))
-      .child(this.row(t, "Session", "New / Build creates a session. Card Review resumes it from the Ledger.",
+      .child(this.row(t, "Session", "New / Build creates a session. Card Review resumes it from the Ledger; ingress always uses the persistent helper.",
         div().text_size(TEXT.label).text_color(t.dim).child("Per space")));
   }
 

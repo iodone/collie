@@ -15,6 +15,31 @@ export default class TabMenu extends View {
 
   render(cx) {
     const t = theme(), p = props(), target = p.target ?? {};
+    // The tab bar's + while a space has no Coordinator: restore it here, beside the usual new-tab entries.
+    if (p.mode === "new") {
+      return v_flex().id("collie-new-menu").w_full().p(5).bg(t.popover).text_size(12.8)
+        .child(this.row("coordinator", "Coordinator", "mods/collie-chrome/network.svg", (cx) => {
+          closeOverlay(p.overlay);
+          setShared("coordinator.openreq", { space: target.space, show: true, at: Date.now() });
+          cx.notify();
+        }, t))
+        .child(this.row("terminal", "Terminal", "mods/collie-chrome/plus.svg", (cx) => {
+          closeOverlay(p.overlay);
+          run("tab.new", { space: target.space });
+          cx.notify();
+        }, t))
+        .child(this.row("space", "New space", "mods/collie-chrome/folder-plus.svg", (cx) => {
+          closeOverlay(p.overlay);
+          run("space.new");
+          cx.notify();
+        }, t))
+        .child(div().mx(7).my(4).h(1).bg(t.border))
+        .child(this.row("more", "More agents…", "mods/collie-chrome/layers.svg", (cx) => {
+          closeOverlay(p.overlay);
+          openOverlay({ mod: "new-menu", kind: "popup", width: 250 });
+          cx.notify();
+        }, t));
+    }
     return v_flex().id("collie-tab-menu").w_full().p(5).bg(t.popover).text_size(12.8)
       .child(this.row("rename", "Rename", "mods/collie-chrome/square-pen.svg", (cx) => {
         closeOverlay(p.overlay);
@@ -26,11 +51,12 @@ export default class TabMenu extends View {
         run("tab.new", { space: target.space });
         cx.notify();
       }, t))
-      .child(div().mx(7).my(4).h(1).bg(t.border))
-      .child(this.row("close", "Close", "mods/collie-tabs/win-close.svg", (cx) => {
-        setShared("collie.closeTabReq", { id: target.id, at: Date.now() });
-        closeOverlay(p.overlay);
-        cx.notify();
-      }, t));
+      .when(!target.locked, (el) => el
+        .child(div().mx(7).my(4).h(1).bg(t.border))
+        .child(this.row("close", "Close", "mods/collie-tabs/win-close.svg", (cx) => {
+          setShared("collie.closeTabReq", { id: target.id, at: Date.now() });
+          closeOverlay(p.overlay);
+          cx.notify();
+        }, t)));
   }
 }

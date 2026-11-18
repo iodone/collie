@@ -138,6 +138,13 @@ function runningAssistant(space, ps = panes()) {
 // it; else the view stays. settings ({ agent, model, effort, fast, perm }, from the New space
 // dialog): what it starts with. A machine that's offline gets it once it's back (watchNewSpaces).
 export async function openCoordinator(space, show = true, settings = null) {
+  // One Coordinator per space: a second copy would split the chat from its workers.
+  const existing = coordinatorTab(space);
+  if (existing) {
+    if (!space.active) run("space.select", { id: space.id });
+    if (show) run("tab.select", { id: existing.id });
+    return;
+  }
   if (space.machine && !machineReady(space.machine)) {
     setShared("coordinator.pending", { ...(shared("coordinator.pending") ?? {}), [space.id]: { settings, at: Date.now() } });
     toast({ title: `${space.machine} is offline`, body: "Its Assistant starts when it's back." });
@@ -151,15 +158,12 @@ export async function openCoordinator(space, show = true, settings = null) {
     const everywhere = cfg.everywhere?.coordinator ?? {};
     const local = cfg.spaces?.[space.id]?.coordinator ?? {};
     const selected = { ...everywhere, ...local };
-    if (!selected.cli) {
-      toast({ title: "Configure Inbox Coordinator first", body: "Open Collie settings and choose Codex or Claude.", level: "error" });
-      return;
-    }
-    settings = { agent: selected.cli, model: selected.model ?? "default", effort: selected.effort ?? "high" };
+    // The chat's model picker switches agents; the first start is always Claude.
+    settings = { agent: "claude", model: selected.model ?? "default", effort: selected.effort ?? "high" };
   }
   const slot = `coord-${space.id}-${Math.random().toString(36).slice(2, 10)}`;
   settings = settings.agent
-    ? { ...settings, perm: settings.perm ?? (settings.agent === "claude" ? "plan" : "read-only") }
+    ? { ...settings, perm: settings.perm ?? "auto" }
     : null;
   if (!settings) {
     toast({ title: "Configure Inbox Coordinator first", body: "Open Collie settings and choose Codex or Claude.", level: "error" });
@@ -463,7 +467,18 @@ export const restartAgent = (k, argv) => script("restart", argv ? [k.address, JS
 export function closeTab(tabId) {
   const c = coordinatorIn(tabId);
   if (c) {
-    openOverlay({ mod: "collie-close", kind: "dialog", width: 440, height: 336, props: { tab: tabId, coord: c.address } });
+    // × hides the Coordinator; it does not end the session. Park first, let Herdr apply it, then remove
+    // the tab (the chat pane would otherwise keep an empty Coordinator tab behind).
+    const script = `herdr-app do terminal.park --terminal ${c.address} >/dev/null 2>&1; sleep 0.8; herdr-app do tab.close --id ${tabId} >/dev/null 2>&1`;
+    exec("sh", ["-c", script]).catch(() => {});
+    return;
+  }
+  // A Helper tab is a view of a persistent ingress session: park it first, so closing the tab never kills it.
+  const helper = terminals().find((k) => k.labels?.["herdr.role"] === "helper"
+    && (k.labels?.["herdr.tab"] === tabId || panes().some((p) => p.tab === tabId && p.terminal === k.address)));
+  if (helper) {
+    // Parking the only pane closes the tab; the helper terminal itself keeps running.
+    run("terminal.park", { terminal: helper.address });
     return;
   }
   const space = allSpaces().find((s) => s.tabs.some((x) => x.id === tabId));

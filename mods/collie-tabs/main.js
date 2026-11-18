@@ -1,8 +1,8 @@
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { panes, run, openOverlay, theme, window, shared, setShared, layout, settings, nextCommand, readTextFile, appHome } from "herdr";
+import { panes, terminals, run, openOverlay, theme, window, shared, setShared, layout, settings, nextCommand, readTextFile, writeTextFile, appHome } from "herdr";
 import { spacesWithChats as spaces, sweep } from "./parked.js";
-import { isCoordinatorTab, closeTab, watchNewSpaces, newSpace, openCoordinator, renameTab, renameSpace } from "./coordinator.js";
+import { isCoordinatorTab, coordinatorTab, closeTab, watchNewSpaces, newSpace, openCoordinator, renameTab, renameSpace } from "./coordinator.js";
 import { startTick, tickOnChange } from "./tick.js";
 import { startInbox, countsByTab, readyByTab, showInbox, toAlert } from "./inbox-engine.js";
 import { countBadge, H, TEXT, RADIUS } from "./lib/ui.js";
@@ -132,6 +132,8 @@ export default class Tabs extends View {
     const item = (c, i) => {
       const program = panes().find(p => p.tab === c.id && p.program?.agent)?.program ?? panes().find(p => p.tab === c.id)?.program;
       const name = tabName(c.name, program?.name);
+      // Coordinator is permanent; Helper keeps its × (× parks it, it does not end the session).
+      const locked = isCoordinatorTab(c.id);
       return h_flex().id(`tab-${c.id}`).h(H.sm).px(8).gap(6).rounded(RADIUS.control).items_center().flex_none().text_size(TEXT.body)
         .border(1).border_color(c.active ? t.border : t.chrome).bg(c.active ? t.raised : t.chrome).text_color(c.active ? t.foreground : t.muted)
         .cursor_pointer().hover(s => s.bg(t.hover))
@@ -141,13 +143,13 @@ export default class Tabs extends View {
           if (from !== null && from !== i) run("tab.move", { id: shown[from].id, index: space.tabs.findIndex(x => x.id === c.id) + 1 });
           else run("tab.select", { id: c.id });
         })
-        .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "collie-menu", kind: "popup", width: 236, props: { target: { id: c.id, space: space.id, name: c.name, named: c.named } } }); })
+        .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "collie-menu", kind: "popup", width: 236, props: { target: { id: c.id, space: space.id, name: c.name, named: c.named, locked } } }); })
         .when(Boolean(program?.icon), el => el.child(program.tint ? svg(program.icon).size(14).text_color(t.muted) : image(program.icon).size(14)))
         .child(div().max_w(170).truncate().child(c.zoomed ? `${name} Z` : name))
         .when(c.status === "working", el => el.child(svg("mods/collie-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900)))
         .when(needs.get(c.id) > 0 || readies.get(c.id) > 0, el => el.child(countBadge(needs.get(c.id), readies.get(c.id), c.active ? t.raised : t.chrome)))
         .when(!(needs.get(c.id) > 0 || readies.get(c.id) > 0) && (c.status === "blocked" || c.status === "done"), el => el.child(div().size(6).rounded(3).bg(t[c.status])))
-        .when(c.active, el => el.child(div().id(`close-${c.id}`).cursor_pointer().text_color(t.dim).on_mouse_down("left", stop).on_click((_e, cx) => { cx.stop_propagation(); closeTab(c.id); }).child(svg("mods/collie-tabs/win-close.svg").size(12))));
+        .when(c.active && !locked, el => el.child(div().id(`close-${c.id}`).cursor_pointer().text_color(t.dim).on_mouse_down("left", stop).on_click((_e, cx) => { cx.stop_propagation(); closeTab(c.id); }).child(svg("mods/collie-tabs/win-close.svg").size(12))));
     };
     const root = layout(), sidebar = find(root, "sidebar"), w = window();
     // Old saved rails and a dragged-narrow sidebar can be smaller than the window buttons.
@@ -181,7 +183,9 @@ export default class Tabs extends View {
       .on_mouse_up("left", () => { this.pressed = null; })
       .on_scroll_wheel(e => { if (Math.abs(e.delta.y) >= 1) run(e.delta.y > 0 ? "tab.prev" : "tab.next"); })
       .child(h_flex().id("tab-scroll").flex_1().min_w(0).h_full().items_center().gap(3).overflow_x_scrollbar().children(shown.map(item)))
-      .child(button("tab-new", "+", () => openOverlay({ mod: "new-menu", kind: "popup", width: 250 })))
+      .child(button("tab-new", "+", () => coordinatorTab(space)
+        ? openOverlay({ mod: "new-menu", kind: "popup", width: 250 })
+        : openOverlay({ mod: "collie-menu", kind: "popup", width: 250, props: { mode: "new", target: { space: space.id } } })))
       .child(panelButton("files", "Files", "mods/collie-files/file.svg"))
       .child(panelButton("collie", "Inbox", "mods/collie-chrome/files.svg", [waiting, 0]))
       .child(panelButton("artifacts", "Artifacts", "mods/collie-artifacts/artifacts.svg"))
