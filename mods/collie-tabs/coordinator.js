@@ -467,9 +467,10 @@ export const restartAgent = (k, argv) => script("restart", argv ? [k.address, JS
 export function closeTab(tabId) {
   const c = coordinatorIn(tabId);
   if (c) {
-    // × hides the Coordinator; it does not end the session. terminal.park keeps the process live
-    // (and, when this was its only pane, closes the tab).
-    run("terminal.park", { terminal: c.address });
+    // × hides the Coordinator; it does not end the session. Park first, let Herdr apply it, then remove
+    // the tab (the chat pane would otherwise keep an empty Coordinator tab behind).
+    const script = `herdr-app do terminal.park --terminal ${c.address} >/dev/null 2>&1; sleep 0.8; herdr-app do tab.close --id ${tabId} >/dev/null 2>&1`;
+    exec("sh", ["-c", script]).catch(() => {});
     return;
   }
   // A Helper tab is a view of a persistent ingress session: park it first, so closing the tab never kills it.
