@@ -1860,10 +1860,17 @@ export default class Chat extends View {
   async loadSpaceTasks() {
     const r = await exec("collie-task", [...(this.machine ? ["--on", this.machine] : []), "list", "--all", "--json"]).catch(() => null);
     try { const d = JSON.parse(r?.stdout ?? "null"); if (Array.isArray(d)) this.spaceTasks = d.flatMap((g) => (g.tasks ?? []).map((x) => ({ ...x, folder: g.folder }))); } catch {}
+    // Ticket transitions live in the Ledger; tasks supply execution facts only.
+    try {
+      const raw = await readTextFile(`${home()}/.local/state/collie/ledger.json`);
+      const d = JSON.parse(raw ?? "null");
+      this.spaceDecisions = (d?.entries ?? []).filter((e) => e.kind === "decision").map((e) => e.payload ?? e);
+    } catch { this.spaceDecisions = []; }
   }
 
   taskSig() {
-    return (this.spaceTasks ?? []).map((x) => `${x.ref}:${x.status}:${x.why ?? ""}:${x.report?.text ?? ""}:${x.report?.left ?? ""}`).join("|");
+    return [(this.spaceTasks ?? []).map((x) => `${x.ref}:${x.status}:${x.why ?? ""}:${x.report?.text ?? ""}:${x.report?.left ?? ""}`).join("|"),
+      (this.spaceDecisions ?? []).map((d) => `${d.id}:${d.state}:${d.run?.task_ref ?? ""}:${d.decided_at ?? ""}:${d.settled?.at ?? ""}`).join("|")].join("||");
   }
 
   // The lines: { inline: news item id → its row, extra: [{ at, row }] }. Herdr's news to the
@@ -1874,36 +1881,43 @@ export default class Chat extends View {
     const space = this.assistant();
     const inline = new Map(), extra = [];
     if (!space) return { inline, extra };
-    // A space's tasks make hundreds of lines: the last render's, unless what they're made of
-    // changed (HERD-94: a render past Herdr's 50 ms is stopped).
-    const sig = [space, this.spaceTasks, items, items.length, items[items.length - 1]?.id, this.start,
+    const sig = [space, this.spaceTasks, this.spaceDecisions, items, items.length, items[items.length - 1]?.id, this.start,
       (this.wasks ?? []).map((a) => a.ref).join(",")];
     if (this.newsMemo?.sig.every((v, i) => v === sig[i])) return this.newsMemo.out;
     const tasks = new Map();
     for (const x of this.spaceTasks ?? []) if ((x.space ?? x.queue?.space) === space && x.ref && !tasks.has(x.ref)) tasks.set(x.ref, x);
-    const all = [], said = new Set();
-    for (const it of items) if (it.kind === "news") { said.add(`${it.ref}:${it.event}`); all.push(it); }
-    // Placed before what this chat has loaded: shown once it's scrolled back to (the top).
-    const first = items.find((x) => x.at)?.at ?? 0;
-    for (const [ref, x] of tasks) for (const [event, at] of [["started", x.started], ["ready", x.ready_at], ["done", x.done_at]]) {
-      if (!Number.isFinite(at) || said.has(`${ref}:${event}`) || (at < first && this.start !== 0)) continue;
-      all.push({ id: `tn:${ref}:${event}:${at}`, at, ref, event, text: "", made: true });
+    // A ticket is the Ledger decision; a task's task_ref is `<folder-slug>#<id>`.
+    const suffix = (v) => { const s = String(v ?? ""); const i = s.lastIndexOf("#"); return i >= 0 ? s.slice(i + 1) : s; };
+    const decisions = new Map();
+    for (const d of this.spaceDecisions ?? []) {
+      if (d.space !== space && !(d.space_candidates ?? []).includes(space)) continue;
+      const key = suffix(d.run?.task_ref);
+      if (key) decisions.set(key, d);
+    }
+    const all = [];
+    for (const [ref, x] of tasks) {
+      const d = decisions.get(String(x.id)) ?? decisions.get(suffix(ref)) ?? null;
+      if (Number.isFinite(x.started)) all.push({ id: `ticket:${ref}:started:${x.started}`, at: x.started, ref, event: "started", text: "", made: true });
+      if (Number.isFinite(x.ready_at)) all.push({ id: `ticket:${ref}:ready:${x.ready_at}`, at: x.ready_at, ref, event: "ready", text: "", made: true });
+      // Done is a ticket transition, not a task timestamp: only a settled Ledger decision makes it.
+      if (d?.state === "settled") {
+        const at = Date.parse(d.settled?.at ?? d.decided_at ?? "") || x.done_at;
+        if (Number.isFinite(at)) all.push({ id: `ticket:${ref}:done:${at}`, at, ref, event: "done", text: "", made: true });
+      }
     }
     all.sort((a, b) => a.at - b.at);
     const last = new Map();
     for (const e of all) last.set(e.ref, e);
     this.needsAt = new Map();
-    for (const e of all) if ((e.event === "needs-you" || e.event === "failed") && Number.isFinite(e.at)) this.needsAt.set(e.ref, [...(this.needsAt.get(e.ref) ?? []), e.at]);
     const order = [], ordered = new Set();
     for (const e of all) {
       const x = tasks.get(e.ref);
       if (!ordered.has(e.ref)) { ordered.add(e.ref); order.push(e.ref); }
       const asks = (this.wasks ?? []).some((a) => a.ref === e.ref);
-      // Needs you, still: its words in red, and its card open just under it.
       const live = last.get(e.ref) === e && (e.event === "needs-you" || e.event === "failed") && (x?.status === "needs" || asks);
       const row = { kind: "tasknews", id: e.id, ref: e.ref, task: x ?? null, taskId: x?.id ?? null, folder: x?.folder ?? null, title: x?.title ?? "",
         ...newsWords(e, x), live, asks: live && asks };
-      if (e.made) extra.push({ at: e.at, row }); else inline.set(e.id, row);
+      extra.push({ at: e.at, row });
     }
     this.taskOrder = order;
     this.newsMemo = { sig, out: { inline, extra } };
@@ -2827,10 +2841,8 @@ export default class Chat extends View {
       case "tasknews": {
         // A task's news line (newsLines()): its mark, the id, what happened, then its words, dim;
         // a needs-you line still waiting in red. The whole line opens it in the Inbox (clickRow()).
-        const tick = (c) => div().size(12).flex_none().rounded(6).bg(c).child(svg("mods/collie-inbox/task/tick.svg").size(12).flex_none().text_color("#ffffff"));
-        const dot = (c) => div().size(8).flex_none().rounded(4).bg(c);
-        const mark = x.mark === "ready" ? tick(green()) : x.mark === "done" ? tick(t.dim)
-          : dot(x.mark === "started" ? amber() : x.mark === "needs" ? (x.live ? red() : t.dim) : t.dim);
+        const mark = taskDot(x.mark === "ready" ? "ready" : x.mark === "done" ? "done"
+          : x.mark === "needs" ? "needs" : x.mark === "started" ? "working" : "queued");
         return col(h_flex().w_full().px(6).py(QUIET_PY).gap(6).items_center().rounded(RADIUS.card).cursor_pointer()
           .text_size(TEXT.label).text_color(t.dim).hover((s) => s.bg(t.hover))
           .child(h_flex().w(14).h(14).flex_none().items_center().justify_center().child(mark))
@@ -3160,6 +3172,11 @@ export default class Chat extends View {
   // Open the persistent ingress Helper in its own tab. It is a real terminal; closing that tab parks it
   // instead of killing it (collie-tabs closeTab), so the session and its queue survive.
   openHelperTab(h, cx) {
+    const live = terminals().find((x) => x.address === h.address && x.state === "live");
+    if (!live) {
+      toast({ title: "Helper isn't running", body: "Start the Coordinator first; the Helper starts with it.", level: "info" });
+      return;
+    }
     const existing = panes().find((p) => p.terminal === h.address);
     if (existing) {
       run("tab.select", { id: existing.tab });

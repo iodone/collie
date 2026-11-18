@@ -440,9 +440,9 @@ export default class Pane extends View {
         .child(this.button(t, `ph-r-${pane}`, "split-right", "pane.split", { direction: "right", pane }))
         .child(this.button(t, `ph-d-${pane}`, "split-down", "pane.split", { direction: "down", pane }))
         .child(this.button(t, `ph-z-${pane}`, self.zoomed ? "unzoom" : "zoom", "pane.zoom", { pane }))
-        .child(chatMode && entry
+        .when(!isAssistant, (el) => el.child(chatMode && entry
           ? this.button(t, `ph-x-${pane}`, "close", null, null, () => this.closeChat(pane))
-          : this.button(t, `ph-x-${pane}`, "close", "pane.close", { pane })))
+          : this.button(t, `ph-x-${pane}`, "close", "pane.close", { pane }))))
       .when(canSwitch, (el) => el.child(this.switcher(`ph-mode-${pane}`, page,
         // Chat: from a Coordinator terminal, the existing split/park swap; from Helper, target the Coordinator.
         (cx) => (helperMode ? this.toCoordinatorChat(self, cx) : this.toChat(self, cx)),
