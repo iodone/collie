@@ -33,7 +33,7 @@ Work 只有四个一级状态，它们是 `Decision + Task + Receipt` 的投影�
 | `open` | task `queued` / `scheduled` / `todo` | **Todo** |
 | `open` | task `running` / `ready` / `merging` / `done`，或 task_ref 暂不可读 | **Working** |
 
-Ticket 必须有 Decision。只有 `collie-task`、没有 Decision 的孤儿 task 不进 Inbox；用 `collie-ticket adopt` 补链，不重复 spawn。
+Ticket 必须有 Decision。只有 `collie-task`、没有 Decision 的孤儿 task 不进 Inbox；用 `collie ticket adopt` 补链，不重复 spawn。
 
 ## 为什么
 

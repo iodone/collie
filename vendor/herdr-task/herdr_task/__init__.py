@@ -15,7 +15,7 @@ before it:
   launch       Starting agents: their argv, labels, brief, tab and coordinator.
   takeover     The backup agent: a task whose CLI can't go on is taken over, once, by the other
                CLI; and which CLIs each machine has installed and signed in.
-  store        Where a folder's tasks live (~/.herdr/tasks/<slug>.json) and the locked Store that
+  store        Where a folder's tasks live (~/.local/share/collie/tasks/<slug>.json) and the locked Store that
                edits them.
   queues       Queues: tasks that come after others, and how many may run at once.
   archive      The archive: done tasks set aside after a while.

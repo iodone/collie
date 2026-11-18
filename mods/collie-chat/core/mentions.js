@@ -7,7 +7,7 @@
 // Shared core: the source is core/mentions.js; bin/sync-shared copies it into the mods in lib/COPIES.
 
 // Where each machine's collie-task keeps its reach map (refreshed by its scheduler every 5 minutes).
-export const REACH_FILE = 'cat "${HERDR_TASK_STORE:-$HOME/.herdr/tasks}/.reach.json" 2>/dev/null';
+export const REACH_FILE = 'cat "${COLLIE_TASK_STORE:-$HOME/.local/share/collie/tasks}/.reach.json" 2>/dev/null';
 
 // Every machine in a reach map once, nearest first, with the route that reaches it from the map's start (as
 // herdr_task/machines.py nodes(): herdr-core links before ssh).

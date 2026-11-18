@@ -9,7 +9,7 @@ import { coordinatorTab } from "./coordinator.js";
 import { serviceRuns } from "./service.js";
 
 const CLI = () => (globalThis.process?.env?.COLLIE_TASK_CLI) ?? `${appHome()}/bin/collie-task`;
-const STORE = () => (globalThis.process?.env?.COLLIE_TASK_STORE) ?? (globalThis.process?.env?.HERDR_TASK_STORE) ?? `${home()}/.herdr/tasks`;
+const STORE = () => (globalThis.process?.env?.COLLIE_TASK_STORE) ?? (globalThis.process?.env?.HERDR_TASK_STORE) ?? `${home()}/.local/share/collie/tasks`;
 let running = false, soon = false, seen = null;
 
 async function tick() {

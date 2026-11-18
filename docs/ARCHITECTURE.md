@@ -227,7 +227,7 @@ Work/Ticket 不是第四个对象，也不是第二套持久状态机。它是�
 
 - `Needs you` 的 `waiting` 与 task 的 `ready` 是两个维度：task 完成不等于验收完成；验收走 Card answer，Decision 才能 `settled`。
 - `Todo → Working → Needs you → Working` 是 Work 投影的流转，不是写回 Ledger 的状态机；底层 task 仍由 `collie-task` 维护。
-- **Ticket 必须有 Decision**。只有 `collie-task` 而没有 Decision 的孤儿 task 不进 Inbox；用 `collie-ticket adopt` 补一条 `actions: []` 的 Decision，不重复 spawn。
+- **Ticket 必须有 Decision**。只有 `collie-task` 而没有 Decision 的孤儿 task 不进 Inbox；用 `collie ticket adopt` 补一条 `actions: []` 的 Decision，不重复 spawn。
 - Work 的状态是投影，不写回 Ledger；Decision 是唯一持久状态机。
 
 ---
@@ -343,7 +343,7 @@ mods/collie-artifacts/             # Ticket Artifacts + viewer
 
 Chat 的 secrets 走 `bin/collie-secret` 和 `~/.local/share/collie/secrets/vault.json`；voice / dictation / call 在 Collie 中关闭（`VOICE=false`），不读 shep 的 secret/service 路径。
 
-Task 如果没有 Decision，就不是 Ticket，Inbox 不伪造行。修复用 `collie-ticket adopt --space S --task REF --folder DIR`：它写一条 `actions: []`、`run.task_ref` 指向已有 task 的 Decision，让 Work 回到四态投影，不重复 spawn。
+Task 如果没有 Decision，就不是 Ticket，Inbox 不伪造行。修复用 `collie ticket adopt --space S --task REF --folder DIR`：它写一条 `actions: []`、`run.task_ref` 指向已有 task 的 Decision，让 Work 回到四态投影，不重复 spawn。
 
 ### 过滤器
 

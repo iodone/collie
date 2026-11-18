@@ -8,6 +8,7 @@ import { startAnswerServer } from "../service/answer-server.ts";
 
 const ruleset = await Bun.file(new URL("../protocol/fixtures/ruleset.json", import.meta.url)).json();
 const root = new URL("..", import.meta.url).pathname;
+const python = Bun.which("python3") ?? "python3";
 const paths: string[] = [];
 const servers: ReturnType<typeof startAnswerServer>[] = [];
 afterEach(() => {
@@ -64,7 +65,7 @@ function post(socketPath: string, path: string, body: unknown): Promise<{ status
   return promise;
 }
 
-describe("collie-ticket create", () => {
+describe("collie ticket create", () => {
   test("POST /ticket writes one open spawn Decision, projects the queue and spawns once", async () => {
     const dir = scratch();
     const agent = fakeAgent();
@@ -73,10 +74,10 @@ describe("collie-ticket create", () => {
       workspaces: { collie: { folder: "/repo/collie" } },
     });
     const socket = await serve(service, dir);
-    const brief = "# 实现 collie-ticket\n\n只走工具，不在 chat 里伪造状态。";
+    const brief = "# 实现 collie ticket\n\n只走工具，不在 chat 里伪造状态。";
 
     const response = await post(socket, "/ticket", {
-      space: "collie", title: "实现 collie-ticket", brief, kind: "review",
+      space: "collie", title: "实现 collie ticket", brief, kind: "review",
     });
 
     expect(response.status).toBe(200);
@@ -91,7 +92,7 @@ describe("collie-ticket create", () => {
     expect(created.run.kind).toBe("review");
     expect(created.actions).toHaveLength(1);
     expect(created.actions[0].spawn).toMatchObject({
-      title: "实现 collie-ticket", base: "current", review: true, merge: false, access: "read", tells: "needed",
+      title: "实现 collie ticket", base: "current", review: true, merge: false, access: "read", tells: "needed",
     });
     expect(readFileSync(created.actions[0].spawn.brief_ref, "utf8")).toContain("human.ticket_requested");
 
@@ -133,7 +134,7 @@ describe("collie-ticket create", () => {
     expect(() => readFileSync(join(dir, "queue.json"), "utf8")).toThrow();
   });
 
-  test("collie-ticket CLI posts the brief file and prints {decision_id,ticket_ref}", async () => {
+  test("collie ticket CLI posts the brief file and prints {decision_id,ticket_ref}", async () => {
     const dir = scratch();
     const agent = fakeAgent();
     const service = new InboxService({
@@ -145,22 +146,21 @@ describe("collie-ticket create", () => {
     writeFileSync(briefPath, "# CLI brief\n");
 
     const child = Bun.spawn([
-      process.execPath, join(root, "bin", "collie-ticket"), "create",
+      python, join(root, "bin", "collie"), "ticket", "create",
       "--state-dir", dir, "--space", "collie", "--title", "CLI ticket",
-      "--brief", briefPath, "--kind", "build", "--json",
+      "--brief", briefPath, "--kind", "build",
     ], { stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, code] = await Promise.all([
       new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
     ]);
 
-    expect(code).toBe(0);
-    expect(stderr).toBe("");
+    expect([code, stderr]).toEqual([0, ""]);
     const result = JSON.parse(stdout);
     expect(result).toEqual({ decision_id: expect.stringMatching(/^dc_/), ticket_ref: "HAT-42" });
     expect(agent.calls.map((call) => call[0])).toEqual(["add", "start", "show"]);
 
     const shown = Bun.spawn([
-      process.execPath, join(root, "bin", "collie-ticket"), "show",
+      python, join(root, "bin", "collie"), "ticket", "show",
       "--state-dir", dir, "--decision", result.decision_id,
     ], { stdout: "pipe", stderr: "pipe" });
     const [shownOut, shownCode] = await Promise.all([new Response(shown.stdout).text(), shown.exited]);
@@ -171,7 +171,7 @@ describe("collie-ticket create", () => {
   });
 });
 
-describe("collie-ticket adopt", () => {
+describe("collie ticket adopt", () => {
   test("POST /ticket/adopt links an existing task with no spawn and projects Inbox", async () => {
     const dir = scratch();
     const agent = fakeAgent();

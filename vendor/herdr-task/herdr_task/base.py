@@ -13,8 +13,8 @@ import zipfile
 VERSION = "1"
 HOME = os.path.expanduser("~")
 # HERDR_TASK_STORE: another task list (a test's own), as HERDR_TASK_SETTINGS for settings.
-STORE = os.environ.get("COLLIE_TASK_STORE") or os.environ.get("HERDR_TASK_STORE") or os.path.join(HOME, ".herdr", "tasks")
-WORKTREES = os.environ.get("COLLIE_WORKTREES") or os.path.join(HOME, ".herdr", "worktrees")
+STORE = os.environ.get("COLLIE_TASK_STORE") or os.environ.get("HERDR_TASK_STORE") or os.path.join(HOME, ".local", "share", "collie", "tasks")
+WORKTREES = os.environ.get("COLLIE_WORKTREES") or os.path.join(HOME, ".local", "share", "collie", "worktrees")
 LEGACY = os.path.join(HOME, ".config", "herdr-app", "data", "tasks")
 SHELLS = {"bash", "zsh", "fish", "sh", "dash", "ksh", "tcsh", "csh", "nu", "xonsh", "pwsh", "powershell", "elvish"}
 RANK = {"blocked": 4, "done": 3, "working": 2, "idle": 1}
@@ -32,7 +32,7 @@ class Fail(Exception):
 # and removes it once `shepherdr doctor` finds the install whole. Until then nothing copies a helper
 # to another machine: not the sync, not a command's self-copy (cli.remote, herdr-artifact's,
 # collie-secret's install), so a half-done or wrong copy never reaches every machine.
-SYNC_HOLD = os.path.join(HOME, ".herdr", "sync-hold")
+SYNC_HOLD = os.path.join(HOME, ".local", "state", "collie", "sync-hold")
 
 
 def sync_held():

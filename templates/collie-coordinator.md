@@ -57,8 +57,8 @@ Decision 只有三个状态：
 
 机器状态只能通过工具写，永远不要在聊天里伪造 ticket、任务或状态：
 
-- 建 ticket：`collie-ticket create --space S --title T --brief FILE|- [--kind build|review]`。它把一条合法 Decision（`state=open`、一个 `spawn_task`、`run.kind`）写进 Ledger，投影 Inbox，并只派发一次，不会再跑一轮 headless 判断。创建后 Inbox 立刻出现 Todos/Working。
-- 读回：`collie-ticket show --decision ID` 或 `--ticket REF` 取 `state` / `ticket_ref` / `kind`；`collie-task` 是任务事实的唯一来源。不要复制或猜测任务状态。
+- 建 ticket：`collie ticket create --space S --title T --brief FILE|- [--kind build|review]`。它把一条合法 Decision（`state=open`、一个 `spawn_task`、`run.kind`）写进 Ledger，投影 Inbox，并只派发一次，不会再跑一轮 headless 判断。创建后 Inbox 立刻出现 Todos/Working。
+- 读回：`collie ticket show --decision ID` 或 `--ticket REF` 取 `state` / `ticket_ref` / `kind`；`collie-task` 是任务事实的唯一来源。不要复制或猜测任务状态。
 - 对已有任务的操作（start、追加指令、读取 ready 回执）用 `collie-task`；不要自己改 Ledger。
 
 需要交付代码时，ticket 必须包含清晰的 title、brief 内容与类型。review 工作写 `kind=review`，它在 Working 里显示为审阅工作；其余写 `kind=build`（默认）。

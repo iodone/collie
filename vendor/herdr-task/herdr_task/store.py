@@ -1,4 +1,4 @@
-"""Where a folder's tasks live (~/.herdr/tasks/<slug>.json) and the locked Store that edits them."""
+"""Where a folder's tasks live (~/.local/share/collie/tasks/<slug>.json) and the locked Store that edits them."""
 
 import fcntl
 import hashlib

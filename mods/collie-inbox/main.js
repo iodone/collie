@@ -564,7 +564,7 @@ export default class Inbox extends View {
         .child(taskDot(stage === "needs" ? need : stage, { pct, halo: stage === "needs" && need === "needs" })))
       .child(v().flex_1().min_w(0).gap(2)
         .child(h().h(22).min_w(0).gap(8).items_center()
-          .child(div().flex_none().font_family(ID_FONT).text_size(TEXT.label).text_color(t.dim).child(ticketRef(decision)))
+          .child(div().flex_none().font_family(ID_FONT).text_size(TEXT.label).text_color(t.dim).child(ticketRef(decision, target)))
           .child(div().id("collie-thread-title").flex_1().min_w(0).truncate().text_size(TEXT.title).font_medium().child(title)))
         .child(h().h(16).min_w(0).gap(6).items_center()
           .child(stateChip(t, stage, need, kind, decision.settled?.outcome))

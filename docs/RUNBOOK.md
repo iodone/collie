@@ -7,7 +7,7 @@
 | 内容 | root 下的位置 |
 | :-- | :-- |
 | layout、mods、lib、CLI | `.config/herdr-app/` |
-| helper（`collie-sync` / `collie-task` / `collie-ticket` / `collie-secret`，外加 `collie-artifact`） | `.local/bin/`（herdr-app 的 `bin/` 也保留一份） |
+| helper（`collie-sync` / `collie-task` / `collie-secret`，外加 `collie-artifact`） | `.local/bin/`（herdr-app 的 `bin/` 也保留一份） |
 | 提示词 | `.config/herdr-core/templates/` |
 | 后台 runtime（service / kernel / plugins / protocol） | `.local/share/collie/` |
 | 运行状态与初始 `ruleset.json` | `.local/state/collie/` |

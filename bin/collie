@@ -6,11 +6,13 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import hashlib
+import http.client
 import json
 import os
 from pathlib import Path
 import re
 import shutil
+import socket
 import stat
 import subprocess
 import sys
@@ -105,11 +107,11 @@ def source_files(source: Path, root: Path) -> dict[str, Path]:
     ruleset = source / "protocol/fixtures/ruleset.json"
     if ruleset.is_file():
         files[(STATE / "ruleset.json").as_posix()] = ruleset
-    for name in ("collie", "collie-sync", "collie-answer", "collie-request", "collie-task", "collie-ticket", "collie-secret"):
+    for name in ("collie", "collie-sync", "collie-answer", "collie-request", "collie-task", "collie-secret"):
         path = source / "bin" / name
         if path.is_file():
             files[(APP / "bin" / name).as_posix()] = path
-    for name in ("collie-sync", "collie-task", "collie-ticket", "collie-secret"):
+    for name in ("collie-sync", "collie-task", "collie-secret"):
         helper = source / "bin" / name
         if helper.is_file():
             files[(HELPERS / name).as_posix()] = helper
@@ -763,6 +765,95 @@ def uninstall(args) -> int:
     return 0
 
 
+class _UnixHTTPConnection(http.client.HTTPConnection):
+    def __init__(self, socket_path: Path):
+        super().__init__("localhost", timeout=20)
+        self.socket_path = socket_path
+
+    def connect(self):
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.settimeout(20)
+        self.sock.connect(str(self.socket_path))
+
+
+def _service_post(root: Path, route: str, payload: dict, state_dir: Path | None = None) -> dict:
+    state = Path(state_dir).expanduser().resolve() if state_dir else target_path(root, STATE)
+    socket_path = state / "service.sock"
+    if not socket_path.exists():
+        raise InstallError(f"collie service is not running (no socket at {socket_path})")
+    body = json.dumps(payload).encode("utf-8")
+    try:
+        connection = _UnixHTTPConnection(socket_path)
+        connection.request("POST", route, body=body, headers={"content-type": "application/json", "connection": "close"})
+        response = connection.getresponse()
+        raw = response.read()
+        status = response.status
+        connection.close()
+    except OSError as exc:
+        raise InstallError(f"can't reach collie service: {exc}") from exc
+    try:
+        data = json.loads(raw.decode("utf-8") or "{}")
+    except ValueError as exc:
+        raise InstallError("collie service returned invalid JSON") from exc
+    if status != 200:
+        raise InstallError(str(data.get("error") or f"collie service returned {status}"))
+    return data
+
+
+def ticket_create(args) -> int:
+    space, title, source = args.space, args.title, args.brief
+    if source == "-":
+        brief = sys.stdin.read()
+    else:
+        brief = Path(source).read_text()
+    result = _service_post(args.root, "/ticket", {"space": space, "title": title, "brief": brief, "kind": args.kind}, args.state_dir)
+    print(json.dumps(result, ensure_ascii=False))
+    return 0
+
+
+def ticket_adopt(args) -> int:
+    helper = target_path(args.root, APP / "bin" / "collie-task")
+    if not helper.is_file():
+        helper = Path(shutil.which("collie-task") or "")
+    if not helper.is_file():
+        raise InstallError("collie-task is not installed")
+    shown = subprocess.run([str(helper), "show", args.task, "--folder", args.folder, "--json"],
+                           text=True, capture_output=True)
+    if shown.returncode != 0:
+        raise InstallError(shown.stderr.strip() or f"can't read task {args.task}")
+    try:
+        task = json.loads(shown.stdout)
+    except ValueError as exc:
+        raise InstallError(f"collie-task returned invalid JSON") from exc
+    task_ref = task.get("key") or task.get("ref")
+    if not task_ref:
+        raise InstallError(f"task {args.task} has no key/ref")
+    result = _service_post(args.root, "/ticket/adopt", {
+        "space": args.space, "task_ref": task_ref, "title": task.get("title") or args.task,
+        "brief": task.get("prompt"), "kind": args.kind,
+    }, args.state_dir)
+    print(json.dumps(result, ensure_ascii=False))
+    return 0
+
+
+def ticket_show(args) -> int:
+    queue_path = (Path(args.state_dir).expanduser().resolve() if args.state_dir else target_path(args.root, STATE)) / "queue.json"
+    if not queue_path.is_file():
+        raise InstallError(f"no queue at {queue_path}")
+    queue = json.loads(queue_path.read_text())
+    decision = next((item for item in queue.get("decisions", [])
+                     if (args.decision and item.get("id") == args.decision)
+                     or (args.ticket and item.get("run", {}).get("task_ref") == args.ticket)), None)
+    if decision is None:
+        raise InstallError(f"no decision for {args.decision or args.ticket}")
+    print(json.dumps({
+        "decision_id": decision.get("id"), "state": decision.get("state"), "space": decision.get("space"),
+        "ticket_ref": decision.get("run", {}).get("task_ref"), "kind": decision.get("run", {}).get("kind", "build"),
+        "why": decision.get("why"),
+    }, ensure_ascii=False))
+    return 0
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(prog=NAME, description=__doc__)
     sub = result.add_subparsers(dest="command", required=True)
@@ -796,6 +887,31 @@ def parser() -> argparse.ArgumentParser:
         command.add_argument("--root", type=Path, default=Path.home())
         command.add_argument("--dry-run", action="store_true")
         command.set_defaults(function=function)
+    ticket = sub.add_parser("ticket")
+    ticket_sub = ticket.add_subparsers(dest="ticket_command", required=True)
+    create = ticket_sub.add_parser("create")
+    create.add_argument("--root", type=Path, default=Path.home())
+    create.add_argument("--state-dir", type=Path)
+    create.add_argument("--space", required=True)
+    create.add_argument("--title", required=True)
+    create.add_argument("--brief", required=True)
+    create.add_argument("--kind", choices=("build", "review"), default="build")
+    create.set_defaults(function=ticket_create)
+    adopt = ticket_sub.add_parser("adopt")
+    adopt.add_argument("--root", type=Path, default=Path.home())
+    adopt.add_argument("--state-dir", type=Path)
+    adopt.add_argument("--space", required=True)
+    adopt.add_argument("--task", required=True)
+    adopt.add_argument("--folder", required=True)
+    adopt.add_argument("--kind", choices=("build", "review"), default="build")
+    adopt.set_defaults(function=ticket_adopt)
+    show = ticket_sub.add_parser("show")
+    show.add_argument("--root", type=Path, default=Path.home())
+    show.add_argument("--state-dir", type=Path)
+    show.add_argument("--decision")
+    show.add_argument("--ticket")
+    show.set_defaults(function=ticket_show)
+
     command = sub.add_parser("uninstall")
     common(command)
     command.set_defaults(function=uninstall)
