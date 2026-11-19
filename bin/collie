@@ -895,7 +895,7 @@ def decision_commit(args) -> int:
     except ValueError as exc:
         raise InstallError(f"invalid decision JSON: {exc}") from exc
     result = _service_post(args.root, "/decision", {
-        "space": args.space, "project": args.project, "decision": decision,
+        "space": args.space, "project": args.project, "decision": decision, "turn_id": args.turn_id,
     }, args.state_dir)
     print(json.dumps(result, ensure_ascii=False))
     return 0
@@ -1286,6 +1286,7 @@ def parser() -> argparse.ArgumentParser:
     commit.add_argument("--space", required=True)
     commit.add_argument("--project")
     commit.add_argument("--file", default="-")
+    commit.add_argument("--turn-id")
     commit.set_defaults(function=decision_commit)
 
     coordinator = sub.add_parser("coordinator")

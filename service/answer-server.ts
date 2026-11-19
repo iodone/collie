@@ -13,6 +13,22 @@ function send(response: ServerResponse, status: number, value: unknown): void {
   response.end(JSON.stringify(value));
 }
 
+function deliveryError(error: unknown, attempt = 1) {
+  const message = error instanceof Error ? error.message : String(error);
+  let code = "invalid_decision";
+  let field: string | null = null;
+  if (/unknown playbook/i.test(message)) { code = "unknown_playbook"; field = "playbook.id"; }
+  else if (/invalid project|no project folder/i.test(message)) { code = "invalid_project"; field = "project"; }
+  else if (/invalid space/i.test(message)) { code = "invalid_space"; field = "space"; }
+  else if (/budget/i.test(message)) { code = "budget_exhausted"; }
+  else if (/timeout|temporarily|busy|unavailable/i.test(message)) { code = "retryable"; }
+  const retryable = code === "retryable";
+  return {
+    ok: false,
+    error: { code, field, message, retryable, attempt, max_attempts: 3 },
+  };
+}
+
 function readBody(request: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     let body = "";
@@ -30,6 +46,7 @@ export function serviceHandler(service: CollieService, { requireClientAuth = fal
   const startedAt = Date.now();
   return async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
     const url = (request.url ?? "").split("?")[0];
+    let input: Record<string, any> = {};
     try {
       if (request.method === "GET" && url === "/health") {
         send(response, 200, {
@@ -52,7 +69,7 @@ export function serviceHandler(service: CollieService, { requireClientAuth = fal
       if (request.method !== "POST") return send(response, 404, { error: "not found" });
 
       const body = await readBody(request);
-      const input = JSON.parse(body || "{}");
+      input = JSON.parse(body || "{}");
 
       if (url.startsWith("/v1/in/")) {
         const name = decodeURIComponent(url.slice("/v1/in/".length));
@@ -78,7 +95,7 @@ export function serviceHandler(service: CollieService, { requireClientAuth = fal
       const result = url === "/request"
         ? await service.request(input.space, input.goal, input.ticket_refs ?? [])
         : url === "/decision"
-          ? await service.commitDecision({ space: input.space, project: input.project, decision: input.decision })
+          ? await service.commitDecision({ space: input.space, project: input.project, decision: input.decision, turn_id: input.turn_id })
         : url === "/ticket"
           ? await service.createTicket({ space: input.space, project: input.project, title: input.title, brief: input.brief, kind: input.kind, playbook: input.playbook })
           : url === "/ticket/adopt"
@@ -86,6 +103,10 @@ export function serviceHandler(service: CollieService, { requireClientAuth = fal
             : await service.answerCard(input.decisionId, input.answer, input.coordinatorAddress);
       send(response, 200, result);
     } catch (error) {
+      if (url === "/decision") {
+        const attempt = Number(input.attempt ?? 1);
+        return send(response, 400, deliveryError(error, Number.isFinite(attempt) ? attempt : 1));
+      }
       send(response, 400, { error: error instanceof Error ? error.message : String(error) });
     }
   };

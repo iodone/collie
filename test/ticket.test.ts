@@ -280,3 +280,36 @@ describe("coordinator chat decision commit", () => {
     expect(response.body).toMatchObject({ origin: "human", state: "settled" });
   });
 });
+
+describe("decision delivery errors", () => {
+  test("returns a structured correctable error and keeps a retry idempotent", async () => {
+    const dir = scratch();
+    const service = new CollieService({
+      stateDir: dir, ruleset,
+      workspaces: { collie: { folder: "/repo/collie" } },
+    });
+    const socket = await serve(service, dir);
+    const base = {
+      state: "settled", why: "noop", actions: [],
+      settled: { at: new Date().toISOString(), by: "coordinator", outcome: "dropped" },
+      run: { kind: "build" },
+    };
+    const bad = await post(socket, "/decision", {
+      space: "collie", turn_id: "turn-retry-1",
+      decision: { ...base, playbook: { id: "missing", version: 1 } },
+    });
+    expect(bad.status).toBe(400);
+    expect(bad.body).toMatchObject({
+      ok: false,
+      error: { code: "unknown_playbook", field: "playbook.id", retryable: false, max_attempts: 3 },
+    });
+
+    const payload = { space: "collie", turn_id: "turn-retry-1", decision: base };
+    const first = await post(socket, "/decision", payload);
+    const second = await post(socket, "/decision", payload);
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(second.body.id).toBe(first.body.id);
+    expect(service.ledger.decisions.filter((item) => item.id === first.body.id)).toHaveLength(1);
+  });
+});

@@ -290,7 +290,7 @@ export class CollieService {
    * helper's Decision JSON: one CoordinatorTurn/Case, one Decision contract. Explicit human
    * commands (ticket.create) stay a separate `decided_by=human` path.
    */
-  async commitDecision(input: { space?: string; project?: string; decision?: Json }): Promise<Json> {
+  async commitDecision(input: { space?: string; project?: string; decision?: Json; turn_id?: string }): Promise<Json> {
     const space = input.space;
     if (typeof space !== "string" || !/^[a-z0-9][a-z0-9_-]{1,63}$/.test(space)) throw new Error("invalid space");
     const decision = input.decision;
@@ -304,6 +304,12 @@ export class CollieService {
       : decision.run?.kind === "review" ? this.collaboration.playbook("review") : this.collaboration.playbook("feature");
 
     const at = (this.#options.now ?? (() => new Date()))().toISOString();
+    const turnKey = `human:turn:${input.turn_id ?? decision.key ?? "untracked"}`;
+    const existingEvent = this.ledger.events.find((item) => item.key === turnKey);
+    if (existingEvent) {
+      const existing = this.ledger.decisions.find((item) => item.event_ref === existingEvent.id);
+      if (existing) return existing;
+    }
     const id = ledgerId("ev");
     const directory = join(this.stateDir, "turns");
     mkdirSync(directory, { recursive: true });
@@ -311,7 +317,7 @@ export class CollieService {
     const body = JSON.stringify({ origin: "human", decision });
     writeFileSync(dataRef, body, { mode: 0o600 });
     const event = {
-      id, source: "im", key: `human:turn:${id}`, type: "human.turn",
+      id, source: "im", key: turnKey, type: "human.turn",
       object: { kind: "none", id }, title: String(decision.why ?? "human turn").slice(0, 80),
       data_ref: dataRef, data_digest: `sha256:${createHash("sha256").update(body).digest("hex")}`,
       hops: 0, received_at: at,
@@ -319,6 +325,7 @@ export class CollieService {
       space_candidates: [space],
       ...(project ? { project } : {}),
     };
+    this.ledger.append("event", event);
     const dispatch: Dispatch = { kind: "coordinator", laneKey: event.merge.lane_key, space, event };
     const result = await coordinate(dispatch, {
       ledger: this.ledger, ruleset: this.#options.ruleset, stream: "chat_turn",

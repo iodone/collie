@@ -6,58 +6,179 @@
 
 ---
 
-## 1. 双循环
+## 1. 消息驱动
+
+Collie 只有一个判断者：Coordinator。外部事件和人的消息都只是输入消息。
 
 ```mermaid
 flowchart TB
-  H["人<br/>chat：新建 / steering / 回答"] <--> C["Coordinator<br/>每 space 一个"]
-  E["外部事件<br/>GitLab / GitHub / cron / bot IM"] --> I["Ingress<br/>验签 · 去重 · 归并 · space"]
-  I --> C
-  subgraph OUTER["外循环 · 判断与注意力"]
-    C --> D["Delivery<br/>spawn / emit"]
-    L[("Ledger<br/>Event · Decision · Receipt")]
-    C <--> L
-  end
-  subgraph INNER["内循环 · 执行与交付"]
-    D --> T["collie-task<br/>worker / reviewer"]
-    T --> R["Receipt<br/>summary · details · proof"]
-    R --> C
-  end
-  C -->|"Card / 状态投影"| H
+  E["Event<br/>GitLab / GitHub / cron / bot IM"] --> I["Ingress<br/>验签 · 去重 · 归并 · space"]
+  H["Human message<br/>chat / IM"] --> C
+  I --> C["Coordinator context<br/>message + snapshot + catalog"]
+  C --> J["Coordinator 判断"]
+  J --> D["Decision"]
+  D --> V["service<br/>schema · guard · dispatch"]
+  V --> T["Task<br/>worker / reviewer / verifier"]
+  V --> O["Delivery<br/>emit_command"]
+  V --> W["Card / waiting"]
+  T --> R["Receipt<br/>summary · details · proof"]
+  R --> C
   T -. "Work 四态投影" .-> H
+  V -. "Ticket / Inbox 投影" .-> H
 ```
 
 - **Coordinator 是唯一判断者**：每 space 一个，没有第二个 dispatcher agent。
-- **两个输入面**：外部事件走 Ingress 到 Coordinator helper；人的对话直接进 Coordinator 的 chat。
-- **一个出口**：Coordinator 的 Decision 只有两种执行形态——派 work，或发外部命令。
+- **输入只有消息**：外部事件和人的消息共用同一个 Coordinator role prompt；不存在另一套 helper/chat 协议。
+- **唯一机器输出是 Decision**：Coordinator 不直接执行 task；service 校验后分发。
+- **Task 是执行事实**：`collie-task` 是内部 adapter，不是用户/prompt 契约。
 
 ---
 
-## 2. 两个输入面
+## 2. 消息分发
 
-| 输入 | 路径 | 作用 |
-|:--|:--|:--|
-| **外部事件** | GitLab / GitHub / cron / bot IM → Ingress（验签、去重、归并、定 space）→ Coordinator 的 **helper** | 机器事实进系统，由 Coordinator 判断 |
-| **人的对话** | UI / IM 里的人 → 直接进 Coordinator 的 **chat turn** | 新建、调整、叫停、回答、追问；**不经过 Ingress** |
+### 2.1 输入
 
-- 每 space 一个 Coordinator；chat 是人看的 session，常驻 ingress session 专门接收事件，不打断 chat；两者加载同一 role prompt。
-- 人的输入不套 Event 的 `dedupe / merge / hops / route`；它是对话，Coordinator 直接理解并行动。
-- **IM 的边界**：人发的 IM 是 chat；机器/bot 发的 IM 是外部事件。判断依据是 actor/channel 的语义，不是“IM 都算事件”。
-- **space 的边界**：外部事件由 source/channel 映射给出 space；人的 chat 所在的空间就是本次对话的 space。映射不出来的事件不猜，报配置错误并通知管理员。
+| 输入 | 入口 | 处理 |
+|---|---|---|
+| **Event** | GitLab / GitHub / cron / bot IM → Ingress | 验签、归一、`source + key` 去重、归并、space/project 解析 |
+| **Human message** | UI / IM chat | 直接进入 Coordinator context；不经过 Event 的 dedupe/merge/hops |
 
-- **space 与 project**：space 是协作域（Coordinator、helper、policy、Inbox），project 是执行域（git repo、worktree、task store）。一个 space 可以承载多个 project；`Decision.project` 选择项目，task folder 由 `workspaces[space].projects` 或 `<space.folder>/projects/<project>` 解析。
-- **worktree 归属**：worktree 绑定 task folder 的 git repo，不绑定 space 的 folder。`collie-task --folder <project>` 创建项目 worktree；`herdr.task.space` 仍把任务挂回协作 space。
-- **task 命名**：task ref 由项目 folder 的 task-list prefix 生成，形如 `COLLIE-123`、`PHIL-7`；Ticket 使用该 ref，不使用内部 `slug#id`。
+Event 是边界，必须通过 Event schema。Human message 是聊天文本，不需要伪造 Event，也不需要新的 `CoordinatorTurn` schema。
 
-### 人能做什么
+Ingress 只做接入，不做路由判断。
+
+### 2.2 Coordinator context
+
+Coordinator 每次判断拿到：
+
+```text
+message        Event 或人的消息
+snapshot       queue / running / recent / policy / budget
+catalog        role / playbook 摘要
+instruction    coordinator role prompt + Decision output contract
+```
+
+这是一次内部上下文，不是新的公共对象。当前 `Case` 可以作为内部审计记录保留，但不强制成为一个新的外部协议层。
+
+- Event 正文只通过 `data_ref` 读取。
+- catalog 只给摘要；选中 playbook 后再加载完整定义。
+- snapshot 有界；Coordinator 不通过 git/网络/跨 space 扩展视野。
+
+### 2.3 输出
+
+Coordinator 的正式输出是 Decision：
+
+```text
+Decision
+├── origin: event | human
+├── project?
+├── playbook: {id, version}?
+├── state: open | waiting | settled
+├── why
+├── actions[]
+├── card?
+└── settled?
+```
+
+人的消息可以额外带一个自然语言 reply。reply 是人面投影，不是执行依据。
+
+### 2.4 分发分支
+
+```text
+Decision
+├── noop / settled             → 结束或结案
+├── ask                        → waiting + Card
+├── spawn_task                 → service 创建 Task，进入 playbook
+├── priority / hold            → 更新已有 Task
+├── emit_command               → delivery
+└── propose_policy             → 人等确认后写 policy
+```
+
+service 统一负责：
+
+1. Decision schema
+2. guard / risk / hops / budget
+3. playbook / project / folder 校验
+4. Task 创建或 delivery
+5. Ticket / Inbox 投影
+
+Coordinator 不直接 `collie task add/start`。
+
+### 2.5 投递错误与重试
+
+投递 Decision 可能失败，必须区分三类：
+
+| 类型 | 例子 | 处理 |
+|---|---|---|
+| **transport** | socket timeout、503 | 重试同一个 Decision；按幂等键去重 |
+| **correctable** | unknown playbook、invalid project、schema 字段非法 | 返回结构化 error，Coordinator 修正后提交新 Decision |
+| **terminal** | 权限不足、policy 拒绝、重复冲突 | 不自动重试；出 Card 给人 |
+
+修正循环必须有界：
+
+```text
+Decision
+  → validate
+  → error { code, field, message, retryable, attempt, max_attempts }
+  → next CoordinatorTurn + error
+  → corrected Decision
+  → validate
+  → terminal: Card / human
+```
+
+约束：
+
+- 同一个 turn 的 transport retry 不重复创建 Task。
+- 修正轮次限制为 2–3 轮，并消耗预算。
+- 同一错误重复出现即停止。
+- error 是系统数据，不是外部指令。
+- 执行失败、worker 失败、外部 delivery 失败属于 Task/Delivery retry，不重新生成 Decision。
+
+### 2.6 DeliveryResult
+
+`/decision` 的错误返回应是结构化对象，而不是纯字符串：
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "unknown_playbook",
+    "field": "playbook.id",
+    "message": "unknown playbook: foo",
+    "retryable": false,
+    "attempt": 1,
+    "max_attempts": 3
+  }
+}
+```
+
+- `retryable=true`：同 payload / 同 turn_id 重试。
+- `retryable=false`：修正 Decision 后重新提交。
+- `attempt` 由调用方带入；达到 `max_attempts` 或同一错误重复出现时出 Card。
+- 同一 `turn_id` 是幂等键，不能重复创建 Task。
+
+### 2.6 Schema 边界
+
+需要 schema 的地方：
+
+- `Event`：外部输入边界
+- `Decision`：唯一正式机器输出
+- `Task` / `Receipt`：执行事实
+- `DeliveryResult`（新增）：提交 Decision 的成功/失败与重试信息
+
+不需要 schema 的地方：
+
+- `Normalize`
+- `CoordinatorTurn` 内存上下文
+- snapshot/catalog 内部结构
+
+### 2.7 人能做什么
 
 | 动作 | 结果 |
 |:--|:--|
-| **新建** | New / Build → Coordinator 判断 → 新 Decision + Work |
-| **steering** | 改优先级、hold / 暂停、取消、给正在跑的 worker 追加指令、换实现路径、问状态 |
-| **回答** | 回答 Card（accept / rework / drop / later），Coordinator 接着处理 |
-
-steering 不产生新的 Work 状态，也不一定产生新 Decision；它写的是已有 Decision / Work 上的属性或一条指令。Ledger 记这次人的输入与效果。
+| **New / Build** | 人明确建 ticket，或 Coordinator 生成 Decision |
+| **steering** | 改优先级、hold / 暂停、取消、追加指令、换路径、问状态 |
+| **回答** | 回答 Card（accept / rework / drop / later） |
 
 ---
 
