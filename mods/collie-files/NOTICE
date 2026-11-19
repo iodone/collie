@@ -5,8 +5,13 @@ Source: Herdr's shipped `files` mod, the `files` folder under herdr-app's `mods/
 from that mod: the folder tree, lazy directory loading, git status letters,
 bounded read-only preview, back-to-list, watchFolder and machine (`on`) support.
 Upstream quoted its own icons as "mods/" + the mod's name; here they are drawn
-from this mod's folder instead. Nothing else in `main.js` changed, and
-`mod.json` is `{ "place": "none" }` as upstream.
+from this mod's folder instead. Collie adds a Code/Preview switch and a
+Markdown preview (`preview.js` plus the `TextView.markdown` branch in
+`main.js`); the rest of `main.js` is upstream, and `mod.json` is
+`{ "place": "none" }` as upstream.
+
+The preview's front matter handling follows herdr's `markdown-panel` mod
+(Apache-2.0, by jlopezlira and h0ru5).
 
 Icons `chevron-down.svg`, `chevron-right.svg`, `file.svg`, `folder.svg` are
 Lucide icons (https://lucide.dev), ISC License, Copyright (c) 2026 Lucide Icons
