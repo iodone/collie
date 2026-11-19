@@ -3149,7 +3149,7 @@ export default class Chat extends View {
       .child(div().min_w(0).truncate().font_medium().text_color(t.foreground).child(h.label))
       .child(div().flex_none().text_color(h.status === "needs" ? red(t) : t.dim).child(word))
       .child(div().flex_1())
-      .child(age(h.ended ? { at: Date.now() - (h.ended - h.at) } : h))
+      .child(age(h.ended ? { at: h.ended } : { at: h.since ?? h.at }))
       .child(h.ended ? div().size(12).flex_none() : svg(on ? "mods/collie-chat/chevron-up.svg" : "mods/collie-chat/chevron-down.svg").size(12).flex_none().text_color(t.dim));
     if (!on) return head;
     const k = terminals().find((x) => x.address === h.address);

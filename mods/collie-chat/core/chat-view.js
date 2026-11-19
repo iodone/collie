@@ -419,7 +419,11 @@ export function subagentsOf(terms, addr, now = Date.now()) {
     if (!k || !isHelper(k) || parentAddr(k) !== addr) continue;
     const ended = k.state && k.state !== "live";
     if (ended && now - (k.finished_ms ?? 0) > SUBAGENT_KEEP_MS) continue;
-    const s = { address: k.address, role: roleOf(k), cli: subagentCli(k), status: subagentStatus(k), at: k.created_ms ?? now, name: k.name ?? null, ...(ended ? { ended: k.finished_ms ?? now } : {}) };
+    const s = {
+      address: k.address, role: roleOf(k), cli: subagentCli(k), status: subagentStatus(k),
+      at: k.created_ms ?? now, since: k.status_ms ?? k.created_ms ?? now,
+      name: k.name ?? null, ...(ended ? { ended: k.finished_ms ?? now } : {}),
+    };
     out.push({ ...s, title: subagentTitle(s) });
   }
   return out.sort((a, b) => a.at - b.at);
