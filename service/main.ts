@@ -160,20 +160,12 @@ export class CollieService {
     const folder = this.#projectFolder(decision.space, decision.project);
     this.collaboration.loadProject(folder);
     const playbook = decision.playbook?.id ? this.collaboration.playbook(decision.playbook.id) : null;
-    const stage = playbook?.stages.find((item) => ["worker", "reviewer", "verifier"].includes(item.role)) ?? playbook?.stages[0];
-    const plan = playbook && stage ? {
-      playbook: { id: playbook.id, version: playbook.version },
-      stage: { id: stage.id, state: "active" },
-      seats: [{ role: stage.role, status: "pending" }],
-      gate_results: [],
-    } : undefined;
     const rule = {
       to: {
         kind: "herdr_task", space: decision.space,
         ...(decision.project ? { project: decision.project } : {}),
         ...(playbook ? { playbook: { id: playbook.id, version: playbook.version } } : {}),
         ...(playbook?.stages.some((item) => item.role === "verifier") ? { verify: true } : {}),
-        ...(plan ? { plan } : {}),
         cwd: { path: folder, kind: "git" },
       },
       agent: { ...(workspace.cli ? { cli: workspace.cli } : {}) },

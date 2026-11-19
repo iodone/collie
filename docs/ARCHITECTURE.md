@@ -26,7 +26,7 @@ Collie 不是一个“自动写代码的 agent”，而是一个**事件 → 判
 
 ```text
 结构消解问题，而不是在 prompt 里堆规则。
-Role 管职责，Playbook 管顺序，Task 管事实，Coordinator 管判断，人管裁决。
+Role 管职责，Playbook 管配方，Task 管执行事实，Coordinator 管判断，人管裁决。
 ```
 
 ### 1.1 双循环
@@ -91,7 +91,7 @@ flowchart TB
 | **Task** | Work 的执行事实：worktree、agent、status、ready | 由 task adapter 维护 |
 | **Receipt** | task 的 summary / details / proof / risk | 验收依据，不是“最后一条消息” |
 | **Role** | 一类职责、禁项、输入输出 | 不是 agent 名 |
-| **Playbook** | stage / role / gate / allowed next 的流程定义 | 不是硬路由表 |
+| **Playbook** | task 的工作配方：需要哪些 role、review/verify 要求 | 不是运行时状态机 |
 | **Gate** | review / verify 等通过条件与结果 | 不新增 Inbox 状态 |
 | **Policy** | 内置规则 + per-space 用户规则 | Coordinator 只能起草，不能自改 |
 | **Inbox** | Decision + task facts 的读时投影 | 不写回 Ledger |
@@ -276,22 +276,23 @@ stateDiagram-v2
 | 状态 | 含义 |
 |---|---|
 | Todo | 没有 agent 在跑：待派发、排队、依赖、定时 |
-| Working | agent 在跑；build / review / verify 是内部 stage |
+| Working | agent 在跑；build / review / verify 是 task 内部步骤 |
 | Needs you | 人持有：Card |
 | Settled | 结束，带 outcome |
 
-`review` / `verify` / `merge` 不是顶层状态；它们是 Working 的 stage / seat / gate。
+`review` / `verify` / `merge` 不是 Work 状态；它们是 task worker 按 brief 执行的内部步骤。Coordinator 只读 task-level 事实。
 
 ### 4.4 Review 与 Verify
 
-由 playbook 定义：
+由 task 内部执行：
 
 ```text
-reviewer  → 判断该不该这样写
-verifier  → 判断能不能用
+worker   → 实现并串起本地流程
+reviewer → 判断该不该这样写
+verifier → 判断能不能用
 ```
 
-两者可以并行，钉同一个 commit。review 不跑三验，verify 不改代码；这些规则属于 role / playbook 定义，不属于 Coordinator prompt。
+review / verify 可以并行，钉同一个 commit。review 不跑三验，verify 不改代码。task worker 负责按 brief 启动和收集这些局部结果；Coordinator 只读最终 task receipt / 异常。
 
 ### 4.5 Decision 投递失败
 
@@ -373,6 +374,8 @@ Runner 配置独立：
 Role 可由用户、项目 `.collie`、`.agents/skills/collie` 覆盖；未知 role fail closed。
 
 ### 5.3 Playbook registry
+
+Playbook 是 task 的工作配方。frontmatter 描述需要哪些 role 和 gate；它不是运行时状态机，也不会由程序按 stage 自动推进 Work。
 
 Playbook 文件：
 
@@ -494,7 +497,7 @@ Inbox = Decision.state + task facts + live agents
 - open + no task → Todo / 不显示
 - open + agent blocked → Needs you
 
-Stage / seats / gates 只作为 Working 内部 metadata 和 Ticket 详情展示，不新增顶层状态。
+Task 内部的 review / verify 进度只作为 task 事实和 Ticket 详情展示，不进入 Work 状态机。
 
 ### 5.9 安全与 veto
 
@@ -511,8 +514,7 @@ Stage / seats / gates 只作为 Working 内部 metadata 和 Ticket 详情展示�
 - Role / Playbook Markdown + frontmatter registry
 - Coordinator event/human 同一 prompt
 - Decision `origin` / `playbook`
-- task `playbook` / plan facts
-- review / verify seat 与 ready gate
+- task `playbook` 与 review / verify facts
 - Inbox / Ticket 投影
 - `collie task` 公开原子 CLI
 - Settings 动态 role catalog
@@ -521,6 +523,7 @@ Stage / seats / gates 只作为 Working 内部 metadata 和 Ticket 详情展示�
 
 - `collie task` 进程内调用 task package
 - remote sync / permission allowlist 完全迁移到 `collie task`
+- task-level receipt 回到同一 Coordinator 的 continuation loop
 - event helper 自动修正重投的 service loop
 - 自定义 role runner 的完整 Settings 编辑
 

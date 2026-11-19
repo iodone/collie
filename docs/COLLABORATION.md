@@ -120,7 +120,7 @@ Runner 单独配置：
 
 ## 4. Playbook registry
 
-Playbook 定义 stage、role 引用和 gate。它不复制 role 文本。
+Playbook 是 task 的工作配方：定义可用 stage、role 引用和 gate。它不复制 role 文本，也不是运行时状态机；实际执行由 task worker 在同一个 task 内串起来。
 
 ```ts
 type Playbook = {
@@ -184,7 +184,7 @@ review:
   accept(human)
 ```
 
-Playbook 是模板，不是硬路由表。Coordinator 可以在 allowlist 内选择、组合 extension；未注册的 playbook/role 直接失败。
+Playbook 是模板，不是硬路由表，也不是自动执行器。Coordinator 在 allowlist 内选择；task worker 按 brief 执行内部 role 步骤；未注册的 playbook/role 直接失败。
 
 ---
 
@@ -195,24 +195,17 @@ Task 只持久化运行事实，不持久化 playbook 定义。
 ```json
 {
   "playbook": { "id": "feature", "version": 1 },
-  "stage": { "id": "verify", "state": "active" },
-  "seats": [
-    { "role": "worker", "agent": "codex", "status": "done" },
-    { "role": "reviewer", "agent": "claude", "status": "done" },
-    { "role": "verifier", "agent": "pi", "status": "working" }
-  ],
-  "gate_results": [
-    { "id": "review", "verdict": "pass", "ref": "artifact:..." },
-    { "id": "verify", "verdict": "pending" }
-  ]
+  "reviews": [{ "round": 1, "result": "report", "head": "abc1234" }],
+  "verifications": [{ "verdict": "pass", "head": "abc1234", "evidence": "artifact:..." }]
 }
 ```
 
 不存：
 
-- stage 列表
-- seat 定义
-- gate predicate
+- 运行时 stage 状态
+- seat 状态
+- gate 执行器
+- playbook 的自动推进游标
 - role prompt
 
 这些由 registry 提供，Inbox 读时投影。
@@ -257,7 +250,7 @@ Todo → Working → Needs you → Settled
 | Needs you | waiting | 需要人回答、授权、验收 |
 | Settled | settled | 完成或明确不做 |
 
-stage / seats / gates 只是 Working 的内部 metadata 和详情展示，不新增 `Reviewing`、`Verifying`、`Failed` 等顶层状态。
+review / verify 只是 task 内部步骤和详情展示；Work 仍是 Todo / Working / Needs you / Settled，不进入 stage 状态机。
 
 ---
 
@@ -297,7 +290,7 @@ Collie built-in
 1. 先把三份静态模板注册为 role；保持现有行为。
 2. 新增 `verifier`，把 reviewer 的 checks 职责移出。
 3. 给 Decision/Task 加 `playbook`；内置 feature/review/bug-fix/investigation。
-4. 支持 review/verify 并行和 gate_results。
+4. 支持 review/verify 的 task 事实与 ready gate。
 5. 最后开放用户/repo 自定义 role/playbook 与 UI 编辑。
 
 Inbox 的状态机在每一步都不变。
