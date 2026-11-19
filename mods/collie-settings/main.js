@@ -22,6 +22,9 @@ export default class InboxSettings extends View {
     this.model = InputState.new({ placeholder: "CLI default" });
     this.workerModel = InputState.new({ placeholder: "CLI default" });
     this.reviewerModel = InputState.new({ placeholder: "CLI default" });
+    this.sourceInputs = {};
+    this.clientInputs = {};
+    this.newSource = InputState.new({ placeholder: "source name" });
     this.model.on("blur", (_e, cx) => this.saveCoordinator({ model: this.model.content().text.trim() }, cx));
     this.workerModel.on("blur", (_e, cx) => this.saveRole("worker", { model: this.workerModel.content().text.trim() }, cx));
     this.reviewerModel.on("blur", (_e, cx) => this.saveRole("reviewer", { model: this.reviewerModel.content().text.trim() }, cx));
@@ -40,6 +43,7 @@ export default class InboxSettings extends View {
 
     this.ingressRaw = await readTextFile(`${home()}/.config/collie/sources.json`).catch(() => null);
     try { this.ingressCfg = JSON.parse(this.ingressRaw ?? "{}"); } catch { this.ingressCfg = {}; }
+    this.ensureIngressInputs();
 
     this.taskRaw = await readTextFile(taskSettingsPath(home())).catch(() => null);
     try { this.taskCfg = JSON.parse(this.taskRaw ?? "{}"); } catch { this.taskCfg = {}; }
@@ -93,6 +97,101 @@ export default class InboxSettings extends View {
       cx.notify();
       cx.timer.after(2200, (cx) => { this.savedAt = 0; cx.notify(); });
     });
+  }
+
+  ensureIngressInputs() {
+    const make = (source) => {
+      const adapter = InputState.new({ placeholder: source.adapter ?? "gitlab" });
+      const space = InputState.new({ placeholder: "space (optional)" });
+      const secret = InputState.new({ placeholder: "secret env name" });
+      const map = InputState.new({ placeholder: "repo=space, repo=space" });
+      adapter.set_value(source.adapter ?? "");
+      space.set_value(source.space ?? "");
+      secret.set_value(source.secret_env ?? "");
+      map.set_value(Object.entries(source.space_map ?? {}).map(([key, value]) => `${key}=${value}`).join(", "));
+      return { adapter, space, secret, map };
+    };
+    for (const [name, source] of Object.entries(this.ingressCfg.sources ?? {})) {
+      if (this.sourceInputs[name]) continue;
+      const inputs = make(source);
+      inputs.adapter.on("blur", (_e, cx) => this.saveSource(name, { adapter: inputs.adapter.content().text.trim() }, cx));
+      inputs.space.on("blur", (_e, cx) => this.saveSource(name, { space: inputs.space.content().text.trim() }, cx));
+      inputs.secret.on("blur", (_e, cx) => this.saveSource(name, { secret_env: inputs.secret.content().text.trim() }, cx));
+      inputs.map.on("blur", (_e, cx) => {
+        const space_map = {};
+        for (const part of inputs.map.content().text.split(",")) {
+          const [key, value] = part.split("=").map((item) => item.trim());
+          if (key && value) space_map[key] = value;
+        }
+        this.saveSource(name, { space_map }, cx);
+      });
+      this.sourceInputs[name] = inputs;
+    }
+    for (const [name, client] of Object.entries(this.ingressCfg.clients ?? {})) {
+      if (this.clientInputs[name]) continue;
+      const token = InputState.new({ placeholder: "token env name" });
+      const space = InputState.new({ placeholder: "space" });
+      token.set_value(client.token_env ?? "");
+      space.set_value(client.space ?? "");
+      token.on("blur", (_e, cx) => this.saveClient(name, { token_env: token.content().text.trim() }, cx));
+      space.on("blur", (_e, cx) => this.saveClient(name, { space: space.content().text.trim() }, cx));
+      this.clientInputs[name] = { token, space };
+    }
+  }
+
+  saveSource(name, patch, cx) {
+    const sources = { ...(this.ingressCfg.sources ?? {}) };
+    sources[name] = { ...(sources[name] ?? {}), ...patch };
+    this.saveIngress({ sources }, cx);
+  }
+
+  saveClient(name, patch, cx) {
+    const clients = { ...(this.ingressCfg.clients ?? {}) };
+    clients[name] = { ...(clients[name] ?? {}), ...patch };
+    this.saveIngress({ clients }, cx);
+  }
+
+  addSource(cx) {
+    const name = this.newSource.content().text.trim();
+    if (!name) return;
+    const sources = { ...(this.ingressCfg.sources ?? {}) };
+    if (sources[name]) return;
+    sources[name] = { adapter: name, enabled: true };
+    this.ingressCfg = { ...this.ingressCfg, sources };
+    this.ensureIngressInputs();
+    this.saveIngress({ sources }, cx);
+    this.newSource.set_value("");
+  }
+
+  field(t, label, state) {
+    return v_flex().gap(3).py(7).child(div().text_size(TEXT.label).text_color(t.dim).child(label))
+      .child(div().w(320).child(Input.new(state)));
+  }
+
+  sourceCard(t, name, source) {
+    const inputs = this.sourceInputs[name];
+    return v_flex().w_full().py(10).border_b(1).border_color(t.border)
+      .child(h_flex().w_full().items_center().gap(10)
+        .child(div().flex_1().text_size(TEXT.body).font_medium().text_color(t.foreground).child(name))
+        .child(segmented(`ingress-source-${name}`, [["off", "Off"], ["on", "On"]], source.enabled === false ? "off" : "on",
+          (v, _e, cx) => this.setSourceEnabled(name, v === "on", cx))))
+      .when(Boolean(inputs), (el) => el
+        .child(this.field(t, "Adapter", inputs.adapter))
+        .child(this.field(t, "Default space", inputs.space))
+        .child(this.field(t, "Secret env", inputs.secret))
+        .child(this.field(t, "Space map", inputs.map)));
+  }
+
+  clientCard(t, name, client) {
+    const inputs = this.clientInputs[name];
+    return v_flex().w_full().py(10).border_b(1).border_color(t.border)
+      .child(h_flex().w_full().items_center().gap(10)
+        .child(div().flex_1().text_size(TEXT.body).font_medium().text_color(t.foreground).child(name))
+        .child(segmented(`ingress-client-${name}`, [["off", "Off"], ["on", "On"]], client.enabled === false ? "off" : "on",
+          (v, _e, cx) => this.setClientEnabled(name, v === "on", cx))))
+      .when(Boolean(inputs), (el) => el
+        .child(this.field(t, "Token env", inputs.token))
+        .child(this.field(t, "Space", inputs.space)));
   }
 
   saveIngress(patch, cx) {
@@ -233,18 +332,15 @@ export default class InboxSettings extends View {
     const clients = Object.entries(this.ingressCfg.clients ?? {});
     return v_flex()
       .child(this.heading(t, "Ingress", "Native Collie Event clients and vendor webhook adapters."))
-      .when(!sources.length && !clients.length, (el) => el.child(div().py(12).text_size(TEXT.label).text_color(t.dim)
-        .child("No sources or clients configured. Add ~/.config/collie/sources.json.")))
-      .when(Boolean(sources.length), (el) => el.child(div().pt(4).text_size(TEXT.label).font_medium().text_color(t.muted).child("Sources")))
-      .children(sources.map(([name, source]) => this.row(t, name,
-        `${source.adapter ?? name} · ${Object.keys(source.space_map ?? {}).length} space mapping(s)`,
-        segmented(`ingress-source-${name}`, [["off", "Off"], ["on", "On"]], source.enabled === false ? "off" : "on",
-          (v, _e, cx) => this.setSourceEnabled(name, v === "on", cx)))))
-      .when(Boolean(clients.length), (el) => el.child(div().pt(12).text_size(TEXT.label).font_medium().text_color(t.muted).child("Native clients")))
-      .children(clients.map(([name, client]) => this.row(t, name,
-        `native Event client${client.space ? ` · ${client.space}` : ""}`,
-        segmented(`ingress-client-${name}`, [["off", "Off"], ["on", "On"]], client.enabled === false ? "off" : "on",
-          (v, _e, cx) => this.setClientEnabled(name, v === "on", cx)))));
+      .child(this.row(t, "Native clients", "Clients that already speak the Collie Event contract; use /v1/ingress.",
+        div().text_size(TEXT.label).text_color(t.dim).child("Unix socket / TCP")))
+      .when(Boolean(clients.length), (el) => el.child(v_flex().py(4).children(clients.map(([name, client]) => this.clientCard(t, name, client)))))
+      .child(this.row(t, "Vendor sources", "Webhook adapters for GitLab/GitHub-style payloads; use /v1/in/<source>.",
+        div().text_size(TEXT.label).text_color(t.dim).child("Adapter + space map")))
+      .when(Boolean(sources.length), (el) => el.child(v_flex().py(4).children(sources.map(([name, source]) => this.sourceCard(t, name, source)))))
+      .child(h_flex().pt(12).gap(8).items_center()
+        .child(div().w(180).child(Input.new(this.newSource)))
+        .child(button("ingress-add-source", "Add source", { kind: "secondary", onClick: (_e, cx) => this.addSource(cx) })));
   }
 
   navItem(t, id, label, icon = null) {
