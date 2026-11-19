@@ -12,7 +12,7 @@ const goal = value("--goal");
 const ticketRefs = values("--ticket");
 let space = value("--space");
 if (!space) {
-  const path = join(stateDir, "workspaces.json");
+  const path = join(homedir(), ".config", "collie", "workspaces.json");
   if (existsSync(path)) space = Object.keys(JSON.parse(readFileSync(path, "utf8")))[0];
 }
 if (!space || !goal) {

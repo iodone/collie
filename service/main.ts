@@ -20,6 +20,7 @@ type Json = Record<string, any>;
 
 export interface CollieServiceOptions {
   stateDir: string;
+  configDir?: string;
   ruleset: Json;
   decide?: (job: Json) => Promise<Json> | Json;
   agent?: HerdrAgentOptions;
@@ -35,12 +36,15 @@ export class CollieService {
   readonly ledger: Ledger;
   readonly ingress: Ingress;
   readonly stateDir: string;
+  readonly configDir: string;
   readonly #options: CollieServiceOptions;
 
   constructor(options: CollieServiceOptions) {
     this.#options = options;
     this.stateDir = resolve(options.stateDir);
+    this.configDir = resolve(options.configDir ?? join(homedir(), ".config", "collie"));
     mkdirSync(this.stateDir, { recursive: true });
+    mkdirSync(this.configDir, { recursive: true });
     this.ledger = Ledger.open(join(this.stateDir, "ledger.json"));
     this.ingress = new Ingress();
     const snapshotPath = join(this.stateDir, "ingress.json");
@@ -480,10 +484,12 @@ export class CollieService {
 if (import.meta.main) {
   const stateDir = process.env.HERDR_INBOX_STATE ?? join(homedir(), ".local", "state", "collie");
   const rulesetPath = process.env.HERDR_INBOX_RULESET ?? join(stateDir, "ruleset.json");
-  const workspacesPath = join(stateDir, "workspaces.json");
-  const coordinatorPath = join(stateDir, "coordinator.json");
+  const configDir = join(homedir(), ".config", "collie");
+  const workspacesPath = join(configDir, "workspaces.json");
+  const coordinatorPath = join(configDir, "coordinator.json");
   const service = new CollieService({
     stateDir,
+    configDir,
     ruleset: JSON.parse(readFileSync(rulesetPath, "utf8")),
     rolePromptRef: join(homedir(), ".config", "herdr-core", "templates", "collie-coordinator.md"),
     ...(existsSync(workspacesPath) ? { workspaces: JSON.parse(readFileSync(workspacesPath, "utf8")) } : {}),

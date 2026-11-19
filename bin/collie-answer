@@ -31,7 +31,7 @@ if (option === "accept" || option === "rework") {
   const queue = JSON.parse(readFileSync(join(stateDir, "queue.json"), "utf8"));
   const decision = queue.decisions.find((item: any) => item.id === decisionId);
   if (!decision) throw new Error(`unknown decision ${decisionId}`);
-  const workspacesPath = join(stateDir, "workspaces.json");
+  const workspacesPath = join(homedir(), ".config", "collie", "workspaces.json");
   const workspaces = existsSync(workspacesPath) ? JSON.parse(readFileSync(workspacesPath, "utf8")) : {};
   const folder = workspaces[decision.space]?.folder;
   if (!folder) throw new Error(`no workspace configured for ${decision.space}`);

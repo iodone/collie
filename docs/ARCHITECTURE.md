@@ -660,7 +660,7 @@ Inbox 不是第二个操作台。每行右侧只有一个 **回复** 按钮：
   - CLI 启动前的 trust / sign-in 等屏幕由 `screens.js` / `core/screens.js` 读屏成卡片，按下只在该屏幕仍是原样时生效；
   - composer 的 pick 按钮打开 `picker.js`（移植 shep 的 `chat-models`）：agent / model / reasoning effort / Fast /
     permissions。空 chat 的选择决定首条消息的 `argvFor`，并存进 Collie 自己的
-    `~/.local/state/collie/coordinator.json` 的 `chat` 字段，下一次空 chat 从它起步（不读 shep settings）；运行中 Restart 走
+    `~/.config/collie/coordinator.json` 的 `chat` 字段，下一次空 chat 从它起步（不读 shep settings）；运行中 Restart 走
     `bin/collie` 的 `coordinator restart`，同一 agent 带 `--resume`，换 agent 则带 handoff，
     `herdr.chat` / `herdr.chat.slot` / `herdr.role` / `herdr.coordinator.*` 原样保留；
   - 尚未移植（Slice 3+）：ticket 工具、图片/反应/线程、模型置顶与搜索。

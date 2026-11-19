@@ -87,7 +87,7 @@ describe("Source adapter ingress", () => {
     writeFileSync(join(dir, "sources.json"), JSON.stringify({
       sources: { gitlab: { adapter: "gitlab", secret: "secret", space_map: { "olap/miergo": "spf57" } } },
     }));
-    const service = new CollieService({ stateDir: dir, ruleset });
+    const service = new CollieService({ stateDir: dir, configDir: dir, ruleset });
     const socket = join(dir, "service.sock");
     servers.push(startAnswerServer(service, socket));
     await new Promise((resolve) => setTimeout(resolve, 10));

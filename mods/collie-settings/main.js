@@ -1,6 +1,6 @@
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, Scrollbar, InputState, Input } from "gpui-base";
-import { closeOverlay, home, props, readTextFile, theme, writeTextFile } from "herdr";
+import { closeOverlay, home, props, readTextFile, spaces, theme, writeTextFile } from "herdr";
 import { coordinatorPath, mergeCoordinator, mergeRole, mergeTaskSetting, taskSettingsPath } from "./lib/inbox-settings.js";
 import { TEXT, RADIUS, H, button, segmented } from "./lib/ui.js";
 
@@ -38,7 +38,7 @@ export default class InboxSettings extends View {
     try { this.cfg = JSON.parse(this.raw ?? "{}"); } catch { this.cfg = {}; }
     this.model.set_value(this.cfg.everywhere?.coordinator?.model ?? "");
 
-    this.ingressRaw = await readTextFile(`${home()}/.local/state/collie/sources.json`).catch(() => null);
+    this.ingressRaw = await readTextFile(`${home()}/.config/collie/sources.json`).catch(() => null);
     try { this.ingressCfg = JSON.parse(this.ingressRaw ?? "{}"); } catch { this.ingressCfg = {}; }
 
     this.taskRaw = await readTextFile(taskSettingsPath(home())).catch(() => null);
@@ -98,7 +98,7 @@ export default class InboxSettings extends View {
   saveIngress(patch, cx) {
     cx.spawn(async (cx) => {
       try {
-        const path = `${home()}/.local/state/collie/sources.json`;
+        const path = `${home()}/.config/collie/sources.json`;
         const next = {
           ...this.ingressCfg,
           sources: { ...(this.ingressCfg.sources ?? {}) },
@@ -207,13 +207,34 @@ export default class InboxSettings extends View {
         div().text_size(TEXT.label).text_color(t.dim).child("Read-only")));
   }
 
+  spacesSection(t) {
+    const list = spaces();
+    return v_flex()
+      .child(this.heading(t, "Spaces", "Workspace and folder mapping. Role overrides stay under Roles."))
+      .when(!list.length, (el) => el.child(div().py(12).text_size(TEXT.label).text_color(t.dim).child("No live spaces.")))
+      .children(list.map((space) => this.row(t, space.name ?? space.id,
+        `${space.folder ?? "no folder"}${space.machine ? ` · ${space.machine}` : ""}`,
+        div().text_size(TEXT.label).text_color(t.dim).child("Read-only"))));
+  }
+
+  diagnostics(t) {
+    return v_flex()
+      .child(this.heading(t, "Diagnostics", "Paths and service state; runtime data is not editable here."))
+      .child(this.row(t, "Config directory", "Coordinator, roles, ingress and workspace configuration.",
+        div().text_size(TEXT.label).text_color(t.dim).child("~/.config/collie")))
+      .child(this.row(t, "State directory", "Ledger, queue, ingress snapshot, helper jobs and sockets.",
+        div().text_size(TEXT.label).text_color(t.dim).child("~/.local/state/collie")))
+      .child(this.row(t, "Event ingress", "Native POST /v1/ingress and vendor POST /v1/in/<source>.",
+        div().text_size(TEXT.label).text_color(t.dim).child("service.sock")));
+  }
+
   ingress(t) {
     const sources = Object.entries(this.ingressCfg.sources ?? {});
     const clients = Object.entries(this.ingressCfg.clients ?? {});
     return v_flex()
       .child(this.heading(t, "Ingress", "Native Collie Event clients and vendor webhook adapters."))
       .when(!sources.length && !clients.length, (el) => el.child(div().py(12).text_size(TEXT.label).text_color(t.dim)
-        .child("No sources or clients configured. Add ~/.local/state/collie/sources.json.")))
+        .child("No sources or clients configured. Add ~/.config/collie/sources.json.")))
       .when(Boolean(sources.length), (el) => el.child(div().pt(4).text_size(TEXT.label).font_medium().text_color(t.muted).child("Sources")))
       .children(sources.map(([name, source]) => this.row(t, name,
         `${source.adapter ?? name} · ${Object.keys(source.space_map ?? {}).length} space mapping(s)`,
@@ -242,6 +263,8 @@ export default class InboxSettings extends View {
     if (this.section === "reviewer") return this.levelBar(t).child(this.reviewer(t));
     if (this.section === "helper") return this.helper(t);
     if (this.section === "ingress") return this.ingress(t);
+    if (this.section === "spaces") return this.spacesSection(t);
+    if (this.section === "diagnostics") return this.diagnostics(t);
     return div();
   }
 
@@ -255,7 +278,11 @@ export default class InboxSettings extends View {
       .child(this.navItem(t, "reviewer", "Reviewer"))
       .child(this.navItem(t, "helper", "Helper"))
       .child(div().px(8).pt(14).pb(4).text_size(TEXT.label).font_medium().text_color(t.dim).child("Connections"))
-      .child(this.navItem(t, "ingress", "Ingress", "mods/collie-chrome/network.svg"));
+      .child(this.navItem(t, "ingress", "Ingress", "mods/collie-chrome/network.svg"))
+      .child(div().px(8).pt(14).pb(4).text_size(TEXT.label).font_medium().text_color(t.dim).child("Workspace"))
+      .child(this.navItem(t, "spaces", "Spaces"))
+      .child(div().px(8).pt(14).pb(4).text_size(TEXT.label).font_medium().text_color(t.dim).child("System"))
+      .child(this.navItem(t, "diagnostics", "Diagnostics"));
     const card = h_flex().id("collie-settings").track_focus(this.handle).w_full().h_full().max_h(900).min_h(0).items_start()
       .rounded(12).border_1().border_color(t.border).bg(t.popover).shadow_lg().overflow_hidden()
       .on_click((_e, cx) => cx.stop_propagation())

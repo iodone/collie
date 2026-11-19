@@ -153,7 +153,7 @@ export async function openCoordinator(space, show = true, settings = null) {
   const folder = folderOf(space);
   // Inbox has its own coordinator settings; never fall back to Shepherdr's Assistant.
   if (!settings) {
-    const raw = await readTextFile(`${home()}/.local/state/collie/coordinator.json`).catch(() => null);
+    const raw = await readTextFile(`${home()}/.config/collie/coordinator.json`).catch(() => null);
     const cfg = raw ? JSON.parse(raw) : {};
     const everywhere = cfg.everywhere?.coordinator ?? {};
     const local = cfg.spaces?.[space.id]?.coordinator ?? {};

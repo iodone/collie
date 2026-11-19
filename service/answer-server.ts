@@ -52,7 +52,7 @@ export function serviceHandler(service: CollieService, { requireClientAuth = fal
 
       if (url.startsWith("/v1/in/")) {
         const name = decodeURIComponent(url.slice("/v1/in/".length));
-        const config = loadIngressConfig(service.stateDir);
+        const config = loadIngressConfig(service.configDir);
         const source = config.sources?.[name];
         if (!source || source.enabled === false) return send(response, 404, { error: "source not configured" });
         const adapter = source.adapter ?? name;
@@ -63,7 +63,7 @@ export function serviceHandler(service: CollieService, { requireClientAuth = fal
 
       if (!routes.includes(url)) return send(response, 404, { error: "not found" });
       if (url === "/v1/ingress") {
-        const config = loadIngressConfig(service.stateDir);
+        const config = loadIngressConfig(service.configDir);
         // A local socket with no configured clients is trusted; any remote listener must configure a client token.
         if ((requireClientAuth || Object.keys(config.clients ?? {}).length) && !clientAuth(config, request.headers.authorization).ok) {
           return send(response, 401, { error: "bad ingress token" });

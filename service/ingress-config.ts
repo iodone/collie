@@ -22,10 +22,10 @@ export type IngressConfig = {
   clients?: Record<string, ClientConfig>;
 };
 
-export const configPath = (stateDir: string): string => join(stateDir, "sources.json");
+export const configPath = (configDir: string): string => join(configDir, "sources.json");
 
-export function loadIngressConfig(stateDir: string): IngressConfig {
-  const path = configPath(stateDir);
+export function loadIngressConfig(configDir: string): IngressConfig {
+  const path = configPath(configDir);
   if (!existsSync(path)) return { sources: {}, clients: {} };
   const raw = JSON.parse(readFileSync(path, "utf8"));
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("sources.json must be an object");
