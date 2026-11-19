@@ -224,7 +224,8 @@ Herdr core 的 `~/.config/herdr-core/templates/` 是角色提示词目录；`hc 
 |:--|:--|
 | `collie-coordinator.md` | Collie space 的 Coordinator |
 | `collie-worker.md` | task worker |
-| `collie-reviewer.md` | read-only reviewer |
+| `collie-reviewer.md` | read-only reviewer（不跑 verify） |
+| `collie-verifier.md` | independent verifier（三验、verdict） |
 
 `assistant.md`、旧 `dev/worker.md` 是 Shepherdr 安装物，不再属于 Collie 的运行栈；已归档移除。模板只提供角色文字，`herdr.role` 等标签由启动方在 `hc run` / `hc label` 时写入，模板 frontmatter 不包含标签。
 

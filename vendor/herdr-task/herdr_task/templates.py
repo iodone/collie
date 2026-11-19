@@ -121,11 +121,13 @@ TEMPLATE_HEADS = {
               "task's brief after these words.\ncommand: claude\n---\n",
     "reviewer": "---\nname: reviewer\ndescription: Reviews one Herdr task's work read-only before it merges and reports each "
                 "finding with a level (blocker, major, minor).\ncommand: claude\n---\n",
+    "verifier": "---\nname: verifier\ndescription: Verifies one Herdr task's work against its gates and reports a verdict "
+                 "with evidence.\ncommand: claude\n---\n",
 }
 FRONT = re.compile(r"\A---[ \t]*\n.*?\n---[ \t]*(?:\n|\Z)", re.S)
 
 
-ROLE_FILES = {"worker": "collie-worker.md", "reviewer": "collie-reviewer.md"}
+ROLE_FILES = {"worker": "collie-worker.md", "reviewer": "collie-reviewer.md", "verifier": "collie-verifier.md"}
 
 
 def instructions(role):

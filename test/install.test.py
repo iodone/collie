@@ -103,7 +103,7 @@ class InstallTest(unittest.TestCase):
         self.assertGreater(len(manifest["files"]), 5)
         for relative, expected in manifest["files"].items():
             self.assertEqual(sha256(self.root / relative), expected)
-        for role in ("collie-coordinator.md", "collie-worker.md", "collie-reviewer.md"):
+        for role in ("collie-coordinator.md", "collie-worker.md", "collie-reviewer.md", "collie-verifier.md"):
             self.assertTrue((self.root / ".config/herdr-core/templates" / role).is_file())
         self.assertFalse((self.root / ".config/herdr-core/templates/assistant.md").exists())
         self.assertFalse((self.root / ".config/herdr-core/templates/dev").exists())
