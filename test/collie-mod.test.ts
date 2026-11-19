@@ -116,6 +116,20 @@ describe("mods/collie-inbox pure queue projection", () => {
     expect(groups.settled.map((x) => x.decision.id)).toEqual(["s"]);
   });
 
+  test("项目维度分组：同一协作 space 下按 project/folder 分开", () => {
+    const item = (id: string, project: string, folder: string) => ({
+      decision: { id, state: "open", space: "system-weaver", project }, stage: "todo",
+      target: { folder },
+    });
+    const groups = ticketGroup([
+      item("a", "collie", "/work/projects/collie"),
+      item("b", "philip", "/work/projects/philip"),
+      item("c", "collie", "/work/projects/collie"),
+    ]);
+    expect(groups.projects.map((x) => x.key)).toEqual(["collie", "philip"]);
+    expect(groups.projects[0].rows.map((x) => x.decision.id)).toEqual(["a", "c"]);
+  });
+
   test("同优先级同时间用 id 稳定排序", () => {
     const rows = waitingQueue([waiting("dc_b"), waiting("dc_a")]);
     expect(rows.map((d) => d.id)).toEqual(["dc_a", "dc_b"]);
@@ -264,7 +278,7 @@ test("ticket 详情复用 shepherdr 的任务视图，只留 Terminal 与 Artifa
   const copied = readFileSync(new URL("../mods/collie-inbox/lib/ticket-dot.js", import.meta.url), "utf8");
   expect(copied).toBe(dot);
   expect(source).toContain("label: STAGE_WORD.needs");
-  expect(source).toContain("this.spaceHead(t, group.key, group.rows.length)");
+  expect(source).toContain("this.projectHead(t, group.key, group.rows.length)");
   expect(source).toContain("this.settledLine(t)");
   expect(source).toContain("${STAGE_WORD.settled} ${this.groups.settled.length}");
   expect(source).toContain("ticketGroup(this.staged");

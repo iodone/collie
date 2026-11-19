@@ -195,3 +195,59 @@ describe("collie ticket adopt", () => {
     expect(again.body).toMatchObject({ decision_id: response.body.decision_id, adopted: false });
   });
 });
+
+describe("project-aware ticket", () => {
+  test("project selects the repo folder and task ref becomes PROJECT-<id>", async () => {
+    const dir = scratch();
+    const project = join(dir, "projects", "collie");
+    // The service validates the folder only; collie-task owns the actual git/worktree.
+    writeFileSync(join(dir, "placeholder"), "");
+    // mkdir via a second scratch file is not enough; create the project directory explicitly.
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(project, { recursive: true });
+    const calls: string[][] = [];
+    const run = async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === "add") return { id: 7, key: "work-system-weaver-projects-collie#7", ref: "COLLIE-7" };
+      if (args[0] === "start") return { id: 7, state: "running" };
+      if (args[0] === "list") return [];
+      return {
+        id: 7, key: "work-system-weaver-projects-collie#7", ref: "COLLIE-7",
+        state: "ready", started: 1_763_664_030_000, ready_at: 1_763_666_480_000,
+        evidence: { summary: "done", details: "- review", commits: { list: [["abc1234", "x"]] }, proof: { id: "proof-7", title: "proof" } },
+        reviews: [{ result: "report", by: "t99", head: "abc1234" }],
+      };
+    };
+    const service = new CollieService({
+      stateDir: dir, ruleset, agent: { run },
+      workspaces: { "system-weaver": { folder: dir, projects: { collie: project } } },
+    });
+    const socket = await serve(service, dir);
+    const response = await post(socket, "/ticket", {
+      space: "system-weaver", project: "collie", title: "Review collie", brief: "review it", kind: "review",
+    });
+    expect(response.status).toBe(200);
+    expect(response.body.ticket_ref).toBe("COLLIE-7");
+    const add = calls.find((call) => call[0] === "add")!;
+    expect(add).toContain("--folder");
+    expect(add[add.indexOf("--folder") + 1]).toBe(project);
+    const created = service.ledger.history("decision").filter((item) => item.id === response.body.decision_id).at(-1);
+    expect(created.project).toBe("collie");
+    expect(created.run.task_ref).toBe("COLLIE-7");
+  });
+
+  test("an unknown project is rejected before spawning", async () => {
+    const dir = scratch();
+    const agent = fakeAgent();
+    const service = new CollieService({
+      stateDir: dir, ruleset, agent: { run: agent.run },
+      workspaces: { collie: { folder: "/repo/collie" } },
+    });
+    const socket = await serve(service, dir);
+    const response = await post(socket, "/ticket", {
+      space: "collie", project: "missing", title: "x", brief: "y",
+    });
+    expect(response.status).toBe(400);
+    expect(agent.calls).toEqual([]);
+  });
+});

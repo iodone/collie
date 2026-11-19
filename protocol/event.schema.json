@@ -127,6 +127,11 @@
         }
       }
     },
+    "project": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$",
+      "description": "事件对应的项目 slug；由 source 从 subject/repo 推导，供 ticket 选择 folder。"
+    },
     "space_candidates": {
       "type": "array",
       "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$" },

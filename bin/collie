@@ -838,7 +838,10 @@ def ticket_create(args) -> int:
         brief = sys.stdin.read()
     else:
         brief = Path(source).read_text()
-    result = _service_post(args.root, "/ticket", {"space": space, "title": title, "brief": brief, "kind": args.kind}, args.state_dir)
+    payload = {"space": space, "title": title, "brief": brief, "kind": args.kind}
+    if args.project:
+        payload["project"] = args.project
+    result = _service_post(args.root, "/ticket", payload, args.state_dir)
     print(json.dumps(result, ensure_ascii=False))
     return 0
 
@@ -880,7 +883,7 @@ def ticket_show(args) -> int:
         raise InstallError(f"no decision for {args.decision or args.ticket}")
     print(json.dumps({
         "decision_id": decision.get("id"), "state": decision.get("state"), "space": decision.get("space"),
-        "ticket_ref": decision.get("run", {}).get("task_ref"), "kind": decision.get("run", {}).get("kind", "build"),
+        "ticket_ref": decision.get("run", {}).get("task_ref"), "project": decision.get("project"), "kind": decision.get("run", {}).get("kind", "build"),
         "why": decision.get("why"),
     }, ensure_ascii=False))
     return 0
@@ -1176,6 +1179,7 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("--root", type=Path, default=Path.home())
     create.add_argument("--state-dir", type=Path)
     create.add_argument("--space", required=True)
+    create.add_argument("--project", help="project folder under the space's projects directory")
     create.add_argument("--title", required=True)
     create.add_argument("--brief", required=True)
     create.add_argument("--kind", choices=("build", "review"), default="build")

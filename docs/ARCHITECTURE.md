@@ -43,6 +43,10 @@ flowchart TB
 - **IM 的边界**：人发的 IM 是 chat；机器/bot 发的 IM 是外部事件。判断依据是 actor/channel 的语义，不是“IM 都算事件”。
 - **space 的边界**：外部事件由 source/channel 映射给出 space；人的 chat 所在的空间就是本次对话的 space。映射不出来的事件不猜，报配置错误并通知管理员。
 
+- **space 与 project**：space 是协作域（Coordinator、helper、policy、Inbox），project 是执行域（git repo、worktree、task store）。一个 space 可以承载多个 project；`Decision.project` 选择项目，task folder 由 `workspaces[space].projects` 或 `<space.folder>/projects/<project>` 解析。
+- **worktree 归属**：worktree 绑定 task folder 的 git repo，不绑定 space 的 folder。`collie-task --folder <project>` 创建项目 worktree；`herdr.task.space` 仍把任务挂回协作 space。
+- **task 命名**：task ref 由项目 folder 的 task-list prefix 生成，形如 `COLLIE-123`、`PHIL-7`；Ticket 使用该 ref，不使用内部 `slug#id`。
+
 ### 人能做什么
 
 | 动作 | 结果 |

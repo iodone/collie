@@ -20,7 +20,7 @@ describe("generic intake", () => {
       expect(event).toMatchObject({
         source: "gitlab", key: "evt-9", type: "note.created",
         object: { kind: "none", id: "olap/miergo" },
-        space_candidates: ["collie"],
+        project: "miergo", space_candidates: ["collie"],
       });
       expect(event.data_ref).toMatch(/intake\/ev_[0-9a-z]+\.json$/);
     } finally { rmSync(dir, { recursive: true, force: true }); }

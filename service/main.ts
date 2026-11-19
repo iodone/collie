@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { Ingress, type Dispatch } from "../kernel/ingress.ts";
@@ -18,6 +18,8 @@ import { createHash } from "node:crypto";
 
 type Json = Record<string, any>;
 
+export type WorkspaceConfig = { folder: string; cli?: string; projects?: Record<string, string> };
+
 export interface CollieServiceOptions {
   stateDir: string;
   configDir?: string;
@@ -26,7 +28,7 @@ export interface CollieServiceOptions {
   agent?: HerdrAgentOptions;
   now?: () => Date;
   rolePromptRef?: string;
-  workspaces?: Record<string, { folder: string; cli?: string }>;
+  workspaces?: Record<string, WorkspaceConfig>;
   delivery?: { gitlab?: DeliveryRunner; github?: DeliveryRunner; im?: DeliveryRunner };
   coordinator?: { settings?: Json; settingsPath?: string; run?: CoordinatorRunner };
   helper?: { run?: HelperRunner; timeoutMs?: number; pollIntervalMs?: number; bootWaitMs?: number };
@@ -63,6 +65,17 @@ export class CollieService {
     const temporary = `${path}.${process.pid}.tmp`;
     writeFileSync(temporary, JSON.stringify({ decisions: this.ledger.decisions }), { mode: 0o600 });
     renameSync(temporary, path);
+  }
+
+  #projectFolder(space: string, project?: string): string {
+    const workspace = this.#options.workspaces?.[space];
+    if (!workspace?.folder) throw new Error(`no worker workspace configured for space ${space}`);
+    if (!project) return workspace.folder;
+    if (!/^[a-z0-9][a-z0-9_-]{1,63}$/.test(project)) throw new Error("invalid project");
+    const configured = workspace.projects?.[project];
+    const folder = resolve(configured ?? join(workspace.folder, "projects", project));
+    if (!existsSync(folder) || !statSync(folder).isDirectory()) throw new Error(`no project folder configured for ${space}/${project}`);
+    return folder;
   }
 
   /** The one event boundary: validate, dedupe, merge, dispatch, and project. */
@@ -110,7 +123,7 @@ export class CollieService {
       ...this.#options.agent,
       onSpawn: async (task) => {
         const latest = this.ledger.decisions.find((item) => item.id === decision.id) ?? decision;
-        this.ledger.append("decision", { ...latest, state: "open", run: { ...latest.run, task_ref: task.key ?? task.id } });
+        this.ledger.append("decision", { ...latest, state: "open", run: { ...latest.run, task_ref: task.ref ?? task.key ?? task.id } });
         this.#projectQueue();
         await this.#options.agent?.onSpawn?.(task);
       },
@@ -134,8 +147,9 @@ export class CollieService {
     decision = executed;
     const workspace = this.#options.workspaces?.[decision.space];
     if (!workspace) throw new Error(`no worker workspace configured for space ${decision.space}`);
+    const folder = this.#projectFolder(decision.space, decision.project);
     const rule = {
-      to: { kind: "herdr_task", space: decision.space, cwd: { path: workspace.folder, kind: "git" } },
+      to: { kind: "herdr_task", space: decision.space, ...(decision.project ? { project: decision.project } : {}), cwd: { path: folder, kind: "git" } },
       agent: { ...(workspace.cli ? { cli: workspace.cli } : {}) },
     };
     const receipt = await runHerdrTask(decision, rule, this.#agentOptions(decision));
@@ -186,7 +200,7 @@ export class CollieService {
    * kernel builds the Decision itself. No second LLM round, so a chat turn cannot
    * double-judge; the Decision still goes through `coordinate` for schema + guard checks.
    */
-  async createTicket(input: { space?: string; title?: string; brief?: string; kind?: string }): Promise<Json> {
+  async createTicket(input: { space?: string; project?: string; title?: string; brief?: string; kind?: string }): Promise<Json> {
     const space = input.space;
     if (typeof space !== "string" || !/^[a-z0-9][a-z0-9_-]{1,63}$/.test(space)) throw new Error("invalid space");
     const title = input.title;
@@ -195,7 +209,9 @@ export class CollieService {
     if (typeof brief !== "string" || !brief.trim() || brief.length > 200_000) throw new Error("brief must be 1–200000 chars");
     const kind = input.kind ?? "build";
     if (kind !== "build" && kind !== "review") throw new Error("kind must be build or review");
-    if (!this.#options.workspaces?.[space]?.folder) throw new Error(`no worker workspace configured for space ${space}`);
+    const project = input.project;
+    if (project !== undefined && (typeof project !== "string" || !/^[a-z0-9][a-z0-9_-]{1,63}$/.test(project))) throw new Error("invalid project");
+    this.#projectFolder(space, project);
 
     const at = (this.#options.now ?? (() => new Date()))().toISOString();
     const id = ledgerId("ev");
@@ -229,6 +245,7 @@ export class CollieService {
           },
         }],
         run: { kind },
+        ...(project ? { project } : {}),
       }),
       ...(this.#options.now ? { now: this.#options.now } : {}),
       ...(this.#options.rolePromptRef ? { rolePromptRef: this.#options.rolePromptRef } : {}),

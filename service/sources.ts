@@ -22,6 +22,11 @@ function spaceFor(config: SourceConfig, repository: string): string {
   return value;
 }
 
+function projectFor(repo: string): string | undefined {
+  const name = String(repo).split("/").filter(Boolean).pop() ?? "";
+  return /^[a-z0-9][a-z0-9_-]{1,63}$/.test(name) ? name : undefined;
+}
+
 function bodyRef(stateDir: string, id: string, body: string): { data_ref: string; data_digest: string } {
   const directory = join(stateDir, "event-bodies");
   mkdirSync(directory, { recursive: true });
@@ -57,6 +62,7 @@ export function gitlabEvent(config: SourceConfig, headers: Headers, body: string
     key: header(headers, "x-gitlab-event-uuid") || header(headers, "idempotency-key") || `body:${hash(body)}`,
     type,
     object: { kind: objectKind, id: objectId, ...(url ? { url } : {}) },
+    ...(projectFor(repo) ? { project: projectFor(repo) } : {}),
     title: compact(attrs.title ?? payload.commits?.[0]?.message ?? "", 200),
     ...ref,
     hops: 0,
@@ -88,6 +94,7 @@ export function githubEvent(config: SourceConfig, headers: Headers, body: string
   return {
     id, source: "github", key, type,
     object: { kind: objectKind, id: objectId, ...(url ? { url } : {}) },
+    ...(projectFor(repo) ? { project: projectFor(repo) } : {}),
     title: compact(detail.title ?? detail.name ?? "", 200),
     ...ref,
     hops: 0,

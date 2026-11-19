@@ -24,6 +24,8 @@ export function intakeEvent(input: Json, stateDir: string): Json {
     ? typeText
     : "external.event";
   const subject = String(input.subject ?? `${source}:${key}`).trim().slice(0, 200) || `${source}:${key}`;
+  const projectText = subject.replace(/[!#].*$/, "").split(/[\/]/).filter(Boolean).pop() ?? "";
+  const project = /^[a-z0-9][a-z0-9_-]{1,63}$/.test(projectText) ? projectText : undefined;
   const candidates = Array.isArray(input.space_candidates)
     ? input.space_candidates
     : input.space ? [input.space] : [];
@@ -41,6 +43,7 @@ export function intakeEvent(input: Json, stateDir: string): Json {
     id, source, key, type,
     object: { kind: "none", id: subject },
     title: `${type} ${subject}`.slice(0, 200),
+    ...(project ? { project } : {}),
     data_ref: dataRef,
     data_digest: `sha256:${hash(body)}`,
     hops: 0,
