@@ -39,6 +39,9 @@ export function serviceHandler(service: CollieService, { requireClientAuth = fal
         });
         return;
       }
+      if (request.method === "GET" && url === "/v1/collaboration") {
+        return send(response, 200, service.collaboration.snapshot());
+      }
       if (request.method === "GET" && url.startsWith("/v1/events/")) {
         const id = decodeURIComponent(url.slice("/v1/events/".length));
         const status = service.eventStatus(id);

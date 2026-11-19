@@ -290,6 +290,13 @@ export class CollaborationRegistry {
     this.loadDirectory(join(folder, ".agents", "skills", "collie"));
   }
 
+  snapshot() {
+    return {
+      roles: [...this.roles.values()],
+      playbooks: [...this.playbooks.values()],
+    };
+  }
+
   playbook(id: string): CollaborationPlaybook {
     const value = this.playbooks.get(PLAYBOOK_ALIASES[id] ?? id);
     if (!value) throw new Error(`unknown playbook: ${id}`);

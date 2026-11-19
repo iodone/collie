@@ -832,6 +832,34 @@ def _service_post(root: Path, route: str, payload: dict, state_dir: Path | None 
     return data
 
 
+def _service_get(root: Path, route: str, state_dir: Path | None = None) -> dict:
+    state = Path(state_dir).expanduser().resolve() if state_dir else target_path(root, STATE)
+    socket_path = state / "service.sock"
+    if not socket_path.exists():
+        raise InstallError(f"collie service is not running (no socket at {socket_path})")
+    try:
+        connection = _UnixHTTPConnection(socket_path)
+        connection.request("GET", route, headers={"connection": "close"})
+        response = connection.getresponse()
+        raw = response.read()
+        status = response.status
+        connection.close()
+    except OSError as exc:
+        raise InstallError(f"can't reach collie service: {exc}") from exc
+    try:
+        data = json.loads(raw.decode("utf-8") or "{}")
+    except ValueError as exc:
+        raise InstallError("collie service returned invalid JSON") from exc
+    if status != 200:
+        raise InstallError(str(data.get("error") or f"collie service returned {status}"))
+    return data
+
+
+def roles_list(args) -> int:
+    print(json.dumps(_service_get(args.root, "/v1/collaboration", args.state_dir), ensure_ascii=False))
+    return 0
+
+
 def ticket_create(args) -> int:
     space, title, source = args.space, args.title, args.brief
     if source == "-":
@@ -1176,6 +1204,13 @@ def parser() -> argparse.ArgumentParser:
         command.add_argument("--root", type=Path, default=Path.home())
         command.add_argument("--dry-run", action="store_true")
         command.set_defaults(function=function)
+    roles = sub.add_parser("roles")
+    roles_sub = roles.add_subparsers(dest="roles_command", required=True)
+    roles_list_command = roles_sub.add_parser("list")
+    roles_list_command.add_argument("--root", type=Path, default=Path.home())
+    roles_list_command.add_argument("--state-dir", type=Path)
+    roles_list_command.set_defaults(function=roles_list)
+
     ticket = sub.add_parser("ticket")
     ticket_sub = ticket.add_subparsers(dest="ticket_command", required=True)
     create = ticket_sub.add_parser("create")
