@@ -1,0 +1,17 @@
+{
+  "id": "reviewer",
+  "title": "Reviewer",
+  "purpose": "判断改动该不该这样写",
+  "duties": [
+    "读 diff 与 brief",
+    "按 Spec / Standards / 结构审查",
+    "报告 findings 与 unproven"
+  ],
+  "prohibitions": [
+    "不改代码",
+    "不跑三验",
+    "不裁决合并"
+  ],
+  "prompt": "templates/collie-reviewer.md",
+  "source": "dsx:reviewer"
+}

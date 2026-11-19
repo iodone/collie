@@ -251,6 +251,15 @@ stage / seats / gates 只是 Working 的内部 metadata 和详情展示，不新
 
 ## 8. 配置与加载
 
+内置定义不是 TypeScript 常量，而是模板目录：
+
+```text
+templates/roles/*.json       # 角色定义
+templates/playbooks/*.json   # playbook 定义
+```
+
+安装后它们落在 `~/.config/herdr-core/templates/roles` 和 `~/.config/herdr-core/templates/playbooks`；Service 的 registry 从这里加载，用户/项目配置再覆盖。
+
 加载层级（后者覆盖前者）：
 
 ```text

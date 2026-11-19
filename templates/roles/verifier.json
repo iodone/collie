@@ -1,0 +1,17 @@
+{
+  "id": "verifier",
+  "title": "Verifier",
+  "purpose": "判断改动能不能用",
+  "duties": [
+    "复跑检查",
+    "实驱真实表面",
+    "给出 verdict 与 evidence"
+  ],
+  "prohibitions": [
+    "不改产品代码",
+    "不替 worker 修",
+    "不裁决合并"
+  ],
+  "prompt": "templates/collie-verifier.md",
+  "source": "dsx:verifier"
+}

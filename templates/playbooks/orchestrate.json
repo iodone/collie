@@ -1,0 +1,49 @@
+{
+  "id": "orchestrate",
+  "title": "Orchestrate",
+  "version": 1,
+  "source": "dsx:orchestrate",
+  "when": [
+    "multi-day program",
+    "multi-PR stack",
+    "continuous intake"
+  ],
+  "requires": [
+    "role:coordinator",
+    "role:worker",
+    "role:verifier"
+  ],
+  "stages": [
+    {
+      "id": "frame",
+      "role": "coordinator"
+    },
+    {
+      "id": "drain",
+      "role": "worker",
+      "needs": [
+        "frame"
+      ]
+    },
+    {
+      "id": "verify",
+      "role": "verifier",
+      "needs": [
+        "drain"
+      ]
+    },
+    {
+      "id": "decide",
+      "role": "human",
+      "needs": [
+        "verify"
+      ]
+    }
+  ],
+  "allowed_next": [
+    "feature",
+    "bug-fix",
+    "refactoring",
+    "review"
+  ]
+}

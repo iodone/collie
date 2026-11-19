@@ -1,0 +1,47 @@
+{
+  "id": "hillclimb",
+  "title": "Hillclimb",
+  "version": 1,
+  "source": "dsx:hillclimb",
+  "when": [
+    "measurable optimization",
+    "latency",
+    "size",
+    "accuracy"
+  ],
+  "requires": [
+    "role:worker",
+    "role:verifier"
+  ],
+  "stages": [
+    {
+      "id": "measure",
+      "role": "verifier"
+    },
+    {
+      "id": "iterate",
+      "role": "worker",
+      "needs": [
+        "measure"
+      ],
+      "outputs": [
+        "metric"
+      ]
+    },
+    {
+      "id": "verify",
+      "role": "verifier",
+      "needs": [
+        "metric"
+      ]
+    },
+    {
+      "id": "decide",
+      "role": "human",
+      "needs": [
+        "verify"
+      ]
+    }
+  ],
+  "allowed_next": []
+}
