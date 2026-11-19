@@ -91,6 +91,7 @@ export async function spawnHerdrTask(
   ];
   if (rule.to.playbook) args.push("--set", `playbook=${rule.to.playbook.id}@${rule.to.playbook.version}`);
   if (rule.to.verify) args.push("--set", "verify=on");
+  if (rule.to.plan) args.push("--plan", JSON.stringify(rule.to.plan));
   if (spawn.base === "branch") args.push("--base", text(spawn.branch, "spawn.branch"));
   else if (spawn.base === "main") args.push("--base", "main");
   if (rule.agent?.cli) args.push("--agent", rule.agent.cli);

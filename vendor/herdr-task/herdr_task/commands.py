@@ -105,6 +105,15 @@ def cmd_add(args):
         # The person's setting wins: worktrees off for this repo means in the folder, --worktree or not.
         mode = "here" if args.here or not worktrees_on(s) else "worktree"
         t = s.new(args.title.strip(), prompt, mode)
+        if getattr(args, "plan", None):
+            try:
+                plan = json.loads(args.plan)
+            except ValueError as exc:
+                raise Fail(f"plan is not JSON: {exc}") from exc
+            t["playbook"] = plan.get("playbook") or t.get("playbook")
+            t["stage"] = plan.get("stage") or t.get("stage")
+            t["seats"] = plan.get("seats") or []
+            t["gate_results"] = plan.get("gate_results") or []
         set_opts(t, args)
         space = bare(args.space) if args.space else caller_space()
         set_base(s, t, args.base, space, new=True)
@@ -205,6 +214,26 @@ def set_notes(t, args):
             t[f"{which}_notes"] = v.strip()
         elif v is not None:
             t.pop(f"{which}_notes", None)
+
+
+def cmd_plan(args):
+    """Attach the selected playbook/stage and current seat facts to a task. The playbook definition
+    stays in Collie; this is only the runtime selection snapshot."""
+    try:
+        plan = json.loads(args.plan)
+    except ValueError as exc:
+        raise Fail(f"plan is not JSON: {exc}") from exc
+    if not isinstance(plan, dict):
+        raise Fail("plan must be a JSON object")
+    with open_store(args) as s:
+        t = s.find(args.id)
+        t["playbook"] = plan.get("playbook") or t.get("playbook")
+        t["stage"] = plan.get("stage") or t.get("stage")
+        t["seats"] = plan.get("seats") or []
+        t["gate_results"] = plan.get("gate_results") or []
+        s.dirty = True
+        v = view(s, t)
+    say(args, v, f"{s.ref(t)}: plan {json.dumps({'stage': t.get('stage'), 'seats': len(t.get('seats') or []), 'gates': len(t.get('gate_results') or [])}, ensure_ascii=False)}")
 
 
 def cmd_show(args):
