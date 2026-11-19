@@ -15,9 +15,9 @@ afterEach(() => {
   while (paths.length) rmSync(paths.pop()!, { recursive: true, force: true });
 });
 
-function post(socketPath: string, body: unknown): Promise<any> {
+function post(socketPath: string, body: unknown, path = "/answer"): Promise<any> {
   return new Promise((resolve, reject) => {
-    const req = request({ socketPath, path: "/answer", method: "POST" }, (res) => {
+    const req = request({ socketPath, path, method: "POST" }, (res) => {
       let text = "";
       res.on("data", (chunk) => { text += chunk; });
       res.on("end", () => resolve({ status: res.statusCode, body: JSON.parse(text) }));
@@ -62,6 +62,23 @@ function get(socketPath: string, path: string): Promise<any> {
     req.end();
   });
 }
+
+describe("Native event ingress", () => {
+  test("POST /v1/ingress accepts and dispatches a Collie Event", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "collie-ingress-"));
+    paths.push(dir);
+    const service = new CollieService({ stateDir: dir, ruleset });
+    const socket = join(dir, "service.sock");
+    servers.push(startAnswerServer(service, socket));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const response = await post(socket, event, "/v1/ingress");
+    expect(response.status).toBe(200);
+    expect(["accepted", "merged", "duplicate", "recorded"]).toContain(response.body.status);
+    expect(response.body.event.source).toBe(event.source);
+    expect(Array.isArray(response.body.decisions)).toBe(true);
+  });
+});
 
 describe("Collie service health", () => {
   test("GET /health reports the running service", async () => {

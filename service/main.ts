@@ -61,7 +61,8 @@ export class CollieService {
     renameSync(temporary, path);
   }
 
-  async process(event: Json): Promise<Json[]> {
+  /** The one event boundary: validate, dedupe, merge, dispatch, and project. */
+  async handleEvent(event: Json): Promise<{ status: string; event: Json; decisions: Json[] }> {
     const result = this.ingress.ingest(event);
     const normalized = result.dispatches.length ? result.dispatches.map((dispatch) => dispatch.event) : [result.event];
     for (const item of normalized) this.ledger.append("event", item);
@@ -70,7 +71,11 @@ export class CollieService {
     const decisions = [];
     for (const dispatch of result.dispatches) decisions.push(await this.#dispatch(dispatch));
     this.#projectQueue();
-    return decisions;
+    return { status: result.status, event: result.event, decisions };
+  }
+
+  async process(event: Json): Promise<Json[]> {
+    return (await this.handleEvent(event)).decisions;
   }
 
   #policy(space: string): string {

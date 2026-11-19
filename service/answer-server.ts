@@ -16,7 +16,7 @@ export function startAnswerServer(service: CollieService, socketPath: string) {
       }));
       return;
     }
-    if (request.method !== "POST" || !["/answer", "/request", "/ticket", "/ticket/adopt"].includes(request.url ?? "")) {
+    if (request.method !== "POST" || !["/answer", "/request", "/ticket", "/ticket/adopt", "/v1/ingress"].includes(request.url ?? "")) {
       response.writeHead(404).end();
       return;
     }
@@ -28,7 +28,9 @@ export function startAnswerServer(service: CollieService, socketPath: string) {
     request.on("end", async () => {
       try {
         const input = JSON.parse(body);
-        const result = request.url === "/request"
+        const result = request.url === "/v1/ingress"
+          ? await service.handleEvent(input)
+          : request.url === "/request"
           ? await service.request(input.space, input.goal, input.ticket_refs ?? [])
           : request.url === "/ticket"
             ? await service.createTicket({ space: input.space, title: input.title, brief: input.brief, kind: input.kind })
