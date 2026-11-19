@@ -158,6 +158,8 @@ describe("helper job IPC", () => {
     expect(jobSend[2]).toContain(`Job JSON: ${join(jobsDir(opts.stateDir, "alpha"), jobs[0])}`);
     expect(jobSend[2]).toContain(`Decision output: ${job.instruction.output_path}`);
     expect(jobSend[2]).toContain("brief_ref to /pending/brief");
+    expect(jobSend[2]).toContain("playbook{id,version}");
+    expect(jobSend[2]).toContain("at most one spawn_task");
 
     await runHelperJob({ id: "ca_2", space: { primary: "alpha" } }, opts);
     expect(hc.calls.filter((call) => call[0] === "run")).toHaveLength(1);
@@ -190,6 +192,12 @@ describe("helper job IPC", () => {
       settled: { at: "2020-01-01T00:00:00Z", by: "human", outcome: "dropped" },
     }, { space: "alpha", at: "2026-11-18T00:00:00Z" });
     expect(settled.settled).toEqual({ at: "2026-11-18T00:00:00Z", by: "coordinator", outcome: "dropped" });
+
+    const selected = validateProposal({
+      state: "open", why: "派 feature", playbook: { id: "feature", version: 1 },
+      actions: [{ kind: "noop", risk_tags: [] }],
+    }, { space: "alpha", at: "2026-11-18T00:00:00Z" });
+    expect(selected.playbook).toEqual({ id: "feature", version: 1 });
   });
 
   test("同一 space 的 job 串行：后一个等前一个结束", async () => {
