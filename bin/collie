@@ -876,6 +876,19 @@ def ticket_create(args) -> int:
     return 0
 
 
+def decision_commit(args) -> int:
+    raw = sys.stdin.read() if args.file == "-" else Path(args.file).read_text(encoding="utf-8")
+    try:
+        decision = json.loads(raw)
+    except ValueError as exc:
+        raise InstallError(f"invalid decision JSON: {exc}") from exc
+    result = _service_post(args.root, "/decision", {
+        "space": args.space, "project": args.project, "decision": decision,
+    }, args.state_dir)
+    print(json.dumps(result, ensure_ascii=False))
+    return 0
+
+
 def ticket_adopt(args) -> int:
     helper = target_path(args.root, APP / "bin" / "collie-task")
     if not helper.is_file():
@@ -1248,6 +1261,16 @@ def parser() -> argparse.ArgumentParser:
     intake_event_command.add_argument("--token", help="native ingress bearer token")
     intake_event_command.add_argument("--token-env", help="environment variable holding the ingress token")
     intake_event_command.set_defaults(function=intake_event)
+
+    decision = sub.add_parser("decision")
+    decision_sub = decision.add_subparsers(dest="decision_command", required=True)
+    commit = decision_sub.add_parser("commit")
+    commit.add_argument("--root", type=Path, default=Path.home())
+    commit.add_argument("--state-dir", type=Path)
+    commit.add_argument("--space", required=True)
+    commit.add_argument("--project")
+    commit.add_argument("--file", default="-")
+    commit.set_defaults(function=decision_commit)
 
     coordinator = sub.add_parser("coordinator")
     coordinator_sub = coordinator.add_subparsers(dest="coordinator_command", required=True)

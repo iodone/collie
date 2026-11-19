@@ -280,6 +280,61 @@ export class CollieService {
   }
 
   /**
+   * Coordinator chat commits the Decision it produced. This is the chat counterpart of the
+   * helper's Decision JSON: one CoordinatorTurn/Case, one Decision contract. Explicit human
+   * commands (ticket.create) stay a separate `decided_by=human` path.
+   */
+  async commitDecision(input: { space?: string; project?: string; decision?: Json }): Promise<Json> {
+    const space = input.space;
+    if (typeof space !== "string" || !/^[a-z0-9][a-z0-9_-]{1,63}$/.test(space)) throw new Error("invalid space");
+    const decision = input.decision;
+    if (!decision || typeof decision !== "object" || Array.isArray(decision)) throw new Error("decision must be an object");
+    const project = input.project ?? decision.project;
+    if (project !== undefined && (typeof project !== "string" || !/^[a-z0-9][a-z0-9_-]{1,63}$/.test(project))) throw new Error("invalid project");
+    const folder = this.#projectFolder(space, project);
+    this.collaboration.loadProject(folder);
+    const playbook = decision.playbook?.id
+      ? this.collaboration.playbook(decision.playbook.id)
+      : decision.run?.kind === "review" ? this.collaboration.playbook("review") : this.collaboration.playbook("feature");
+
+    const at = (this.#options.now ?? (() => new Date()))().toISOString();
+    const id = ledgerId("ev");
+    const directory = join(this.stateDir, "turns");
+    mkdirSync(directory, { recursive: true });
+    const dataRef = join(directory, `${id}.json`);
+    const body = JSON.stringify({ origin: "human", decision });
+    writeFileSync(dataRef, body, { mode: 0o600 });
+    const event = {
+      id, source: "im", key: `human:turn:${id}`, type: "human.turn",
+      object: { kind: "none", id }, title: String(decision.why ?? "human turn").slice(0, 80),
+      data_ref: dataRef, data_digest: `sha256:${createHash("sha256").update(body).digest("hex")}`,
+      hops: 0, received_at: at,
+      merge: { lane_key: `coordinator:none:${id}`, object_key: `none:${id}`, first_seen_at: at, occurrences: 1 },
+      space_candidates: [space],
+      ...(project ? { project } : {}),
+    };
+    const dispatch: Dispatch = { kind: "coordinator", laneKey: event.merge.lane_key, space, event };
+    const result = await coordinate(dispatch, {
+      ledger: this.ledger, ruleset: this.#options.ruleset, stream: "chat_turn",
+      origin: "human", decided_by: "coordinator",
+      playbook: { id: playbook.id, version: playbook.version },
+      policy: this.#policy(space),
+      onDecision: () => this.#projectQueue(),
+      spaceNote: `Coordinator chat：${String(decision.why ?? "").slice(0, 80)}`,
+      decide: () => ({
+        ...decision,
+        origin: "human",
+        playbook: { id: playbook.id, version: playbook.version },
+        ...(project ? { project } : {}),
+      }),
+      ...(this.#options.now ? { now: this.#options.now } : {}),
+      ...(this.#options.rolePromptRef ? { rolePromptRef: this.#options.rolePromptRef } : {}),
+    });
+    this.#projectQueue();
+    return this.#executeSpawn(result, dispatch);
+  }
+
+  /**
    * Repair entry: a `collie-task` exists but has no Decision (the coordinator used the task
    * CLI directly). Create a Decision that links it, with no spawn action, so Inbox/Ticket can
    * project the existing Work without duplicating it.

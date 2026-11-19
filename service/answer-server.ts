@@ -6,7 +6,7 @@ import { sourceEvent, verifySource } from "./sources.ts";
 import { intakeEvent } from "./intake.ts";
 
 const MAX_BODY = 1_048_576;
-const routes = ["/answer", "/request", "/ticket", "/ticket/adopt", "/v1/ingress"];
+const routes = ["/answer", "/request", "/ticket", "/ticket/adopt", "/decision", "/v1/ingress"];
 
 function send(response: ServerResponse, status: number, value: unknown): void {
   if (!response.headersSent) response.writeHead(status, { "content-type": "application/json" });
@@ -77,6 +77,8 @@ export function serviceHandler(service: CollieService, { requireClientAuth = fal
 
       const result = url === "/request"
         ? await service.request(input.space, input.goal, input.ticket_refs ?? [])
+        : url === "/decision"
+          ? await service.commitDecision({ space: input.space, project: input.project, decision: input.decision })
         : url === "/ticket"
           ? await service.createTicket({ space: input.space, project: input.project, title: input.title, brief: input.brief, kind: input.kind, playbook: input.playbook })
           : url === "/ticket/adopt"

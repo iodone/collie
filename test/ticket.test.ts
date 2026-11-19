@@ -255,3 +255,28 @@ describe("project-aware ticket", () => {
     expect(agent.calls).toEqual([]);
   });
 });
+
+describe("coordinator chat decision commit", () => {
+  test("commits the same Decision contract as the event helper", async () => {
+    const dir = scratch();
+    const service = new CollieService({
+      stateDir: dir, ruleset,
+      workspaces: { collie: { folder: "/repo/collie" } },
+    });
+    const socket = await serve(service, dir);
+    const response = await post(socket, "/decision", {
+      space: "collie",
+      decision: {
+        state: "settled", why: "human chat needs no work", actions: [],
+        settled: { at: new Date().toISOString(), by: "coordinator", outcome: "dropped" },
+        run: { kind: "build" },
+      },
+    });
+    expect(response.status).toBe(200);
+    const decision = service.ledger.history("decision").at(-1)!;
+    expect(decision).toMatchObject({
+      origin: "human", decided_by: "coordinator", playbook: { id: "feature", version: 1 },
+    });
+    expect(response.body).toMatchObject({ origin: "human", state: "settled" });
+  });
+});
