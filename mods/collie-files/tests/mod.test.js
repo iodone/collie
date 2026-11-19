@@ -39,7 +39,7 @@ describe("mods/collie-files: the port", () => {
 
   test("imports only the runtime, never shep", () => {
     const imports = [...source.matchAll(/from\s+"([^"]+)"/g)].map((m) => m[1]).sort();
-    expect(imports).toEqual(["gpui-base", "gpui-kit", "herdr"]);
+    expect(imports).toEqual(["./preview.js", "gpui-base", "gpui-kit", "herdr"]);
     expect(source).not.toMatch(/shep|mods\/tasks/);
   });
 
