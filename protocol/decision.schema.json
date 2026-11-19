@@ -38,6 +38,11 @@
       "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$",
       "description": "这条判断属于哪个 space。判断按 space 切（上下文是 space 的），但预算/跳数/路由表不切——见 invariants.checkBudget 的全局口径。"
     },
+    "project": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$",
+      "description": "这一条 Work 所属项目；space 是协作域，project 是执行与 Inbox 分组维度。缺省表示 space 默认 folder。"
+    },
     "space_candidates": {
       "type": "array",
       "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$" },

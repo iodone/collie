@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { InboxService } from "../service/main.ts";
+import { CollieService } from "../service/main.ts";
 
 const event = await Bun.file(new URL("../protocol/fixtures/event.json", import.meta.url)).json();
 const baseRules = await Bun.file(new URL("../protocol/fixtures/ruleset.json", import.meta.url)).json();
@@ -29,7 +29,7 @@ describe("M6 后台双循环", () => {
   test("没有窗口：事件经 coordinator 派到 ready，Ledger 有回执，queue 只有 Accept 卡", async () => {
     const dir = scratch();
     const agent = fakeAgent();
-    const service = new InboxService({
+    const service = new CollieService({
       stateDir: dir, ruleset: baseRules, agent: { run: agent.run },
       workspaces: { "collie": { folder: "/repo/collie", cli: "codex" } },
       decide: () => ({ state: "open", why: "MR 更新需要 worker", actions: [{ kind: "spawn_task", risk_tags: [], spawn: {
@@ -70,7 +70,7 @@ describe("M6 后台双循环", () => {
   test("coordinator 的 spawn 决定也进入 herdr-task 双循环", async () => {
     const dir = scratch();
     const agent = fakeAgent();
-    const service = new InboxService({
+    const service = new CollieService({
       stateDir: dir, ruleset: structuredClone(baseRules), agent: { run: agent.run },
       workspaces: { "collie": { folder: "/repo/collie", cli: "codex" } },
       decide: () => ({ state: "open", why: "MR 更新需要 worker", actions: [{ kind: "spawn_task", risk_tags: [], spawn: {
@@ -88,7 +88,7 @@ describe("M6 后台双循环", () => {
     const payload = join(dir, "payload.json");
     writeFileSync(payload, JSON.stringify({ repo: "example/collie", id: 93, body: "LGTM" }));
     const external: string[][] = [];
-    const service = new InboxService({
+    const service = new CollieService({
       stateDir: dir, ruleset: structuredClone(baseRules),
       delivery: { gitlab: async (args) => { external.push(args); return {}; } },
       decide: () => ({ state: "open", why: "评审通过后评论 MR", actions: [{ kind: "emit_command", risk_tags: ["outbound_message"], egress: {
@@ -110,11 +110,11 @@ describe("M6 后台双循环", () => {
 
   test("服务重启恢复活跃 lane，同 MR 不重复唤醒 coordinator", async () => {
     const dir = scratch();
-    const first = new InboxService({ stateDir: dir, ruleset: structuredClone(baseRules) });
+    const first = new CollieService({ stateDir: dir, ruleset: structuredClone(baseRules) });
     await first.process(event);
     expect(first.ledger.cases).toHaveLength(1);
 
-    const restarted = new InboxService({ stateDir: dir, ruleset: structuredClone(baseRules) });
+    const restarted = new CollieService({ stateDir: dir, ruleset: structuredClone(baseRules) });
     const decisions = await restarted.process({ ...event, id: "ev_restartmerge1", key: "mr!93@restart" });
     expect(decisions).toEqual([]);
     expect(restarted.ledger.cases).toHaveLength(1);
@@ -124,7 +124,7 @@ describe("M6 后台双循环", () => {
   test("hops 熔断只出 alert 卡，不触碰 herdr-task", async () => {
     const dir = scratch();
     const agent = fakeAgent();
-    const service = new InboxService({ stateDir: dir, ruleset: baseRules, agent: { run: agent.run } });
+    const service = new CollieService({ stateDir: dir, ruleset: baseRules, agent: { run: agent.run } });
     const decisions = await service.process({ ...event, hops: 9 });
     expect(decisions[0].card.kind).toBe("alert");
     expect(decisions[0].occurrence.hops).toBe(9);

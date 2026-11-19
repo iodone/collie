@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { Ingress, type Dispatch } from "../kernel/ingress.ts";
@@ -11,36 +11,42 @@ import { deliverGitlab } from "../plugins/delivery/gitlab.ts";
 import { deliverGithub } from "../plugins/delivery/github.ts";
 import { deliverIm } from "../plugins/delivery/im.ts";
 import type { DeliveryRunner } from "../plugins/delivery/common.ts";
-import { startAnswerServer } from "./answer-server.ts";
+import { startAnswerServer, startIngressServer } from "./answer-server.ts";
 import { coordinatorConfig, type CoordinatorRunner } from "../plugins/agent/coordinator.ts";
 import { defaultHelperRunner, enqueueHelperJob, ensureHelper, listCoordinators, runHelperJob, type HelperRunner } from "../plugins/agent/helper.ts";
 import { createHash } from "node:crypto";
 
 type Json = Record<string, any>;
 
-export interface InboxServiceOptions {
+export type WorkspaceConfig = { folder: string; cli?: string; projects?: Record<string, string> };
+
+export interface CollieServiceOptions {
   stateDir: string;
+  configDir?: string;
   ruleset: Json;
   decide?: (job: Json) => Promise<Json> | Json;
   agent?: HerdrAgentOptions;
   now?: () => Date;
   rolePromptRef?: string;
-  workspaces?: Record<string, { folder: string; cli?: string }>;
+  workspaces?: Record<string, WorkspaceConfig>;
   delivery?: { gitlab?: DeliveryRunner; github?: DeliveryRunner; im?: DeliveryRunner };
   coordinator?: { settings?: Json; settingsPath?: string; run?: CoordinatorRunner };
   helper?: { run?: HelperRunner; timeoutMs?: number; pollIntervalMs?: number; bootWaitMs?: number };
 }
 
-export class InboxService {
+export class CollieService {
   readonly ledger: Ledger;
   readonly ingress: Ingress;
   readonly stateDir: string;
-  readonly #options: InboxServiceOptions;
+  readonly configDir: string;
+  readonly #options: CollieServiceOptions;
 
-  constructor(options: InboxServiceOptions) {
+  constructor(options: CollieServiceOptions) {
     this.#options = options;
     this.stateDir = resolve(options.stateDir);
+    this.configDir = resolve(options.configDir ?? join(homedir(), ".config", "collie"));
     mkdirSync(this.stateDir, { recursive: true });
+    mkdirSync(this.configDir, { recursive: true });
     this.ledger = Ledger.open(join(this.stateDir, "ledger.json"));
     this.ingress = new Ingress();
     const snapshotPath = join(this.stateDir, "ingress.json");
@@ -61,7 +67,19 @@ export class InboxService {
     renameSync(temporary, path);
   }
 
-  async process(event: Json): Promise<Json[]> {
+  #projectFolder(space: string, project?: string): string {
+    const workspace = this.#options.workspaces?.[space];
+    if (!workspace?.folder) throw new Error(`no worker workspace configured for space ${space}`);
+    if (!project) return workspace.folder;
+    if (!/^[a-z0-9][a-z0-9_-]{1,63}$/.test(project)) throw new Error("invalid project");
+    const configured = workspace.projects?.[project];
+    const folder = resolve(configured ?? join(workspace.folder, "projects", project));
+    if (!existsSync(folder) || !statSync(folder).isDirectory()) throw new Error(`no project folder configured for ${space}/${project}`);
+    return folder;
+  }
+
+  /** The one event boundary: validate, dedupe, merge, dispatch, and project. */
+  async handleEvent(event: Json): Promise<{ status: string; event: Json; decisions: Json[] }> {
     const result = this.ingress.ingest(event);
     const normalized = result.dispatches.length ? result.dispatches.map((dispatch) => dispatch.event) : [result.event];
     for (const item of normalized) this.ledger.append("event", item);
@@ -70,7 +88,20 @@ export class InboxService {
     const decisions = [];
     for (const dispatch of result.dispatches) decisions.push(await this.#dispatch(dispatch));
     this.#projectQueue();
-    return decisions;
+    return { status: result.status, event: result.event, decisions };
+  }
+
+  async process(event: Json): Promise<Json[]> {
+    return (await this.handleEvent(event)).decisions;
+  }
+
+  /** Event status for ingress clients: the durable Event and every Decision it produced. */
+  eventStatus(eventId: string): Json | null {
+    const event = this.ledger.events.find((item) => item.id === eventId);
+    if (!event) return null;
+    const key = `${event.source}:${event.key}`;
+    const decisions = this.ledger.decisions.filter((item) => item.event_ref === event.id || item.key === key);
+    return { event, decisions };
   }
 
   #policy(space: string): string {
@@ -92,7 +123,7 @@ export class InboxService {
       ...this.#options.agent,
       onSpawn: async (task) => {
         const latest = this.ledger.decisions.find((item) => item.id === decision.id) ?? decision;
-        this.ledger.append("decision", { ...latest, state: "open", run: { ...latest.run, task_ref: task.key ?? task.id } });
+        this.ledger.append("decision", { ...latest, state: "open", run: { ...latest.run, task_ref: task.ref ?? task.key ?? task.id } });
         this.#projectQueue();
         await this.#options.agent?.onSpawn?.(task);
       },
@@ -116,8 +147,9 @@ export class InboxService {
     decision = executed;
     const workspace = this.#options.workspaces?.[decision.space];
     if (!workspace) throw new Error(`no worker workspace configured for space ${decision.space}`);
+    const folder = this.#projectFolder(decision.space, decision.project);
     const rule = {
-      to: { kind: "herdr_task", space: decision.space, cwd: { path: workspace.folder, kind: "git" } },
+      to: { kind: "herdr_task", space: decision.space, ...(decision.project ? { project: decision.project } : {}), cwd: { path: folder, kind: "git" } },
       agent: { ...(workspace.cli ? { cli: workspace.cli } : {}) },
     };
     const receipt = await runHerdrTask(decision, rule, this.#agentOptions(decision));
@@ -168,7 +200,7 @@ export class InboxService {
    * kernel builds the Decision itself. No second LLM round, so a chat turn cannot
    * double-judge; the Decision still goes through `coordinate` for schema + guard checks.
    */
-  async createTicket(input: { space?: string; title?: string; brief?: string; kind?: string }): Promise<Json> {
+  async createTicket(input: { space?: string; project?: string; title?: string; brief?: string; kind?: string }): Promise<Json> {
     const space = input.space;
     if (typeof space !== "string" || !/^[a-z0-9][a-z0-9_-]{1,63}$/.test(space)) throw new Error("invalid space");
     const title = input.title;
@@ -177,7 +209,9 @@ export class InboxService {
     if (typeof brief !== "string" || !brief.trim() || brief.length > 200_000) throw new Error("brief must be 1–200000 chars");
     const kind = input.kind ?? "build";
     if (kind !== "build" && kind !== "review") throw new Error("kind must be build or review");
-    if (!this.#options.workspaces?.[space]?.folder) throw new Error(`no worker workspace configured for space ${space}`);
+    const project = input.project;
+    if (project !== undefined && (typeof project !== "string" || !/^[a-z0-9][a-z0-9_-]{1,63}$/.test(project))) throw new Error("invalid project");
+    this.#projectFolder(space, project);
 
     const at = (this.#options.now ?? (() => new Date()))().toISOString();
     const id = ledgerId("ev");
@@ -211,6 +245,7 @@ export class InboxService {
           },
         }],
         run: { kind },
+        ...(project ? { project } : {}),
       }),
       ...(this.#options.now ? { now: this.#options.now } : {}),
       ...(this.#options.rolePromptRef ? { rolePromptRef: this.#options.rolePromptRef } : {}),
@@ -466,10 +501,12 @@ export class InboxService {
 if (import.meta.main) {
   const stateDir = process.env.HERDR_INBOX_STATE ?? join(homedir(), ".local", "state", "collie");
   const rulesetPath = process.env.HERDR_INBOX_RULESET ?? join(stateDir, "ruleset.json");
-  const workspacesPath = join(stateDir, "workspaces.json");
-  const coordinatorPath = join(stateDir, "coordinator.json");
-  const service = new InboxService({
+  const configDir = join(homedir(), ".config", "collie");
+  const workspacesPath = join(configDir, "workspaces.json");
+  const coordinatorPath = join(configDir, "coordinator.json");
+  const service = new CollieService({
     stateDir,
+    configDir,
     ruleset: JSON.parse(readFileSync(rulesetPath, "utf8")),
     rolePromptRef: join(homedir(), ".config", "herdr-core", "templates", "collie-coordinator.md"),
     ...(existsSync(workspacesPath) ? { workspaces: JSON.parse(readFileSync(workspacesPath, "utf8")) } : {}),
@@ -478,6 +515,11 @@ if (import.meta.main) {
   const socketPath = join(stateDir, "service.sock");
   if (existsSync(socketPath)) unlinkSync(socketPath);
   startAnswerServer(service, socketPath);
+  const ingressPort = Number(process.env.COLLIE_INGRESS_PORT ?? 0);
+  if (Number.isInteger(ingressPort) && ingressPort > 0) {
+    startIngressServer(service, ingressPort, process.env.COLLIE_INGRESS_HOST ?? "127.0.0.1");
+    console.error(`collie ingress listening on ${process.env.COLLIE_INGRESS_HOST ?? "127.0.0.1"}:${ingressPort}`);
+  }
   const incoming = join(stateDir, "incoming");
   let draining = false;
   const drain = async () => {

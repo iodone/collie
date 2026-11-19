@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import datetime as dt
 import hashlib
 import http.client
@@ -11,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import socket
 import stat
@@ -802,11 +804,11 @@ class _UnixHTTPConnection(http.client.HTTPConnection):
 
     def connect(self):
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.sock.settimeout(20)
+        self.sock.settimeout(120)
         self.sock.connect(str(self.socket_path))
 
 
-def _service_post(root: Path, route: str, payload: dict, state_dir: Path | None = None) -> dict:
+def _service_post(root: Path, route: str, payload: dict, state_dir: Path | None = None, headers: dict | None = None) -> dict:
     state = Path(state_dir).expanduser().resolve() if state_dir else target_path(root, STATE)
     socket_path = state / "service.sock"
     if not socket_path.exists():
@@ -814,7 +816,7 @@ def _service_post(root: Path, route: str, payload: dict, state_dir: Path | None 
     body = json.dumps(payload).encode("utf-8")
     try:
         connection = _UnixHTTPConnection(socket_path)
-        connection.request("POST", route, body=body, headers={"content-type": "application/json", "connection": "close"})
+        connection.request("POST", route, body=body, headers={"content-type": "application/json", "connection": "close", **(headers or {})})
         response = connection.getresponse()
         raw = response.read()
         status = response.status
@@ -836,7 +838,10 @@ def ticket_create(args) -> int:
         brief = sys.stdin.read()
     else:
         brief = Path(source).read_text()
-    result = _service_post(args.root, "/ticket", {"space": space, "title": title, "brief": brief, "kind": args.kind}, args.state_dir)
+    payload = {"space": space, "title": title, "brief": brief, "kind": args.kind}
+    if args.project:
+        payload["project"] = args.project
+    result = _service_post(args.root, "/ticket", payload, args.state_dir)
     print(json.dumps(result, ensure_ascii=False))
     return 0
 
@@ -878,9 +883,260 @@ def ticket_show(args) -> int:
         raise InstallError(f"no decision for {args.decision or args.ticket}")
     print(json.dumps({
         "decision_id": decision.get("id"), "state": decision.get("state"), "space": decision.get("space"),
-        "ticket_ref": decision.get("run", {}).get("task_ref"), "kind": decision.get("run", {}).get("kind", "build"),
+        "ticket_ref": decision.get("run", {}).get("task_ref"), "project": decision.get("project"), "kind": decision.get("run", {}).get("kind", "build"),
         "why": decision.get("why"),
     }, ensure_ascii=False))
+    return 0
+
+
+
+CLEAN_ENV = (
+    "for v in $(env | sed -nE 's/^(CLAUDECODE|CLAUDE_PID|CLAUDE_CODE_[A-Za-z0-9_]+)=.*/\\1/p' "
+    "| grep -vE '^CLAUDE_CODE_(USE|SKIP|DISABLE|ENABLE|MAX|OAUTH|CLIENT|API)_'); do unset \"$v\"; done;"
+)
+
+
+def _run(args, *, timeout=300, input_text=None):
+    try:
+        return subprocess.run(args, capture_output=True, text=True, input=input_text, timeout=timeout)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise InstallError(f"cannot run {args[0]}: {exc}") from exc
+
+
+def _hc(*args, timeout=300, input_text=None, required=True):
+    result = _run(["hc", *map(str, args)], timeout=timeout, input_text=input_text)
+    if required and result.returncode != 0:
+        raise InstallError((result.stderr or result.stdout or f"hc {args[0]} failed").strip())
+    return result
+
+
+def _hc_json(*args):
+    result = _hc(*args)
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise InstallError(f"hc {args[0]} returned invalid JSON") from exc
+
+
+def _template(path: Path):
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    match = re.match(r"^---\n([\s\S]*?)\n---\n?", text)
+    if not match:
+        return "", text
+    command = ""
+    for line in match.group(1).splitlines():
+        if line.startswith("command:"):
+            command = line.split(":", 1)[1].strip()
+            break
+    return command, text[match.end():]
+
+
+def _find_log(info: dict, old: str, app: str, pid: str, created: int, cwd: str, home: Path) -> str | None:
+    if app == "claude-code" and pid:
+        try:
+            meta = json.loads((home / ".claude" / "sessions" / f"{pid}.json").read_text())
+            sid = meta.get("sessionId")
+            if sid:
+                found = list((home / ".claude" / "projects").rglob(f"{sid}.jsonl"))
+                if found:
+                    return str(found[0])
+        except (OSError, json.JSONDecodeError):
+            pass
+    if not created:
+        return None
+    roots = [home / ".claude" / "projects", home / ".codex" / "sessions",
+             home / ".pi" / "agent" / "sessions", home / ".local" / "share" / "opencode"]
+    candidates = []
+    for root in roots:
+        if not root.exists():
+            continue
+        for path in root.rglob("*"):
+            if path.is_file() and path.suffix in {".jsonl", ".json"}:
+                try:
+                    if path.stat().st_mtime >= created / 1000 - 1:
+                        if cwd.encode() in path.read_bytes():
+                            candidates.append((path.stat().st_mtime, path))
+                except OSError:
+                    pass
+    return str(max(candidates)[1]) if candidates else None
+
+
+
+def _resume_argv(argv):
+    """A resumed Claude session already has its system prompt; passing it again exits 129."""
+    out, skip = [], False
+    for value in argv:
+        if skip:
+            skip = False
+            continue
+        if value in {"--append-system-prompt", "--system-prompt"}:
+            skip = True
+            continue
+        if value.startswith("--append-system-prompt=") or value.startswith("--system-prompt="):
+            continue
+        out.append(value)
+    return out
+
+
+def coordinator_restart(args) -> int:
+    """Restart an agent in its tab; Coordinator stays parked behind its chat."""
+    old = args.terminal
+    if "/" in old:
+        on, here = old.split("/", 1)
+        remote = ["hc", "exec", "--on", on, "--timeout", "300", "--", "collie", "coordinator", "restart", here]
+        if args.argv:
+            remote += ["--argv", args.argv]
+        if args.chat:
+            remote += ["--chat", args.chat]
+        if args.resume:
+            remote.append("--resume")
+        result = _run(remote, timeout=360)
+        if result.returncode != 0:
+            raise InstallError((result.stderr or result.stdout or f"{on} restart failed").strip())
+        new = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
+        if not new:
+            raise InstallError(f"{on} returned no new terminal")
+        print(f"{on}/{new}")
+        return 0
+    argv = json.loads(args.argv) if args.argv else []
+    if not isinstance(argv, list) or not all(isinstance(x, str) for x in argv):
+        raise InstallError("--argv must be a JSON array of strings")
+    if args.resume:
+        argv = _resume_argv(argv)
+    home = Path.home()
+    info = _hc_json("get", old, "--json")
+    labels = info.get("labels") or {}
+    space = labels.get("herdr.space") or ""
+    tab = labels.get("herdr.tab") or labels.get("herdr.coordinator.tab") or ""
+    role = labels.get("herdr.role") or ""
+    if info.get("template") in ("assistant", "coordinator"):
+        role = "coordinator"
+    chat = args.chat or labels.get("herdr.chat") or ""
+    if not ((space and tab) or chat):
+        raise InstallError("the terminal has no space/tab or chat pane")
+    cwd = info.get("cwd") or ""
+    app = (info.get("status") or {}).get("app") or info.get("agent") or ""
+    pid = str((info.get("foreground") or {}).get("pid") or "")
+    created = int(info.get("created_ms") or 0)
+
+    handoff_dir = Path(os.environ.get("HERDR_APP_HOME", home / ".config" / "herdr-app")) / "data" / "coordinator" / "handoff"
+    handoff_dir.mkdir(parents=True, exist_ok=True)
+    screen = handoff_dir / f"{old}-{int(dt.datetime.now().timestamp())}.txt"
+    read = _hc("read", old, "--lines", "400", required=False)
+    screen.write_text(read.stdout or "", encoding="utf-8")
+    log = _find_log(info, old, app, pid, created, cwd, home)
+    was = app or "the previous agent"
+    handoff = f"You are taking over this tab from {was} ({old}), which was restarted."
+    if log:
+        handoff += f" Its session log is {log}: read the recent part to pick up where it left off."
+    handoff += f" Its last screen is saved in {screen}."
+
+    if role == "coordinator":
+        workers = set()
+        for term in _hc_json("ls", "--json").get("terminals", []):
+            if term.get("parent") == old:
+                workers.add(term.get("address"))
+        for term in _hc_json("ls", "--json", "--label", f"herdr.coordinator={tab}").get("terminals", []):
+            if term.get("address") != old:
+                workers.add(term.get("address"))
+        if workers:
+            listed = []
+            for worker in sorted(x for x in workers if x):
+                _hc("label", worker, f"herdr.coordinator={tab}", required=False)
+                item = _hc_json("get", worker, "--json")
+                listed.append(f" {worker} ({item.get('name') or (item.get('labels') or {}).get('where') or ''})")
+            handoff += (" Workers the previous coordinator started, still running:" + "".join(listed)
+                        + f". They report to {old}: watch each with hc wait <t> and tell each to report to you from now on.")
+
+    new_labels = ["--label", f"herdr.space={space}", "--label", f"herdr.tab={tab}"]
+    if role == "coordinator":
+        new_labels += ["--label", "herdr.role=coordinator"]
+    if chat:
+        origin = labels.get("herdr.chat.origin") or old
+        new_labels = ["--keep", "--label", f"herdr.chat={chat}", "--label", f"herdr.chat.origin={origin}"]
+        for key in ("herdr.chat.slot", "herdr.coordinator.space", "herdr.coordinator.tab"):
+            if labels.get(key):
+                new_labels += ["--label", f"{key}={labels[key]}"]
+        if role == "coordinator":
+            new_labels += ["--label", "herdr.role=coordinator"]
+
+    tpl = home / ".config" / "herdr-core" / "templates" / "collie-coordinator.md"
+    parsed = _template(tpl) or ("", "")
+    own_command, body = parsed
+    body = body.strip()
+
+    if args.resume:
+        if not argv:
+            raise InstallError("--resume needs --argv")
+        key = Path(argv[0]).name
+        run = _hc("run", "--bg", "--json", "--no-parent", *(["--cwd", cwd] if cwd else []), *new_labels,
+                  "--label", f"herdr.agent={key}", "--", "sh", "-c", CLEAN_ENV + ' exec "$@"', "herdr-clean", *argv)
+        out = json.loads(run.stdout or "{}")
+        new = out.get("address")
+    elif not argv and role == "coordinator" and not own_command:
+        run = _hc("run", "--bg", "--json", "--no-parent", *(["--cwd", cwd] if cwd else []), *new_labels, "collie-coordinator", handoff)
+        new = (json.loads(run.stdout or "{}")).get("address")
+    else:
+        if not argv and not (role == "coordinator" and own_command):
+            raise InstallError("nothing to restart: pass --argv")
+        if own_command and not argv:
+            line = own_command[5:].strip() if own_command.startswith("exec ") else own_command.strip()
+            key = Path(line.split()[0]).name
+        else:
+            line = shlex.join(argv)
+            key = Path(argv[0]).name
+            if key == "codex" and "--no-daemon" not in argv:
+                line += " --no-daemon"
+        msg = handoff
+        if role == "coordinator" and body:
+            is_claude = Path(line.split()[0]).name == "claude"
+            if is_claude and "--append-system-prompt" not in line and "--system-prompt" not in line:
+                if "--permission-mode" not in line:
+                    line += " --permission-mode auto"
+                encoded = base64.b64encode(body.encode()).decode()
+                line += f" --append-system-prompt \"$(printf %s '{encoded}' | base64 -d)\""
+            else:
+                msg = body + "\n\n" + handoff
+        one = f"herdr-handoff-{os.getpid()}"
+        template = home / ".config" / "herdr-core" / "templates" / f"{one}.md"
+        template.write_text(
+            f"---\nname: {one}\ndescription: A one-off Herdr handoff, removed after use.\n"
+            f"command: {CLEAN_ENV} exec {line}\n---\n{msg}\n", encoding="utf-8")
+        try:
+            run = _hc("run", "--bg", "--json", "--no-parent", *(["--cwd", cwd] if cwd else []), *new_labels,
+                      "--label", f"herdr.agent={key}", one)
+            out = json.loads(run.stdout or "{}")
+            new = out.get("address")
+            if new and out.get("first_message", {}).get("sent") is False:
+                _hc("wait", new, "--timeout", "90", required=False)
+                _hc("send", new, msg, required=False)
+        finally:
+            template.unlink(missing_ok=True)
+
+    if not new:
+        raise InstallError("the agent did not restart")
+    _hc("kill", old, required=False)
+    _hc("rm", old, required=False)
+    print(new)
+    return 0
+
+
+
+def intake_event(args) -> int:
+    raw = sys.stdin.read() if args.file == "-" else Path(args.file).read_text(encoding="utf-8")
+    try:
+        event = json.loads(raw)
+    except ValueError as exc:
+        raise InstallError(f"invalid event JSON: {exc}") from exc
+    if args.space:
+        event["space_candidates"] = [args.space]
+    token = args.token or (os.environ.get(args.token_env) if args.token_env else None)
+    result = _service_post(args.root, "/v1/ingress", event, args.state_dir,
+                           {"authorization": f"Bearer {token}"} if token else None)
+    print(json.dumps(result, ensure_ascii=False))
     return 0
 
 
@@ -923,6 +1179,7 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("--root", type=Path, default=Path.home())
     create.add_argument("--state-dir", type=Path)
     create.add_argument("--space", required=True)
+    create.add_argument("--project", help="project folder under the space's projects directory")
     create.add_argument("--title", required=True)
     create.add_argument("--brief", required=True)
     create.add_argument("--kind", choices=("build", "review"), default="build")
@@ -941,6 +1198,26 @@ def parser() -> argparse.ArgumentParser:
     show.add_argument("--decision")
     show.add_argument("--ticket")
     show.set_defaults(function=ticket_show)
+
+    intake = sub.add_parser("intake")
+    intake_sub = intake.add_subparsers(dest="intake_command", required=True)
+    intake_event_command = intake_sub.add_parser("event")
+    intake_event_command.add_argument("--root", type=Path, default=Path.home())
+    intake_event_command.add_argument("--state-dir", type=Path)
+    intake_event_command.add_argument("--file", default="-", help="Event JSON file, or - for stdin")
+    intake_event_command.add_argument("--space", help="set space_candidates to this space")
+    intake_event_command.add_argument("--token", help="native ingress bearer token")
+    intake_event_command.add_argument("--token-env", help="environment variable holding the ingress token")
+    intake_event_command.set_defaults(function=intake_event)
+
+    coordinator = sub.add_parser("coordinator")
+    coordinator_sub = coordinator.add_subparsers(dest="coordinator_command", required=True)
+    restart = coordinator_sub.add_parser("restart")
+    restart.add_argument("terminal")
+    restart.add_argument("--argv")
+    restart.add_argument("--chat")
+    restart.add_argument("--resume", action="store_true")
+    restart.set_defaults(function=coordinator_restart)
 
     command = sub.add_parser("uninstall")
     common(command)

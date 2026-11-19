@@ -43,6 +43,10 @@ flowchart TB
 - **IM 的边界**：人发的 IM 是 chat；机器/bot 发的 IM 是外部事件。判断依据是 actor/channel 的语义，不是“IM 都算事件”。
 - **space 的边界**：外部事件由 source/channel 映射给出 space；人的 chat 所在的空间就是本次对话的 space。映射不出来的事件不猜，报配置错误并通知管理员。
 
+- **space 与 project**：space 是协作域（Coordinator、helper、policy、Inbox），project 是执行域（git repo、worktree、task store）。一个 space 可以承载多个 project；`Decision.project` 选择项目，task folder 由 `workspaces[space].projects` 或 `<space.folder>/projects/<project>` 解析。
+- **worktree 归属**：worktree 绑定 task folder 的 git repo，不绑定 space 的 folder。`collie-task --folder <project>` 创建项目 worktree；`herdr.task.space` 仍把任务挂回协作 space。
+- **task 命名**：task ref 由项目 folder 的 task-list prefix 生成，形如 `COLLIE-123`、`PHIL-7`；Ticket 使用该 ref，不使用内部 `slug#id`。
+
 ### 人能做什么
 
 | 动作 | 结果 |
@@ -181,15 +185,15 @@ Collie 不拥有终端、tab、pane、space；这些全部是 Herdr core 的事�
 
 | label | 写在谁身上 | 谁写 | 谁读 / 用途 |
 |:--|:--|:--|:--|
-| `herdr.role=coordinator` | 每个 space 的 Assistant terminal | `collie-chat` 启动 / `restart.sh` | `collie-tabs` 找当前 Coordinator；Inbox 的 Needs you / unread |
+| `herdr.role=coordinator` | 每个 space 的 Assistant terminal | `collie-chat` 启动 / `collie coordinator restart` | `collie-tabs` 找当前 Coordinator；Inbox 的 Needs you / unread |
 | `herdr.role=reviewer` | reviewer terminal | `collie-task` `launch()` | 区分 reviewer 与 worker；避免把 reviewer 当 worker |
 | `herdr.role=helper` | Coordinator helper / 子 agent | service `ensureHelper` / Herdr agent template | service 找回 ingress helper；Coordinator chat 的 Helper 行可打开它的独立 tab |
 | `herdr.job.space=<space>` | Coordinator helper | service `ensureHelper` | 按 space 找回 helper，避免同机重复启动 |
 | `herdr.task=<slug>#<id>` | task 的 worker / reviewer / helper | `collie-task` `launch()` | `hc ls --label` 找任务 agent；artifacts / status |
 | `herdr.task.space=<space>` | task terminal | `collie-task` `launch()` | 任务所在 space；**不要**用 Herdr 给 pane 的 `herdr.space` |
 | `herdr.coordinator=<tab>` | task terminal | `collie-task` `launch()` | 任务归属 Coordinator tab；restart 后仍能找到 |
-| `herdr.coordinator.space=<space>` | Coordinator terminal | `collie-chat` 启动 / `restart.sh` | 找回 space 的 Assistant |
-| `herdr.coordinator.tab=<tab>` | Coordinator terminal | `collie-chat` / `restart.sh` | Coordinator 所在 tab |
+| `herdr.coordinator.space=<space>` | Coordinator terminal | `collie-chat` 启动 / `collie coordinator restart` | 找回 space 的 Assistant |
+| `herdr.coordinator.tab=<tab>` | Coordinator terminal | `collie-chat` / `collie coordinator restart` | Coordinator 所在 tab |
 | `herdr.chat=<pane>` | 被 chat “park” 的 agent | `collie-chat` 启动 / `agent.js` | agent 没有自己的 pane，chat 代替它显示 terminal |
 | `herdr.chat.slot=<slot>` | Coordinator chat 的 agent | `collie-chat` | app 重启 / chat rehydrate 后找回同一个 agent |
 | `herdr.chat.origin=<origin>` | Coordinator chat 的 agent | `collie-chat` | draft / 历史归属的稳定 key |
@@ -334,7 +338,7 @@ hc run --bg --json --keep --cwd <worktree-or-folder> --name <task-name>
 
 - 关窗口：Herdr kept terminals 保留；Coordinator / worker 不依赖 Collie 进程。
 - `collie-task tick`：恢复 queued/scheduled、revive session、处理 alert；service 不在时窗口自己 tick。
-- `restart.sh`：用原 terminal 的 label（`herdr.chat.slot`、`herdr.coordinator.space`、`herdr.task` 等）原地重启，不创建新 Coordinator。
+- `collie coordinator restart`：用原 terminal 的 label（`herdr.chat.slot`、`herdr.coordinator.space`、`herdr.task` 等）原地重启，不创建新 Coordinator。
 - 没有 `collie-supervisor`，没有第二个 ensure 循环。
 
 ### 谁写状态
@@ -660,8 +664,8 @@ Inbox 不是第二个操作台。每行右侧只有一个 **回复** 按钮：
   - CLI 启动前的 trust / sign-in 等屏幕由 `screens.js` / `core/screens.js` 读屏成卡片，按下只在该屏幕仍是原样时生效；
   - composer 的 pick 按钮打开 `picker.js`（移植 shep 的 `chat-models`）：agent / model / reasoning effort / Fast /
     permissions。空 chat 的选择决定首条消息的 `argvFor`，并存进 Collie 自己的
-    `~/.local/state/collie/coordinator.json` 的 `chat` 字段，下一次空 chat 从它起步（不读 shep settings）；运行中 Restart 走
-    `mods/collie-tabs/bin/restart.sh`，同一 agent 带 `--resume`（`HERDR_RESTART_RESUME=1`），换 agent 则带 handoff，
+    `~/.config/collie/coordinator.json` 的 `chat` 字段，下一次空 chat 从它起步（不读 shep settings）；运行中 Restart 走
+    `bin/collie` 的 `coordinator restart`，同一 agent 带 `--resume`，换 agent 则带 handoff，
     `herdr.chat` / `herdr.chat.slot` / `herdr.role` / `herdr.coordinator.*` 原样保留；
   - 尚未移植（Slice 3+）：ticket 工具、图片/反应/线程、模型置顶与搜索。
 - Inbox 的“回复”按 `herdr.chat` / `herdr.chat.slot` 找 coordinator 终端；chat pane 没有 terminal，旧写法会把消息静默丢掉。

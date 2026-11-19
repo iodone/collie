@@ -87,14 +87,14 @@ export function ticketStage(decision, target, live = {}) {
   return "todo";
 }
 
-// Needs you / each space's Todo→Working / Settled. `items`: [{ decision, stage }].
+// Needs you / each project's Todo→Working / Settled. `items`: [{ decision, stage, target }].
 const GROUP_RANK = { todo: 0, working: 1 };
 const needOrder = (a, b) => Number(Boolean(a.decision.hold)) - Number(Boolean(b.decision.hold))
   || (a.decision.priority?.value ?? 5) - (b.decision.priority?.value ?? 5)
   || time(a.decision.decided_at ?? a.decision.card?.created_at) - time(b.decision.decided_at ?? b.decision.card?.created_at)
   || String(a.decision.id).localeCompare(String(b.decision.id));
 
-export function ticketGroup(items, spaceOrder = []) {
+export function ticketGroup(items) {
   const all = (Array.isArray(items) ? items : []).filter((x) => x?.decision && x.stage);
   const top = all.filter((x) => x.stage === "needs").sort(needOrder);
   const settled = all.filter((x) => x.stage === "settled")
@@ -107,20 +107,19 @@ export function ticketGroup(items, spaceOrder = []) {
   const sorted = (a, b) => rank(a) - rank(b)
     || (a.stage === "working" ? when(b) - when(a) : when(a) - when(b))
     || String(a.decision.id).localeCompare(String(b.decision.id));
-  const bySpace = new Map();
+  // A project is the execution grouping: explicit Decision.project, else the task folder,
+  // else the space (older tickets had no project dimension).
+  const projectOf = (x) => String(x.decision.project ?? x.target?.project ?? x.target?.folder ?? x.decision.space ?? "");
+  const byProject = new Map();
   for (const x of rest) {
-    const key = String(x.decision.space ?? "");
-    if (!bySpace.has(key)) bySpace.set(key, []);
-    bySpace.get(key).push(x);
+    const key = projectOf(x);
+    if (!byProject.has(key)) byProject.set(key, []);
+    byProject.get(key).push(x);
   }
-  const at = (key) => {
-    const index = spaceOrder.indexOf(key);
-    return index < 0 ? Infinity : index;
-  };
-  const spaces = [...bySpace.keys()]
-    .sort((a, b) => (at(a) - at(b)) || a.localeCompare(b))
-    .map((key) => ({ key, rows: bySpace.get(key).sort(sorted) }));
-  return { top, spaces, settled };
+  const projects = [...byProject.keys()]
+    .sort((a, b) => a.localeCompare(b))
+    .map((key) => ({ key, rows: byProject.get(key).sort(sorted) }));
+  return { top, projects, settled };
 }
 
 const prefixed = (machine, address) => machine && address && !String(address).includes("/")
@@ -165,6 +164,7 @@ export function taskTarget(decision, receipt, groups, detail = null) {
   const spawn = decision.actions?.find((a) => a.kind === "spawn_task")?.spawn;
   return {
     decision: decision.id,
+    project: spawn?.project ?? null,
     ref: String(task.ref ?? task.key ?? task.id),
     title: task.title ?? spawn?.title ?? decision.card?.question ?? decision.why,
     state: task.state ?? null,

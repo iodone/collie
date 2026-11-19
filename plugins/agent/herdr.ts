@@ -20,8 +20,10 @@ export interface HerdrAgentOptions {
 export interface SpawnedTask {
   id: string;
   key?: string;
+  ref?: string;
   folder: string;
   space: string;
+  project?: string;
   previousState: string;
 }
 
@@ -94,7 +96,10 @@ export async function spawnHerdrTask(
   const added = await run(args);
   const id = taskId(added);
   await run(["start", id, "--folder", folder, "--space", space, "--json"]);
-  return { id, key: added.key ?? added.ref, folder, space, previousState: "todo" };
+  return {
+    id, key: added.key, ref: added.ref ?? added.key, folder, space,
+    ...(rule.to.project ? { project: rule.to.project } : {}), previousState: "todo",
+  };
 }
 
 export async function waitForHerdrReceipt(
@@ -148,7 +153,7 @@ export async function waitForHerdrReceipt(
       origin: "herdr-task ready",
       last_message_used: false,
       task: {
-        id: task.key ?? task.id,
+        id: task.ref ?? task.key ?? task.id,
         space: task.space,
         state: "ready",
         previous_state: previousState,

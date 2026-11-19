@@ -153,13 +153,13 @@ export async function openCoordinator(space, show = true, settings = null) {
   const folder = folderOf(space);
   // Inbox has its own coordinator settings; never fall back to Shepherdr's Assistant.
   if (!settings) {
-    const raw = await readTextFile(`${home()}/.local/state/collie/coordinator.json`).catch(() => null);
+    const raw = await readTextFile(`${home()}/.config/collie/coordinator.json`).catch(() => null);
     const cfg = raw ? JSON.parse(raw) : {};
     const everywhere = cfg.everywhere?.coordinator ?? {};
     const local = cfg.spaces?.[space.id]?.coordinator ?? {};
     const selected = { ...everywhere, ...local };
     // The chat's model picker switches agents; the first start is always Claude.
-    settings = { agent: "claude", model: selected.model ?? "default", effort: selected.effort ?? "high" };
+    settings = { agent: "claude", model: selected.model ?? "default", effort: selected.effort ?? "high", perm: selected.perm ?? "auto" };
   }
   const slot = `coord-${space.id}-${Math.random().toString(36).slice(2, 10)}`;
   settings = settings.agent
@@ -458,10 +458,6 @@ export const taskOf = (k) => k?.labels?.["herdr.task"] ?? null;
 export const switchTask = (k, agentKey) =>
   script("task", [taskOf(k), k.foreground?.cwd ?? k.cwd, parentOf(k) ?? "", ...(agentKey ? [agentKey] : [])]);
 
-// Restarts the agent `k` in its tab: with `argv`, as that agent; without, as it was
-// (a coordinator from the template again, so edited instructions apply).
-export const restartAgent = (k, argv) => script("restart", argv ? [k.address, JSON.stringify(argv)] : [k.address]);
-
 // Closes a tab. A coordinator always asks first (stop/keep workers); a space's last tab closes
 // the space, so it asks as Close space does (our confirm, not Herdr's).
 export function closeTab(tabId) {
@@ -526,4 +522,3 @@ export function besideRow(row, menu, width, right) {
 }
 
 // Ends a coordinator's tab; "stop" ends its workers first.
-export const closeCoordinator = (tabId, coord, mode) => script("close", [tabId, coord.address, mode]);

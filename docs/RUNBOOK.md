@@ -85,7 +85,7 @@ bun "$ROOT/.local/share/collie/service/main.ts"
 
 ## Coordinator 与 New / Build
 
-每个 space 有一个 Coordinator chat 和一个常驻 Coordinator helper。外面的 ingress 只进 helper；service 启动时和每 30 秒按 live Coordinator 确保 helper 存在，之后一直复用同一个 kept terminal。配置位于 `$HOME/.local/state/collie/coordinator.json`：
+每个 space 有一个 Coordinator chat 和一个常驻 Coordinator helper。外面的 ingress 只进 helper；service 启动时和每 30 秒按 live Coordinator 确保 helper 存在，之后一直复用同一个 kept terminal。配置位于 `$HOME/.config/collie/coordinator.json`：
 
 ```json
 {

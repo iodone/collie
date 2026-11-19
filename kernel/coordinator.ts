@@ -28,6 +28,7 @@ const baseDecision = (dispatch: Dispatch, at: string, caseRef: string | null): J
   id: ledgerId("dc"),
   key: `${dispatch.event.source}:${dispatch.event.key}`,
   space: dispatch.space,
+  ...(dispatch.event.project ? { project: dispatch.event.project } : {}),
   space_candidates: dispatch.event.space_candidates ?? [dispatch.space],
   event_ref: dispatch.event.id,
   case_ref: caseRef,

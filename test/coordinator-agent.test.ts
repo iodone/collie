@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { coordinatorConfig, runCoordinator } from "../plugins/agent/coordinator.ts";
-import { InboxService } from "../service/main.ts";
+import { CollieService } from "../service/main.ts";
 import { mergeCoordinator } from "../lib/inbox-settings.js";
 
 const ruleset = await Bun.file(new URL("../protocol/fixtures/ruleset.json", import.meta.url)).json();
@@ -66,7 +66,7 @@ describe("Coordinator Host", () => {
   test("New / Build 走 chat_turn，不占 job 预算，并实际 spawn", async () => {
     const dir = scratch();
     const worker = agent();
-    const service = new InboxService({
+    const service = new CollieService({
       stateDir: dir, ruleset, rolePromptRef,
       workspaces: { "collie": { folder: "/repo/collie", cli: "codex" } },
       agent: { run: worker.run },

@@ -153,6 +153,42 @@ async function loadTasks() {
   } catch { return []; }
 }
 
+// Tasks can exist without a Ledger decision (direct collie-task adds, adopted work). The Inbox is
+// still the workbench for the space: project those tasks as synthetic tickets rather than hiding
+// them until a Decision exists.
+function orphanTickets(decisions, groups) {
+  const linked = new Set();
+  for (const decision of decisions) {
+    const ref = decision?.run?.task_ref;
+    if (ref) linked.add(String(ref));
+  }
+  const out = [];
+  for (const group of Array.isArray(groups) ? groups : []) {
+    for (const task of group?.tasks ?? []) {
+      const keys = [task.key, task.ref, task.id].filter((x) => x !== undefined && x !== null).map(String);
+      if (!task.space || keys.some((key) => linked.has(key))) continue;
+      const at = task.ready_at ?? task.started ?? task.created ?? task.agents?.at(-1)?.at ?? Date.now();
+      const done = task.state === "done";
+      const project = String(group.folder ?? "").split("/").filter(Boolean).pop() || null;
+      out.push({
+        id: `task:${task.key ?? task.ref ?? task.id}`,
+        ...(project ? { project } : {}),
+        state: done ? "settled" : "open",
+        decided_at: new Date(at).toISOString(),
+        ...(done ? { settled: { at: new Date(at).toISOString(), outcome: "done" } } : {}),
+        space: task.space,
+        title: task.title ?? task.ref ?? `#${task.id}`,
+        why: task.why ?? null,
+        synthetic: true,
+        run: { task_ref: task.key ?? task.ref ?? String(task.id),
+          // Orphan tasks have no Decision.run.kind; their title is the only review/build cue left.
+          kind: /\b(review|评审)\b/i.test(String(task.title ?? "")) ? "review" : "build" },
+      });
+    }
+  }
+  return out;
+}
+
 async function navigation(decisions, groups = null) {
   const linked = decisions.filter((d) => d.receipt_ref || d.run?.task_ref);
   if (!linked.length) return new Map();
@@ -305,16 +341,17 @@ export default class Inbox extends View {
     this.loading = true;
     cx.spawn(async (cx) => {
       try {
-        this.decisions = parseQueue(await readTextFile(queuePath(home())));
+        const parsed = parseQueue(await readTextFile(queuePath(home())));
         const groups = await loadTasks();
+        this.decisions = [...parsed, ...orphanTickets(parsed, groups)];
         const links = await navigation(this.decisions, groups);
         this.targets = new Map([...links].map(([id, value]) => [id, value.target]));
         this.receipts = new Map([...links].map(([id, value]) => [id, value.receipt]));
         this.staged = this.decisions.map((decision) => ({
-          decision, stage: stageOf(decision, this.targets.get(decision.id)),
+          decision, stage: stageOf(decision, this.targets.get(decision.id)), target: this.targets.get(decision.id),
         }));
         this.rows = this.rowsFor();
-        this.groups = ticketGroup(this.staged, [...spaces().map((s) => s.id), ...spaces().map((s) => s.name)]);
+        this.groups = ticketGroup(this.staged);
         this.error = null;
         setShared("inbox.queue", { waiting: waitingQueue(this.decisions).length, working: workingCount(this.decisions), at: Date.now() });
         const current = selected();
@@ -458,18 +495,15 @@ export default class Inbox extends View {
         .when(count > 0, (el) => el.child(div().flex_none().text_color(t.dim).child(String(count)))));
   }
 
-  // A space's heading (the Inbox's SpaceHeading): its emoji (else #) where the rows' dots are, its
-  // name, its count; a click opens the space.
-  spaceHead(t, key, count) {
-    const space = spaces().find((s) => s.id === key || s.name === key);
-    const icon = space ? shared("collie.spaceIcons")?.[space.id] ?? null : null;
-    return h().id(`collie-group-space-${key}`).h(28).flex_none().px(8).gap(12).items_center().rounded(RADIUS.card).text_size(TEXT.label)
-      .when(Boolean(space), (el) => el.cursor_pointer().hover((s) => s.bg(t.hover))
-        .on_click((e, cx) => { cx.stop_propagation(); run("space.select", { id: space.id }); cx.notify(); }))
+  // A project heading: the execution grouping inside the one collaboration space.
+  projectHead(t, key, count) {
+    const label = String(key).split("/").filter(Boolean).pop() || key || "No project";
+    const id = String(key).replace(/[^A-Za-z0-9_-]+/g, "-") || "none";
+    return h().id(`collie-group-project-${id}`).h(28).flex_none().px(8).gap(12).items_center().rounded(RADIUS.card).text_size(TEXT.label)
       .child(h().w(14).h(14).flex_none().items_center().justify_center()
-        .child(div().text_size(icon ? 12 : TEXT.label).text_color(t.dim).child(icon ?? "#")))
+        .child(div().text_size(12).text_color(t.dim).child("#")))
       .child(h().flex_1().min_w(0).gap(6).items_center()
-        .child(div().min_w(0).truncate().font_medium().text_color(t.muted).child(space?.name ?? (key || "No space")))
+        .child(div().min_w(0).truncate().font_medium().text_color(t.muted).child(label))
         .child(div().flex_none().text_color(t.dim).child(String(count))));
   }
 
@@ -488,7 +522,7 @@ export default class Inbox extends View {
   listBody(t) {
     if (this.filter !== "all") return this.rows.map((decision) => this.row(decision, t));
     const body = [];
-    const { top, spaces: places, settled } = this.groups;
+    const { top, projects: places, settled } = this.groups;
     const shut = this.folded.has("needs");
     if (top.length) {
       body.push(this.groupHead(t, { id: "collie-group-needs", label: STAGE_WORD.needs, count: top.length, top: true, shut,
@@ -501,7 +535,7 @@ export default class Inbox extends View {
       if (!shut) body.push(...top.map((x) => this.row(x.decision, t)));
     }
     for (const group of places) {
-      body.push(this.spaceHead(t, group.key, group.rows.length));
+      body.push(this.projectHead(t, group.key, group.rows.length));
       body.push(...group.rows.map((x) => this.row(x.decision, t, true)));
     }
     if (settled.length) {

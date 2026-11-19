@@ -1555,7 +1555,7 @@ export default class Chat extends View {
     cx.notify();
     cx.spawn(async (cx) => {
       // Chosen settings (the New space dialog, props.settings): the template's words with that
-      // agent and its flags, as a one-off template (as restart.sh does), written beside the
+      // agent and its flags, as a one-off template (as collie coordinator restart does), written beside the
       // template on the machine it runs on. There, an agent that isn't installed leaves the
       // template's own command (what that machine's sync put there).
       // Every start goes through a one-off (SHEP-86): its command first clears a parent Claude Code
@@ -3149,7 +3149,7 @@ export default class Chat extends View {
       .child(div().min_w(0).truncate().font_medium().text_color(t.foreground).child(h.label))
       .child(div().flex_none().text_color(h.status === "needs" ? red(t) : t.dim).child(word))
       .child(div().flex_1())
-      .child(age(h.ended ? { at: Date.now() - (h.ended - h.at) } : h))
+      .child(age(h.ended ? { at: h.ended } : { at: h.since ?? h.at }))
       .child(h.ended ? div().size(12).flex_none() : svg(on ? "mods/collie-chat/chevron-up.svg" : "mods/collie-chat/chevron-down.svg").size(12).flex_none().text_color(t.dim));
     if (!on) return head;
     const k = terminals().find((x) => x.address === h.address);

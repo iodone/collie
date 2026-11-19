@@ -6,7 +6,7 @@ import {
   decisionsDir, enqueueHelperJob, ensureHelper, helperCliArgs, helperName, jobsDir,
   runHelperJob, validateProposal,
 } from "../plugins/agent/helper.ts";
-import { InboxService } from "../service/main.ts";
+import { CollieService } from "../service/main.ts";
 
 const event = await Bun.file(new URL("../protocol/fixtures/event.json", import.meta.url)).json();
 const ruleset = await Bun.file(new URL("../protocol/fixtures/ruleset.json", import.meta.url)).json();
@@ -212,7 +212,7 @@ describe("service ingress uses the helper", () => {
 
   test("service 启动时按 live Coordinator 预建 helper，再启动不重复", async () => {
     const hc = fakeHc();
-    const service = new InboxService({
+    const service = new CollieService({
       stateDir: scratch(), ruleset: structuredClone(ruleset),
       workspaces: { collie: { folder: "/repo/collie" } },
       coordinator: { settings },
@@ -228,7 +228,7 @@ describe("service ingress uses the helper", () => {
     const dir = scratch();
     const hc = fakeHc({ state: "open", why: "无需动作", actions: [{ kind: "noop", risk_tags: [] }] });
     let oneShot = 0;
-    const service = new InboxService({
+    const service = new CollieService({
       stateDir: dir, ruleset: structuredClone(ruleset),
       workspaces: { collie: { folder: "/repo/collie" } },
       coordinator: { settings, run: async () => { oneShot += 1; throw new Error("one-shot CLI must not run"); } },
@@ -246,7 +246,7 @@ describe("service ingress uses the helper", () => {
     const dir = scratch();
     const calls: string[][] = [];
     let oneShot = 0;
-    const service = new InboxService({
+    const service = new CollieService({
       stateDir: dir, ruleset: structuredClone(ruleset),
       workspaces: { collie: { folder: "/repo/collie" } },
       coordinator: { settings, run: async () => { oneShot += 1; return ""; } },
