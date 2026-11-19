@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
-import type { InboxService } from "./main.ts";
+import type { CollieService } from "./main.ts";
 
-export function startAnswerServer(service: InboxService, socketPath: string) {
+export function startAnswerServer(service: CollieService, socketPath: string) {
   const startedAt = Date.now();
   return createServer((request, response) => {
     if (request.method === "GET" && request.url === "/health") {

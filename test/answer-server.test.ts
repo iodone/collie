@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { request } from "node:http";
-import { InboxService } from "../service/main.ts";
+import { CollieService } from "../service/main.ts";
 import { startAnswerServer } from "../service/answer-server.ts";
 
 const event = await Bun.file(new URL("../protocol/fixtures/event.json", import.meta.url)).json();
@@ -31,7 +31,7 @@ describe("Inbox detail answer socket", () => {
   test("drop 只通过 Card.answer 关闭 Decision，不经过 herdr-task", async () => {
     const dir = mkdtempSync(join(tmpdir(), "collie-answer-"));
     paths.push(dir);
-    const service = new InboxService({ stateDir: dir, ruleset });
+    const service = new CollieService({ stateDir: dir, ruleset });
     const decisions = await service.process(event);
     const socket = join(dir, "service.sock");
     servers.push(startAnswerServer(service, socket));
@@ -67,7 +67,7 @@ describe("Collie service health", () => {
   test("GET /health reports the running service", async () => {
     const dir = mkdtempSync(join(tmpdir(), "collie-health-"));
     paths.push(dir);
-    const service = new InboxService({ stateDir: dir, ruleset });
+    const service = new CollieService({ stateDir: dir, ruleset });
     const socket = join(dir, "service.sock");
     servers.push(startAnswerServer(service, socket));
     await new Promise((resolve) => setTimeout(resolve, 10));

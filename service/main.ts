@@ -18,7 +18,7 @@ import { createHash } from "node:crypto";
 
 type Json = Record<string, any>;
 
-export interface InboxServiceOptions {
+export interface CollieServiceOptions {
   stateDir: string;
   ruleset: Json;
   decide?: (job: Json) => Promise<Json> | Json;
@@ -31,13 +31,13 @@ export interface InboxServiceOptions {
   helper?: { run?: HelperRunner; timeoutMs?: number; pollIntervalMs?: number; bootWaitMs?: number };
 }
 
-export class InboxService {
+export class CollieService {
   readonly ledger: Ledger;
   readonly ingress: Ingress;
   readonly stateDir: string;
-  readonly #options: InboxServiceOptions;
+  readonly #options: CollieServiceOptions;
 
-  constructor(options: InboxServiceOptions) {
+  constructor(options: CollieServiceOptions) {
     this.#options = options;
     this.stateDir = resolve(options.stateDir);
     mkdirSync(this.stateDir, { recursive: true });
@@ -468,7 +468,7 @@ if (import.meta.main) {
   const rulesetPath = process.env.HERDR_INBOX_RULESET ?? join(stateDir, "ruleset.json");
   const workspacesPath = join(stateDir, "workspaces.json");
   const coordinatorPath = join(stateDir, "coordinator.json");
-  const service = new InboxService({
+  const service = new CollieService({
     stateDir,
     ruleset: JSON.parse(readFileSync(rulesetPath, "utf8")),
     rolePromptRef: join(homedir(), ".config", "herdr-core", "templates", "collie-coordinator.md"),

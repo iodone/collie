@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { request } from "node:http";
-import { InboxService } from "../service/main.ts";
+import { CollieService } from "../service/main.ts";
 import { startAnswerServer } from "../service/answer-server.ts";
 
 const ruleset = await Bun.file(new URL("../protocol/fixtures/ruleset.json", import.meta.url)).json();
@@ -37,7 +37,7 @@ function fakeAgent() {
   } };
 }
 
-async function serve(service: InboxService, dir: string): Promise<string> {
+async function serve(service: CollieService, dir: string): Promise<string> {
   const socket = join(dir, "service.sock");
   const server = startAnswerServer(service, socket);
   servers.push(server);
@@ -69,7 +69,7 @@ describe("collie ticket create", () => {
   test("POST /ticket writes one open spawn Decision, projects the queue and spawns once", async () => {
     const dir = scratch();
     const agent = fakeAgent();
-    const service = new InboxService({
+    const service = new CollieService({
       stateDir: dir, ruleset, agent: { run: agent.run },
       workspaces: { collie: { folder: "/repo/collie" } },
     });
@@ -110,7 +110,7 @@ describe("collie ticket create", () => {
   test("invalid space, title, brief and kind are rejected without spawning", async () => {
     const dir = scratch();
     const agent = fakeAgent();
-    const service = new InboxService({
+    const service = new CollieService({
       stateDir: dir, ruleset, agent: { run: agent.run },
       workspaces: { collie: { folder: "/repo/collie" } },
     });
@@ -137,7 +137,7 @@ describe("collie ticket create", () => {
   test("collie ticket CLI posts the brief file and prints {decision_id,ticket_ref}", async () => {
     const dir = scratch();
     const agent = fakeAgent();
-    const service = new InboxService({
+    const service = new CollieService({
       stateDir: dir, ruleset, agent: { run: agent.run },
       workspaces: { collie: { folder: "/repo/collie" } },
     });
@@ -175,7 +175,7 @@ describe("collie ticket adopt", () => {
   test("POST /ticket/adopt links an existing task with no spawn and projects Inbox", async () => {
     const dir = scratch();
     const agent = fakeAgent();
-    const service = new InboxService({ stateDir: dir, ruleset, agent: { run: agent.run } });
+    const service = new CollieService({ stateDir: dir, ruleset, agent: { run: agent.run } });
     const socket = await serve(service, dir);
 
     const response = await post(socket, "/ticket/adopt", {
