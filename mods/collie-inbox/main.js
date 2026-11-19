@@ -498,7 +498,8 @@ export default class Inbox extends View {
   // A project heading: the execution grouping inside the one collaboration space.
   projectHead(t, key, count) {
     const label = String(key).split("/").filter(Boolean).pop() || key || "No project";
-    return h().id(`collie-group-project-${key}`).h(28).flex_none().px(8).gap(12).items_center().rounded(RADIUS.card).text_size(TEXT.label)
+    const id = String(key).replace(/[^A-Za-z0-9_-]+/g, "-") || "none";
+    return h().id(`collie-group-project-${id}`).h(28).flex_none().px(8).gap(12).items_center().rounded(RADIUS.card).text_size(TEXT.label)
       .child(h().w(14).h(14).flex_none().items_center().justify_center()
         .child(div().text_size(12).text_color(t.dim).child("#")))
       .child(h().flex_1().min_w(0).gap(6).items_center()

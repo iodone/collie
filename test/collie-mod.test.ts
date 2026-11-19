@@ -109,10 +109,10 @@ describe("mods/collie-inbox pure queue projection", () => {
       item("t", "todo", "beta", "2026-11-13T09:00:00Z"),
       item("n", "needs", "alpha", "2026-11-13T11:00:00Z"),
       item("s", "settled", "alpha", "2026-11-13T13:00:00Z"),
-    ], ["alpha", "beta"]);
+    ]);
     expect(groups.top.map((x) => x.decision.id)).toEqual(["n"]);
-    expect(groups.spaces.map((x) => x.key)).toEqual(["beta"]);
-    expect(groups.spaces[0].rows.map((x) => x.decision.id)).toEqual(["t", "w_new", "w_old"]);
+    expect(groups.projects.map((x) => x.key)).toEqual(["beta"]);
+    expect(groups.projects[0].rows.map((x) => x.decision.id)).toEqual(["t", "w_new", "w_old"]);
     expect(groups.settled.map((x) => x.decision.id)).toEqual(["s"]);
   });
 
