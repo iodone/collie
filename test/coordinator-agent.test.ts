@@ -10,7 +10,7 @@ const ruleset = await Bun.file(new URL("../protocol/fixtures/ruleset.json", impo
 const paths: string[] = [];
 const scratch = () => { const path = mkdtempSync(join(tmpdir(), "collie-host-")); paths.push(path); return path; };
 afterEach(() => { while (paths.length) rmSync(paths.pop()!, { recursive: true, force: true }); });
-const rolePromptRef = resolve(new URL("../templates/collie-coordinator.md", import.meta.url).pathname);
+const rolePromptRef = resolve(new URL("../templates/roles/coordinator.md", import.meta.url).pathname);
 
 function agent() {
   const calls: string[][] = [];

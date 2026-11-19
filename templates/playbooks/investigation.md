@@ -1,0 +1,24 @@
+---
+kind: "playbook"
+id: "investigation"
+title: "Investigation"
+version: 1
+source: "dsx:investigation"
+when:
+  - "read-only question"
+  - "design investigation"
+requires:
+  - "role:researcher"
+stages:
+  - id: "investigate"
+    role: "researcher"
+  - id: "accept"
+    role: "human"
+    needs:
+      - "investigate"
+allowed_next:
+---
+
+# Investigation
+
+Playbook stages: investigate → accept

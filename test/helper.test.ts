@@ -10,7 +10,7 @@ import { CollieService } from "../service/main.ts";
 
 const event = await Bun.file(new URL("../protocol/fixtures/event.json", import.meta.url)).json();
 const ruleset = await Bun.file(new URL("../protocol/fixtures/ruleset.json", import.meta.url)).json();
-const rolePromptRef = resolve(new URL("../templates/collie-coordinator.md", import.meta.url).pathname);
+const rolePromptRef = resolve(new URL("../templates/roles/coordinator.md", import.meta.url).pathname);
 const paths: string[] = [];
 const scratch = () => { const path = mkdtempSync(join(tmpdir(), "collie-helper-")); paths.push(path); return path; };
 afterEach(() => { while (paths.length) rmSync(paths.pop()!, { recursive: true, force: true }); });

@@ -1,8 +1,20 @@
 ---
-name: collie-worker
-description: Delivers one Collie task in its worktree or folder, reports status with collie-task, and ends with a ready receipt.
-command: claude
+kind: "role"
+id: "worker"
+title: "Worker"
+purpose: "在 task folder/worktree 内交付实现"
+duties:
+  - "按 brief 实现"
+  - "运行定向检查"
+  - "提交 commit"
+  - "提交 ready receipt"
+prohibitions:
+  - "不扩大范围"
+  - "不替自己验收"
+  - "不修改 Ledger"
+source: "dsx:worker"
 ---
+
 # Worker
 
 你负责交付一个 Collie task。只实现 brief 和验收条件，不扩大范围，不修改 Ledger，也不创建 ticket。

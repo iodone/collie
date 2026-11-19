@@ -222,10 +222,10 @@ Herdr core 的 `~/.config/herdr-core/templates/` 是角色提示词目录；`hc 
 
 | 文件 | 用途 |
 |:--|:--|
-| `collie-coordinator.md` | Collie space 的 Coordinator |
-| `collie-worker.md` | task worker |
-| `collie-reviewer.md` | read-only reviewer（不跑 verify） |
-| `collie-verifier.md` | independent verifier（三验、verdict） |
+| `roles/coordinator.md` | Collie space 的 Coordinator |
+| `roles/worker.md` | task worker |
+| `roles/reviewer.md` | read-only reviewer（不跑 verify） |
+| `roles/verifier.md` | independent verifier（三验、verdict） |
 
 `assistant.md`、旧 `dev/worker.md` 是 Shepherdr 安装物，不再属于 Collie 的运行栈；已归档移除。模板只提供角色文字，`herdr.role` 等标签由启动方在 `hc run` / `hc label` 时写入，模板 frontmatter 不包含标签。
 
@@ -659,7 +659,7 @@ Inbox 不是第二个操作台。每行右侧只有一个 **回复** 按钮：
 - 聊天界面是 Collie 自己的 `mods/collie-chat`（#7 Slice 1/2），不再挂 shepherdr 的 `chat` / `pane-chat` / `spaces-chat` / `chat-call`：
   - 消息从 agent 自己的 session log 读（`core/chat-log.js`），发送走 `hc send`（`core/send.js`），以“人”的身份不留 caller（`core/person.js`）；
   - 空 slot 的 chat 每 2s 用 `herdr.chat.slot` 找自己的 agent（`adoptSlot`），reload 后自动跟上；
-  - 首条消息读 `~/.config/herdr-core/templates/collie-coordinator.md`，生成一次性模板（`cleanCommand` + `argvFor`）后 `hc run`，用完即删；
+  - 首条消息读 `~/.config/herdr-core/templates/roles/coordinator.md`，生成一次性模板（`cleanCommand` + `argvFor`）后 `hc run`，用完即删；
   - session 丢失时用同一模板的正文重开新 session 并说明（`lostMessage`）。
   - task news（`<herdr-news>`）走 `core/chat-log.js`，在对话里显示为细行（`newsLine`）；
   - Claude 的 permission/question/plan 由 `ask-hook.sh` 写入 `data/chat-asks/{open,req,ans,end}`，chat 用 `cards.js` / `strips.js` 显示并回答，`hc interrupt` 仍作 Stop；

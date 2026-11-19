@@ -12,6 +12,7 @@ export type CollaborationRole = {
   modes?: Record<string, { input?: string; output?: string; tools?: string[] }>;
   prompt?: string;
   source?: string;
+  file?: string;
 };
 
 export type PlaybookStage = {
@@ -34,6 +35,8 @@ export type CollaborationPlaybook = {
   requires?: string[];
   discloses?: string[];
   source?: string;
+  file?: string;
+  instructions?: string;
 };
 
 const sourceTemplates = (() => {
@@ -62,15 +65,23 @@ const PLAYBOOK_ALIASES: Record<string, string> = {
   "dsx-playbook-orchestrate": "orchestrate",
 };
 
-function readDefinitions<T>(directory: string): T[] {
+type Definition<T> = { value: T; body: string; file: string };
+
+function readDefinitions<T>(directory: string): Definition<T>[] {
   if (!existsSync(directory)) return [];
   return readdirSync(directory)
-    .filter((name) => name.endsWith(".json"))
+    .filter((name) => name.endsWith(".md"))
     .sort()
     .map((name) => {
-      const parsed: unknown = JSON.parse(readFileSync(join(directory, name), "utf8"));
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error(`${name} must contain an object`);
-      return parsed as T;
+      const file = join(directory, name);
+      const text = readFileSync(file, "utf8");
+      const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
+      if (!match) throw new Error(`${file} needs YAML frontmatter`);
+      const yaml = (globalThis as any).Bun?.YAML;
+      if (!yaml) throw new Error("Bun.YAML is required to read role/playbook templates");
+      const value = yaml.parse(match[1]) as T;
+      if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${file} frontmatter must be an object`);
+      return { value, body: text.slice(match[0].length), file };
     });
 }
 
@@ -85,11 +96,11 @@ export class CollaborationRegistry {
 
   /** User config first; a project may add or override by id under .collie/. */
   loadDirectory(root: string): void {
-    for (const role of readDefinitions<CollaborationRole>(join(root, "roles"))) {
+    for (const { value: role, body, file } of readDefinitions<CollaborationRole>(join(root, "roles"))) {
       if (!role.id || !role.title) throw new Error("role requires id and title");
-      this.roles.set(role.id, role);
+      this.roles.set(role.id, { ...role, prompt: file, file });
     }
-    for (const playbook of readDefinitions<CollaborationPlaybook>(join(root, "playbooks"))) {
+    for (const { value: playbook, body, file } of readDefinitions<CollaborationPlaybook>(join(root, "playbooks"))) {
       if (!playbook.id || !Array.isArray(playbook.stages) || !Number.isInteger(playbook.version)) {
         throw new Error("playbook requires id, version and stages");
       }
@@ -99,7 +110,7 @@ export class CollaborationRegistry {
           throw new Error(`playbook ${playbook.id} references unknown role ${stage.role}`);
         }
       }
-      this.playbooks.set(playbook.id, playbook);
+      this.playbooks.set(playbook.id, { ...playbook, file, instructions: body.trim() });
     }
   }
 

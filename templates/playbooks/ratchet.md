@@ -1,0 +1,51 @@
+---
+kind: "playbook"
+id: "ratchet"
+title: "Ratchet"
+version: 1
+source: "dsx:ratchet"
+when:
+  - "tighten checks"
+  - "reduce exception list"
+  - "one-way migration"
+requires:
+  - "role:coordinator"
+  - "role:worker"
+  - "role:reviewer"
+  - "role:verifier"
+stages:
+  - id: "tighten"
+    role: "coordinator"
+  - id: "fix"
+    role: "worker"
+    needs:
+      - "tighten"
+    outputs:
+      - "commit"
+  - id: "review"
+    role: "reviewer"
+    needs:
+      - "commit"
+    gate: "review"
+  - id: "verify"
+    role: "verifier"
+    needs:
+      - "commit"
+    gate: "verify"
+  - id: "accept"
+    role: "human"
+    needs:
+      - "review"
+      - "verify"
+gates:
+  - id: "review"
+    predicate: "no_blocking_findings"
+  - id: "verify"
+    predicate: "exception_list_decreased"
+allowed_next:
+  - "review"
+---
+
+# Ratchet
+
+Playbook stages: tighten → fix → review → verify → accept

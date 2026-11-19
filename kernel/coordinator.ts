@@ -118,7 +118,7 @@ export async function coordinate(dispatch: Dispatch, options: CoordinateOptions)
     },
     memory: { ledger_ref: ledger.path, recent_decisions: recent.length },
     instruction: {
-      role_prompt_ref: options.rolePromptRef ?? resolve(new URL("../templates/collie-coordinator.md", import.meta.url).pathname),
+      role_prompt_ref: options.rolePromptRef ?? resolve(new URL("../templates/roles/coordinator.md", import.meta.url).pathname),
       output_contract: "urn:collie:decision:v1",
     },
   };

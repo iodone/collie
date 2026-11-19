@@ -22,22 +22,46 @@ describe("collaboration registry", () => {
     const dir = mkdtempSync(join(tmpdir(), "collie-registry-"));
     try {
       mkdirSync(join(dir, "roles"), { recursive: true });
-      writeFileSync(join(dir, "roles", "security.json"), JSON.stringify({
-        id: "security", title: "Security", purpose: "security review",
-        duties: ["review"], prohibitions: ["write code"],
-      }));
+      writeFileSync(join(dir, "roles", "security.md"), `---
+kind: role
+id: security
+title: Security
+purpose: security review
+duties: [review]
+prohibitions: [write code]
+---
+
+# Security
+`);
       const registry = new CollaborationRegistry(dir);
       expect(registry.roles.get("security")?.title).toBe("Security");
       mkdirSync(join(dir, "playbooks"), { recursive: true });
-      writeFileSync(join(dir, "playbooks", "secure.json"), JSON.stringify({
-        id: "secure", title: "Secure", version: 1,
-        stages: [{ id: "review", role: "security" }],
-      }));
+      writeFileSync(join(dir, "playbooks", "secure.md"), `---
+kind: playbook
+id: secure
+title: Secure
+version: 1
+stages:
+  - id: review
+    role: security
+---
+
+# Secure
+`);
       registry.loadDirectory(dir);
       expect(registry.playbook("secure").stages[0].role).toBe("security");
-      writeFileSync(join(dir, "playbooks", "bad.json"), JSON.stringify({
-        id: "bad", title: "Bad", version: 1, stages: [{ id: "x", role: "missing" }],
-      }));
+      writeFileSync(join(dir, "playbooks", "bad.md"), `---
+kind: playbook
+id: bad
+title: Bad
+version: 1
+stages:
+  - id: x
+    role: missing
+---
+
+# Bad
+`);
       expect(() => registry.loadDirectory(dir)).toThrow(/unknown role missing/);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });

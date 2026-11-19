@@ -1107,7 +1107,7 @@ def coordinator_restart(args) -> int:
         if role == "coordinator":
             new_labels += ["--label", "herdr.role=coordinator"]
 
-    tpl = home / ".config" / "herdr-core" / "templates" / "collie-coordinator.md"
+    tpl = home / ".config" / "herdr-core" / "templates" / "roles" / "coordinator.md"
     parsed = _template(tpl) or ("", "")
     own_command, body = parsed
     body = body.strip()
@@ -1145,7 +1145,7 @@ def coordinator_restart(args) -> int:
             else:
                 msg = body + "\n\n" + handoff
         one = f"herdr-handoff-{os.getpid()}"
-        template = home / ".config" / "herdr-core" / "templates" / f"{one}.md"
+        template = home / ".config" / "herdr-core" / "templates" / "roles" / f"{one}.md"
         template.write_text(
             f"---\nname: {one}\ndescription: A one-off Herdr handoff, removed after use.\n"
             f"command: {CLEAN_ENV} exec {line}\n---\n{msg}\n", encoding="utf-8")

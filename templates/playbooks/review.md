@@ -1,0 +1,30 @@
+---
+kind: "playbook"
+id: "review"
+title: "Review"
+version: 1
+source: "dsx:review"
+when:
+  - "reviewer assigned"
+  - "review requested"
+requires:
+  - "role:reviewer"
+discloses:
+  - "reference:review-axes"
+stages:
+  - id: "review"
+    role: "reviewer"
+    gate: "review"
+  - id: "accept"
+    role: "human"
+    needs:
+      - "review"
+gates:
+  - id: "review"
+    predicate: "no_blocking_findings"
+allowed_next:
+---
+
+# Review
+
+Playbook stages: review → accept

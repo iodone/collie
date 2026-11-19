@@ -1,0 +1,35 @@
+---
+kind: "playbook"
+id: "eval"
+title: "Eval"
+version: 1
+source: "dsx:eval"
+when:
+  - "quality evaluation"
+  - "blind arena"
+  - "candidate comparison"
+requires:
+  - "role:coordinator"
+  - "role:worker"
+  - "role:verifier"
+stages:
+  - id: "frame"
+    role: "coordinator"
+  - id: "candidates"
+    role: "worker"
+    needs:
+      - "frame"
+  - id: "judge"
+    role: "verifier"
+    needs:
+      - "candidates"
+  - id: "decide"
+    role: "human"
+    needs:
+      - "judge"
+allowed_next:
+---
+
+# Eval
+
+Playbook stages: frame → candidates → judge → decide

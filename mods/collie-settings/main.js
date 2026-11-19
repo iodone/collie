@@ -316,7 +316,7 @@ export default class InboxSettings extends View {
     return v_flex()
       .child(this.heading(t, "Helper", "The persistent ingress session is not a separate role."))
       .child(this.row(t, "Agent", "The Helper uses the Coordinator role's agent and template; it is always kept alive.", div()))
-      .child(this.row(t, "Prompt", "Role template: collie-coordinator.md; helper jobs add the Decision contract.",
+      .child(this.row(t, "Prompt", "Role template: roles/coordinator.md; helper jobs add the Decision contract.",
         div().text_size(TEXT.label).text_color(t.dim).child("Read-only")));
   }
 

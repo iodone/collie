@@ -19,6 +19,12 @@ import { createHash } from "node:crypto";
 
 type Json = Record<string, any>;
 
+function coordinatorPromptPath(): string {
+  const installed = join(homedir(), ".config", "herdr-core", "templates", "roles", "coordinator.md");
+  if (existsSync(installed)) return installed;
+  return new URL("../templates/roles/coordinator.md", import.meta.url).pathname;
+}
+
 export type WorkspaceConfig = { folder: string; cli?: string; projects?: Record<string, string> };
 
 export interface CollieServiceOptions {
@@ -395,7 +401,7 @@ export class CollieService {
       ...(folder ? { folder } : {}),
       config,
       rolePromptRef: this.#options.rolePromptRef
-        ?? join(homedir(), ".config", "herdr-core", "templates", "collie-coordinator.md"),
+        ?? coordinatorPromptPath(),
       ...(this.#options.helper?.run ? { run: this.#options.helper.run } : {}),
       ...(this.#options.helper?.timeoutMs ? { timeoutMs: this.#options.helper.timeoutMs } : {}),
       ...(this.#options.helper?.pollIntervalMs ? { pollIntervalMs: this.#options.helper.pollIntervalMs } : {}),
@@ -420,7 +426,7 @@ export class CollieService {
           ...(folder ? { folder } : {}),
           config,
           rolePromptRef: this.#options.rolePromptRef
-            ?? join(homedir(), ".config", "herdr-core", "templates", "collie-coordinator.md"),
+            ?? coordinatorPromptPath(),
           run,
           coordinatorAddress: coordinator.address,
           coordinatorTab: coordinator.tab,
@@ -587,7 +593,7 @@ if (import.meta.main) {
     stateDir,
     configDir,
     ruleset: JSON.parse(readFileSync(rulesetPath, "utf8")),
-    rolePromptRef: join(homedir(), ".config", "herdr-core", "templates", "collie-coordinator.md"),
+    rolePromptRef: coordinatorPromptPath(),
     ...(existsSync(workspacesPath) ? { workspaces: JSON.parse(readFileSync(workspacesPath, "utf8")) } : {}),
     coordinator: { settingsPath: coordinatorPath },
   });

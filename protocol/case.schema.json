@@ -423,7 +423,7 @@
         "role_prompt_ref",
         "output_contract"
       ],
-      "description": "这次 turn 的输入约定。角色提示词是 templates/collie-coordinator.md（从 shepherdr 的 assistant.md 改）。",
+      "description": "这次 turn 的输入约定。角色提示词是 templates/roles/coordinator.md（从 shepherdr 的 assistant.md 改）。",
       "properties": {
         "role_prompt_ref": {
           "type": "string",
