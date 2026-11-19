@@ -233,6 +233,7 @@ describe("project-aware ticket", () => {
     const add = calls.find((call) => call[0] === "add")!;
     expect(add).toContain("--folder");
     expect(add[add.indexOf("--folder") + 1]).toBe(project);
+    expect(add).toContain("playbook=review@1");
     const created = service.ledger.history("decision").filter((item) => item.id === response.body.decision_id).at(-1);
     expect(created.project).toBe("collie");
     expect(created.run.task_ref).toBe("COLLIE-7");
