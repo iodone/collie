@@ -159,6 +159,7 @@ export class CollieService {
         kind: "herdr_task", space: decision.space,
         ...(decision.project ? { project: decision.project } : {}),
         ...(playbook ? { playbook: { id: playbook.id, version: playbook.version } } : {}),
+        ...(playbook?.stages.some((stage) => stage.role === "verifier") ? { verify: true } : {}),
         cwd: { path: folder, kind: "git" },
       },
       agent: { ...(workspace.cli ? { cli: workspace.cli } : {}) },

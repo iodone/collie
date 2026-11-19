@@ -156,6 +156,32 @@
         }
       }
     },
+    "verification": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["verdict", "evidence"],
+      "description": "独立验证位的 verdict 与证据；playbook 有 verifier seat 时 ready 必须为 pass。",
+      "properties": {
+        "verdict": {
+          "enum": ["pass", "fail", "uncertain"],
+          "description": "验证位的结论。"
+        },
+        "evidence": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8000,
+          "description": "支持 verdict 的命令、输出、截图路径或可复核锚点。"
+        },
+        "head": {
+          "type": ["string", "null"],
+          "description": "验证针对的 commit。"
+        },
+        "by": {
+          "type": ["string", "null"],
+          "description": "验证位终端或任务标识。"
+        }
+      }
+    },
     "risk": {
       "type": "object",
       "additionalProperties": false,

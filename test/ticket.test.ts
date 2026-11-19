@@ -33,6 +33,7 @@ function fakeAgent() {
       id: 42, key: "HAT-42", state: "ready", started: 1_763_664_030_000, ready_at: 1_763_666_480_000,
       evidence: { summary: "ticket 完成", details: "- 已复核", commits: { list: [["abc1234", "ticket"]] }, proof: { id: "proof-1", title: "tests passed" } },
       reviews: [{ result: "report", by: "t99", head: "abc1234" }],
+      verifications: [{ verdict: "pass", evidence: "fake checks passed", head: "abc1234" }],
     };
   } };
 }

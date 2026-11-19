@@ -16,7 +16,7 @@ import sys
 import time
 
 from .base import ENTRY, Fail, git, hc_json, now, run, WORKTREES
-from .settings import agent_key, ASSISTANT_TEMPLATES, bare, BRANCH_PATTERN, branch_pattern_problem, notes, notes_part, review_limits, settings_block, settings_for
+from .settings import agent_key, ASSISTANT_TEMPLATES, bare, BRANCH_PATTERN, branch_pattern_problem, notes, notes_part, review_limits, settings_block, settings_for, task_settings
 from .templates import instructions
 from .agents import detail, LINE_MAX, live_agents, SUMMARY_MAX
 from .github import finish, remote_of
@@ -31,7 +31,7 @@ from .browsers import browser_line, browser_path
 
 # How long Codex waits on the permission hook: as the chat's card waits (ask-hook.sh).
 ASK_TIMEOUT = 1800
-OWN = ["ready", "reviewed", "status", "alert", "feedback", "show", "list", "where"]
+OWN = ["ready", "reviewed", "verified", "status", "alert", "feedback", "show", "list", "where"]
 # collie-secret's agent commands (~/.config/herdr-app/bin/collie-secret): asking for a secret and
 # using one by name never ask either. Written by its full path or its bare name. Reviewers get none.
 SECRET = ["ask", "run", "list"]
