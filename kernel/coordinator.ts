@@ -21,10 +21,13 @@ export interface CoordinateOptions {
   rolePromptRef?: string;
   policy?: string;
   stream?: "job_turn" | "chat_turn";
+  origin?: "event" | "human";
+  decided_by?: "system" | "coordinator" | "human";
+  playbook?: { id: string; version: number };
   onDecision?: (decision: Json) => void;
 }
 
-const baseDecision = (dispatch: Dispatch, at: string, caseRef: string | null): Json => ({
+const baseDecision = (dispatch: Dispatch, at: string, caseRef: string | null, meta: Json = {}): Json => ({
   id: ledgerId("dc"),
   key: `${dispatch.event.source}:${dispatch.event.key}`,
   space: dispatch.space,
@@ -51,6 +54,7 @@ const baseDecision = (dispatch: Dispatch, at: string, caseRef: string | null): J
   proposal: null,
   ack: null,
   settled: null,
+  ...meta,
 });
 
 function budgetDecision(dispatch: Dispatch, at: string, reason: string): Json {
@@ -81,6 +85,7 @@ export async function coordinate(dispatch: Dispatch, options: CoordinateOptions)
   }));
   const queue = ledger.waiting().slice(0, 10).map((decision) => ({ key: decision.key, why: decision.why.slice(0, 40) }));
   const stream = options.stream ?? "job_turn";
+  const origin = options.origin ?? (stream === "chat_turn" ? "human" : "event");
   const budget = checkBudget(ledger.cases, at, {
     limit: ruleset.budget.per_hour, window_minutes: ruleset.budget.window_minutes,
   });
@@ -91,7 +96,7 @@ export async function coordinate(dispatch: Dispatch, options: CoordinateOptions)
   }
 
   const job: Json = {
-    id: ledgerId("ca"), created_at: at, stream, wake: stream === "job_turn", visibility: stream === "job_turn" ? "ledger_only" : "chat",
+    id: ledgerId("ca"), created_at: at, stream, origin, playbook: options.playbook ?? null, wake: stream === "job_turn", visibility: stream === "job_turn" ? "ledger_only" : "chat",
     space: {
       primary: dispatch.space, candidates,
       resolution: candidates.length === 1 ? "single" : "remembered",
@@ -135,7 +140,7 @@ export async function coordinate(dispatch: Dispatch, options: CoordinateOptions)
   ledger.append("case", job);
 
   const thinking = {
-    ...baseDecision(dispatch, at, job.id),
+    ...baseDecision(dispatch, at, job.id, { origin, ...(options.playbook ? { playbook: options.playbook } : {}) }),
     state: "open",
     why: "Coordinator 正在分析输入并生成 Decision",
     actions: [],
@@ -146,8 +151,8 @@ export async function coordinate(dispatch: Dispatch, options: CoordinateOptions)
   const output = await decide(structuredClone(job));
   const round = ledger.decisions.filter((decision) => decision.occurrence.object_key === dispatch.event.merge.object_key).length + 1;
   const candidate = {
-    ...baseDecision(dispatch, at, job.id), ...output,
-    id: thinking.id, case_ref: job.id, decided_by: "coordinator", decided_at: at,
+    ...baseDecision(dispatch, at, job.id, { origin, ...(options.playbook ? { playbook: options.playbook } : {}) }), ...output,
+    id: thinking.id, case_ref: job.id, decided_by: options.decided_by ?? "coordinator", decided_at: at,
     occurrence: { ...baseDecision(dispatch, at, job.id).occurrence, round },
     run: { ...baseDecision(dispatch, at, job.id).run, ...output.run },
     human_boundary: { form: output.state === "waiting" ? "card" : "none", chat_injection: false },

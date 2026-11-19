@@ -75,7 +75,7 @@ export function serviceHandler(service: CollieService, { requireClientAuth = fal
       const result = url === "/request"
         ? await service.request(input.space, input.goal, input.ticket_refs ?? [])
         : url === "/ticket"
-          ? await service.createTicket({ space: input.space, project: input.project, title: input.title, brief: input.brief, kind: input.kind })
+          ? await service.createTicket({ space: input.space, project: input.project, title: input.title, brief: input.brief, kind: input.kind, playbook: input.playbook })
           : url === "/ticket/adopt"
             ? await service.adoptTicket({ space: input.space, task_ref: input.task_ref, title: input.title, brief: input.brief, kind: input.kind })
             : await service.answerCard(input.decisionId, input.answer, input.coordinatorAddress);

@@ -89,6 +89,8 @@ describe("collie ticket create", () => {
       decision.id === response.body.decision_id && decision.actions.some((action: Json) => action.kind === "spawn_task"),
     );
     expect(created.state).toBe("open");
+    expect(created.origin).toBe("human");
+    expect(created.playbook).toEqual({ id: "review", version: 1 });
     expect(created.run.kind).toBe("review");
     expect(created.actions).toHaveLength(1);
     expect(created.actions[0].spawn).toMatchObject({

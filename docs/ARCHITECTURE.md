@@ -216,6 +216,8 @@ Collie 不拥有终端、tab、pane、space；这些全部是 Herdr core 的事�
 
 ### 角色模板归属
 
+> Role / Playbook 的目标协议见 [`COLLABORATION.md`](COLLABORATION.md)：Coordinator 是一个 role、event/chat 是同一个 CoordinatorTurn 的两种 origin；review 与 verify 分离；playbook 是 registry 中的流程模板，不是硬路由表。下面是当前运行时的模板落点。
+
 Herdr core 的 `~/.config/herdr-core/templates/` 是角色提示词目录；`hc templates` 直接列出其中的 `.md`。Collie 只安装自己的三份（都带 `collie-` 前缀，Herdr 自己的模板不再混用）：
 
 | 文件 | 用途 |

@@ -12,6 +12,7 @@ import { deliverGithub } from "../plugins/delivery/github.ts";
 import { deliverIm } from "../plugins/delivery/im.ts";
 import type { DeliveryRunner } from "../plugins/delivery/common.ts";
 import { startAnswerServer, startIngressServer } from "./answer-server.ts";
+import { CollaborationRegistry } from "./collaboration.ts";
 import { coordinatorConfig, type CoordinatorRunner } from "../plugins/agent/coordinator.ts";
 import { defaultHelperRunner, enqueueHelperJob, ensureHelper, listCoordinators, runHelperJob, type HelperRunner } from "../plugins/agent/helper.ts";
 import { createHash } from "node:crypto";
@@ -32,6 +33,7 @@ export interface CollieServiceOptions {
   delivery?: { gitlab?: DeliveryRunner; github?: DeliveryRunner; im?: DeliveryRunner };
   coordinator?: { settings?: Json; settingsPath?: string; run?: CoordinatorRunner };
   helper?: { run?: HelperRunner; timeoutMs?: number; pollIntervalMs?: number; bootWaitMs?: number };
+  collaboration?: CollaborationRegistry;
 }
 
 export class CollieService {
@@ -39,12 +41,14 @@ export class CollieService {
   readonly ingress: Ingress;
   readonly stateDir: string;
   readonly configDir: string;
+  readonly collaboration: CollaborationRegistry;
   readonly #options: CollieServiceOptions;
 
   constructor(options: CollieServiceOptions) {
     this.#options = options;
     this.stateDir = resolve(options.stateDir);
     this.configDir = resolve(options.configDir ?? join(homedir(), ".config", "collie"));
+    this.collaboration = options.collaboration ?? new CollaborationRegistry(this.configDir);
     mkdirSync(this.stateDir, { recursive: true });
     mkdirSync(this.configDir, { recursive: true });
     this.ledger = Ledger.open(join(this.stateDir, "ledger.json"));
@@ -148,8 +152,15 @@ export class CollieService {
     const workspace = this.#options.workspaces?.[decision.space];
     if (!workspace) throw new Error(`no worker workspace configured for space ${decision.space}`);
     const folder = this.#projectFolder(decision.space, decision.project);
+    this.collaboration.loadProject(folder);
+    const playbook = decision.playbook?.id ? this.collaboration.playbook(decision.playbook.id) : null;
     const rule = {
-      to: { kind: "herdr_task", space: decision.space, ...(decision.project ? { project: decision.project } : {}), cwd: { path: folder, kind: "git" } },
+      to: {
+        kind: "herdr_task", space: decision.space,
+        ...(decision.project ? { project: decision.project } : {}),
+        ...(playbook ? { playbook: { id: playbook.id, version: playbook.version } } : {}),
+        cwd: { path: folder, kind: "git" },
+      },
       agent: { ...(workspace.cli ? { cli: workspace.cli } : {}) },
     };
     const receipt = await runHerdrTask(decision, rule, this.#agentOptions(decision));
@@ -177,7 +188,7 @@ export class CollieService {
     const dispatch: Dispatch = { kind: "coordinator", laneKey: event.merge.lane_key, space, event };
     const decision = await coordinate(dispatch, {
       ledger: this.ledger, ruleset: this.#options.ruleset, stream: "chat_turn",
-      policy: this.#policy(space),
+      origin: "human", decided_by: "human", policy: this.#policy(space),
       onDecision: () => this.#projectQueue(),
       spaceNote: ticketRefs.length ? `引用 Ticket：${ticketRefs.join("、")}` : `${space} · coordinator`,
       decide: this.#options.decide ?? (async (job: Json) => {
@@ -200,7 +211,7 @@ export class CollieService {
    * kernel builds the Decision itself. No second LLM round, so a chat turn cannot
    * double-judge; the Decision still goes through `coordinate` for schema + guard checks.
    */
-  async createTicket(input: { space?: string; project?: string; title?: string; brief?: string; kind?: string }): Promise<Json> {
+  async createTicket(input: { space?: string; project?: string; title?: string; brief?: string; kind?: string; playbook?: string }): Promise<Json> {
     const space = input.space;
     if (typeof space !== "string" || !/^[a-z0-9][a-z0-9_-]{1,63}$/.test(space)) throw new Error("invalid space");
     const title = input.title;
@@ -211,7 +222,9 @@ export class CollieService {
     if (kind !== "build" && kind !== "review") throw new Error("kind must be build or review");
     const project = input.project;
     if (project !== undefined && (typeof project !== "string" || !/^[a-z0-9][a-z0-9_-]{1,63}$/.test(project))) throw new Error("invalid project");
-    this.#projectFolder(space, project);
+    const projectFolder = this.#projectFolder(space, project);
+    this.collaboration.loadProject(projectFolder);
+    const playbook = this.collaboration.playbook(input.playbook ?? this.collaboration.defaultPlaybook(kind));
 
     const at = (this.#options.now ?? (() => new Date()))().toISOString();
     const id = ledgerId("ev");
@@ -231,7 +244,7 @@ export class CollieService {
     const briefRef = join(this.stateDir, "briefs", `${event.id}.md`);
     const decision = await coordinate(dispatch, {
       ledger: this.ledger, ruleset: this.#options.ruleset, stream: "chat_turn",
-      policy: this.#policy(space),
+      origin: "human", decided_by: "human", policy: this.#policy(space),
       onDecision: () => this.#projectQueue(),
       spaceNote: `新建 ticket：${title}`,
       decide: () => ({
@@ -245,6 +258,8 @@ export class CollieService {
           },
         }],
         run: { kind },
+        origin: "human",
+        playbook: { id: playbook.id, version: playbook.version },
         ...(project ? { project } : {}),
       }),
       ...(this.#options.now ? { now: this.#options.now } : {}),
@@ -290,7 +305,7 @@ export class CollieService {
     const dispatch: Dispatch = { kind: "coordinator", laneKey: event.merge.lane_key, space, event };
     const decision = await coordinate(dispatch, {
       ledger: this.ledger, ruleset: this.#options.ruleset, stream: "chat_turn",
-      policy: this.#policy(space),
+      origin: "human", decided_by: "human", policy: this.#policy(space),
       onDecision: () => this.#projectQueue(),
       spaceNote: `接入已有 task：${title}`,
       decide: () => ({
@@ -386,7 +401,7 @@ export class CollieService {
         };
       });
       const decision = await coordinate(dispatch, {
-        ledger: this.ledger, ruleset: this.#options.ruleset, decide,
+        ledger: this.ledger, ruleset: this.#options.ruleset, decide, origin: "event",
         policy: this.#policy(dispatch.space ?? ""),
         onDecision: () => this.#projectQueue(),
         ...(this.#options.now ? { now: this.#options.now } : {}),

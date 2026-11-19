@@ -42,6 +42,7 @@ describe("M6 后台双循环", () => {
     expect(service.ledger.receipts).toHaveLength(1);
     expect(service.ledger.receipts[0].summary).toBe("后台任务完成");
     expect(decisions[0].state).toBe("waiting");
+    expect(decisions[0].origin).toBe("event");
     expect(decisions[0].run.task_ref).toBe("HAT-42");
     expect(decisions[0].card.kind).toBe("accept");
     const queue = JSON.parse(readFileSync(join(dir, "queue.json"), "utf8"));

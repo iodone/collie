@@ -38,6 +38,28 @@
       "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$",
       "description": "这条判断属于哪个 space。判断按 space 切（上下文是 space 的），但预算/跳数/路由表不切——见 invariants.checkBudget 的全局口径。"
     },
+    "origin": {
+      "enum": ["event", "human", "system"],
+      "description": "这次 Decision 来自哪个输入面；event 和 human 都经过 CoordinatorTurn。"
+    },
+    "playbook": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["id", "version"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$",
+          "description": "playbook 标识，来自 role/playbook registry。"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "playbook 版本，Task 锁定该版本。"
+        }
+      },
+      "description": "这条 Work 选择的 playbook；定义在 role/playbook registry 中。"
+    },
     "project": {
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$",

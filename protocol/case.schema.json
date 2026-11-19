@@ -36,6 +36,28 @@
       ],
       "description": "哪个入口产生的。job_turn = 内核递的事件，headless、不可见；chat_turn = 人说话。DESIGN §3.2：两个入口、两套会话，但只有一套记忆。"
     },
+    "origin": {
+      "enum": ["event", "human"],
+      "description": "这个 CoordinatorTurn 由外部事件还是人的消息触发；两者共享同一 Case/Decision 契约。"
+    },
+    "playbook": {
+      "type": ["object", "null"],
+      "description": "这个 turn 选定的 playbook；null 表示尚未选择。",
+      "additionalProperties": false,
+      "required": ["id", "version"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$",
+          "description": "playbook 标识，来自 role/playbook registry。"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "playbook 版本，Task 锁定该版本。"
+        }
+      }
+    },
     "wake": {
       "type": "boolean",
       "description": "是否消耗唤醒预算。job_turn 恒为 true、chat_turn 恒为 false（下面 allOf 强制）：人主动说话不算唤醒，否则人自己会把自己的预算吃光。"
@@ -436,7 +458,29 @@
           "visibility": {
             "const": "ledger_only"
           },
-          "wake": {
+          "origin": {
+      "enum": ["event", "human"],
+      "description": "这个 CoordinatorTurn 由外部事件还是人的消息触发；两者共享同一 Case/Decision 契约。"
+    },
+    "playbook": {
+      "type": ["object", "null"],
+      "description": "这个 turn 选定的 playbook；null 表示尚未选择。",
+      "additionalProperties": false,
+      "required": ["id", "version"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$",
+          "description": "playbook 标识，来自 role/playbook registry。"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "playbook 版本，Task 锁定该版本。"
+        }
+      }
+    },
+    "wake": {
             "const": true
           }
         }
@@ -462,7 +506,29 @@
           "visibility": {
             "const": "chat"
           },
-          "wake": {
+          "origin": {
+      "enum": ["event", "human"],
+      "description": "这个 CoordinatorTurn 由外部事件还是人的消息触发；两者共享同一 Case/Decision 契约。"
+    },
+    "playbook": {
+      "type": ["object", "null"],
+      "description": "这个 turn 选定的 playbook；null 表示尚未选择。",
+      "additionalProperties": false,
+      "required": ["id", "version"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$",
+          "description": "playbook 标识，来自 role/playbook registry。"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "playbook 版本，Task 锁定该版本。"
+        }
+      }
+    },
+    "wake": {
             "const": false
           }
         }
