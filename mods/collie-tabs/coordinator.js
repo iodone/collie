@@ -159,7 +159,7 @@ export async function openCoordinator(space, show = true, settings = null) {
     const local = cfg.spaces?.[space.id]?.coordinator ?? {};
     const selected = { ...everywhere, ...local };
     // The chat's model picker switches agents; the first start is always Claude.
-    settings = { agent: "claude", model: selected.model ?? "default", effort: selected.effort ?? "high" };
+    settings = { agent: "claude", model: selected.model ?? "default", effort: selected.effort ?? "high", perm: selected.perm ?? "auto" };
   }
   const slot = `coord-${space.id}-${Math.random().toString(36).slice(2, 10)}`;
   settings = settings.agent
