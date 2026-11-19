@@ -106,10 +106,10 @@ Decision 只有三个状态：
 | 人工明确建 ticket | `collie ticket create` |
 | Coordinator chat 提交 Decision | `collie decision commit` |
 | 读回 ticket / Decision | `collie ticket show` |
-| 已有 task 的状态/追加/ready | `collie-task show/status/start/tell` |
-| worker/reviewer/verifier 执行 | `collie-task` 命令由 brief 提供 |
+| 已有 task 的状态/追加/ready | `collie task show/status/start/tell` |
+| worker/reviewer/verifier 执行 | `collie task` 命令由 brief 提供 |
 
-不要用 `collie-task add` 代替 ticket/Decision；不要把 `collie ticket create` 当成 worker/reviewer 的运行时命令。
+不要用 `collie task add` 代替 ticket/Decision；不要把 `collie ticket create` 当成 worker/reviewer 的运行时命令。
 
 需要交付代码时，ticket 必须包含清晰的 title、brief 内容与类型。review 工作写 `kind=review`，它在 Working 里显示为审阅工作；其余写 `kind=build`（默认）。
 

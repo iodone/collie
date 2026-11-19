@@ -855,6 +855,18 @@ def _service_get(root: Path, route: str, state_dir: Path | None = None) -> dict:
     return data
 
 
+def task_command(args) -> int:
+    """Public atomic task surface; the vendored collie-task remains the internal adapter."""
+    helper = target_path(args.root, APP / "bin" / "collie-task")
+    if not helper.is_file():
+        found = shutil.which("collie-task")
+        helper = Path(found) if found else helper
+    if not helper.is_file():
+        raise InstallError("collie-task is not installed")
+    command = [str(helper), *args.rest] if args.rest else [str(helper), "--help"]
+    return subprocess.run(command).returncode
+
+
 def roles_list(args) -> int:
     print(json.dumps(_service_get(args.root, "/v1/collaboration", args.state_dir), ensure_ascii=False))
     return 0
@@ -1217,6 +1229,10 @@ def parser() -> argparse.ArgumentParser:
         command.add_argument("--root", type=Path, default=Path.home())
         command.add_argument("--dry-run", action="store_true")
         command.set_defaults(function=function)
+    task = sub.add_parser("task", help="atomic task execution commands (status, ready, review, verify, show)")
+    task.add_argument("rest", nargs=argparse.REMAINDER)
+    task.set_defaults(function=task_command)
+
     roles = sub.add_parser("roles")
     roles_sub = roles.add_subparsers(dest="roles_command", required=True)
     roles_list_command = roles_sub.add_parser("list")
