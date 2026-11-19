@@ -63,6 +63,18 @@ CoordinatorTurn
 
 ---
 
+## 2.1 Command boundary
+
+Collie 保留两个 CLI 面，因为它们代表两个不同事实：
+
+|命令面|事实|谁能用|
+|---|---|---|
+|`collie ticket`|Decision / Ticket|人、Coordinator|
+|`collie decision`|Coordinator chat 提交 Decision|Coordinator chat|
+|`collie-task`|执行事实：worktree、status、ready、review、verify|worker/reviewer/verifier、Coordinator 读回|
+
+`collie-task add` 不是 Coordinator 的进件入口；它会绕过 Decision/playbook 选择。ticket/Decision 与 task 不合并成一个命令，否则边界会重新混在一起。
+
 ## 3. Role registry
 
 Role 定义职责、禁项、输入、输出；不绑定具体 agent。

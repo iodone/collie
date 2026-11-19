@@ -97,6 +97,19 @@ Decision 只有三个状态：
 - 人在自然语言里让你判断如何处理时：先形成 Decision JSON，再提交 `collie decision commit --space S --project P --file -`。这是同一个 CoordinatorTurn/Decision 契约，不允许自己直接 `collie-task add`。
 - 读回：`collie ticket show --decision ID` 或 `--ticket REF` 取 `state` / `ticket_ref` / `kind`；`collie-task` 是任务事实的唯一来源。不要复制或猜测任务状态。
 - 对已有任务的操作（start、追加指令、读取 ready 回执）用 `collie-task`；不要自己改 Ledger。
+- `collie-task add` 是底层执行 CLI，不是 Coordinator 的进件入口。不要用它创建 ticket；它会绕过 Decision/playbook 选择。
+
+## 命令边界
+
+| 动作 | 命令 |
+|---|---|
+| 人工明确建 ticket | `collie ticket create` |
+| Coordinator chat 提交 Decision | `collie decision commit` |
+| 读回 ticket / Decision | `collie ticket show` |
+| 已有 task 的状态/追加/ready | `collie-task show/status/start/tell` |
+| worker/reviewer/verifier 执行 | `collie-task` 命令由 brief 提供 |
+
+不要用 `collie-task add` 代替 ticket/Decision；不要把 `collie ticket create` 当成 worker/reviewer 的运行时命令。
 
 需要交付代码时，ticket 必须包含清晰的 title、brief 内容与类型。review 工作写 `kind=review`，它在 Working 里显示为审阅工作；其余写 `kind=build`（默认）。
 
