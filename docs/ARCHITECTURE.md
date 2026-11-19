@@ -40,7 +40,7 @@ flowchart TB
 | **外部事件** | GitLab / GitHub / cron / bot IM → Ingress（验签、去重、归并、定 space）→ Coordinator 的 **helper** | 机器事实进系统，由 Coordinator 判断 |
 | **人的对话** | UI / IM 里的人 → 直接进 Coordinator 的 **chat turn** | 新建、调整、叫停、回答、追问；**不经过 Ingress** |
 
-- 每 space 一个 Coordinator；chat 是人看的会话，helper 是常驻的第二个 session，专门接收 ingress，不打断 chat。
+- 每 space 一个 Coordinator；chat 是人看的 session，常驻 ingress session 专门接收事件，不打断 chat；两者加载同一 role prompt。
 - 人的输入不套 Event 的 `dedupe / merge / hops / route`；它是对话，Coordinator 直接理解并行动。
 - **IM 的边界**：人发的 IM 是 chat；机器/bot 发的 IM 是外部事件。判断依据是 actor/channel 的语义，不是“IM 都算事件”。
 - **space 的边界**：外部事件由 source/channel 映射给出 space；人的 chat 所在的空间就是本次对话的 space。映射不出来的事件不猜，报配置错误并通知管理员。
@@ -121,12 +121,12 @@ Collie 的人对话是 Coordinator 的直接输入，不进 Ingress；这是有�
 
 ## 5. Coordinator 与 Policy
 
-**每 space 一个 Coordinator**，两个常驻 session：
+**每 space 一个 Coordinator role**。运行器可以为它启动两个 session：
 
-- **chat turn**：人看得见的会话；新建、steering、回答。
-- **helper**：常驻、不占 pane；从 Coordinator chat 的 Helper 行打开独立 tab，关闭 tab 只 `park`，session 不结束。
+- **人可见的 session**：人看得到的会话；新建、steering、回答。
+- **常驻 ingress session**：不占 pane；从 Coordinator chat 的 Helper 行打开独立 tab，关闭 tab 只 `park`，session 不结束。
 
-两者共用同一份 Ledger、policy 和 Work。
+两者加载**同一份 Coordinator role prompt**，共用同一份 Ledger、policy 和 Work。常驻 ingress session 不是一个额外的 helper role，也没有独立的 helper/chat turn 契约；它只是同一个 Coordinator 在接收另一类消息。
 
 ### 输入
 
@@ -274,13 +274,13 @@ hc run --bg --json --keep --cwd <folder>
 3. agent 没有自己的 pane；`herdr.chat` 告诉所有 Herdr 客户端它被哪个 chat 显示。
 4. app 关闭/重启：Herdr 的 kept terminal 保留；`collie-chat` 通过 `herdr.chat.slot` / `herdr.chat.origin` 找回它，不新建 agent。
 
-### Coordinator helper：ingress 的唯一执行 session
+### Coordinator ingress session
 
-**不设计 headless/Off 模式。** 每个 space 的 ingress 全部投递到常驻的 Coordinator helper。
+**不设计 headless/Off 模式。** 每个 space 的 ingress 全部投递到 Coordinator 的常驻 ingress session；它加载同一个 role prompt，不是第二个 Coordinator role。
 
 ```text
 Coordinator chat (herdr.role=coordinator, 人可见)
-  └─ Coordinator helper (herdr.role=helper, parent=coordinator)
+  └─ Coordinator ingress session (herdr.role=helper, parent=coordinator)
        ├─ 常驻 session，不每事件重起
        ├─ 读同一份 collie-coordinator prompt / policy / Ledger 快照
        ├─ Ingress 的 job 进入其串行队列
@@ -290,8 +290,8 @@ Coordinator chat (herdr.role=coordinator, 人可见)
 
 #### 约束
 
-- helper **不是第二个 Coordinator**：不能写 Ledger、不能写 policy、不能独立 spawn task。
-- helper 使用 `herdr.role=helper`，不能使用 `herdr.role=coordinator`；一个 space 仍只有一个 Coordinator。
+- 常驻 ingress session **不是第二个 Coordinator role**：不能写 Ledger、不能写 policy、不能独立 spawn task。
+- 它使用 `herdr.role=helper` 作为运行时 label，不改变 Coordinator role；一个 space 仍只有一个 Coordinator。
 - 输出由 service 校验；Decision 仍由 service 写。
 - 主 chat 和 helper 都加载 policy；没有单独的 policy session。
 - helper 串行处理 job，避免同一 space 并发判断。

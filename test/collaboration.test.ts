@@ -9,7 +9,7 @@ describe("collaboration registry", () => {
     const dir = mkdtempSync(join(tmpdir(), "collie-registry-"));
     try {
       const registry = new CollaborationRegistry(dir);
-      expect(registry.roles.get("coordinator")?.modes?.chat).toBeDefined();
+      expect(registry.roles.get("coordinator")?.inputs).toContain("human message");
       expect(registry.roles.get("verifier")?.prohibitions).toContain("不改产品代码");
       expect(registry.playbook("feature").stages.map((stage) => stage.id)).toEqual(["explore", "design", "implement", "review", "verify", "accept"]);
       expect(registry.playbook("dsx-playbook-feature").stages.map((stage) => stage.role)).toContain("verifier");

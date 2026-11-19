@@ -18,7 +18,7 @@ Space / Project / Task / CoordinatorTurn / Role / Playbook / Gate / Inbox
 
 | 概念 | 作用 | 不负责 |
 |---|---|---|
-| Space | 协作域：Coordinator、helper、policy、Inbox | git repo、worktree |
+| Space | 协作域：Coordinator、policy、Inbox | git repo、worktree |
 | Project | 执行域：repo、folder、task store | 人的决策 |
 | Task | 一件被执行的工作 | 定义 workflow |
 | Coordinator | 判断、选择 playbook、分发 Ticket/Task | 写代码、review、verify、裁决 |
@@ -48,7 +48,7 @@ CoordinatorTurn
 | `event` | event data、queue、policy | Decision JSON；不进入 chat |
 | `human` | conversation、queue、policy | Decision + optional reply |
 
-两者共享 Ledger、policy、task fact。event 不可见对话；human 可直接回答 Card 或创建 ticket。
+两者共享同一 role prompt、Ledger、policy、task fact。运行器可能把它们放在不同 session 里，但这不产生第二个 Coordinator role，也不产生单独的 helper turn/helper prompt。event 不可见对话；human 可直接回答 Card 或创建 ticket。
 
 纯问答也产生 `noop/settled` Decision，保持 turn 可审计。显式人工表单（UI New/Build）是 `decided_by=human` 的直接 Decision，不属于 Coordinator 模型判断。
 
@@ -88,7 +88,7 @@ type Role = {
   prohibitions: string[];
   inputs?: string[];
   outputs?: string[];
-  modes?: Record<string, { input?: string; output?: string; tools?: string[] }>;
+  // 可选的 I/O adapter 元数据；不是第二个 role，也不是运行时 prompt 分支。
 };
 ```
 
