@@ -165,6 +165,8 @@ export function taskTarget(decision, receipt, groups, detail = null) {
   return {
     decision: decision.id,
     project: spawn?.project ?? null,
+    playbook: task.playbook ?? decision.playbook?.id ?? null,
+    verification: Array.isArray(task.verifications) ? task.verifications.at(-1) ?? null : null,
     ref: String(task.ref ?? task.key ?? task.id),
     title: task.title ?? spawn?.title ?? decision.card?.question ?? decision.why,
     state: task.state ?? null,

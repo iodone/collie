@@ -469,6 +469,8 @@ export default class Inbox extends View {
         .child(h().h(16).min_w(0).gap(6).items_center().text_size(12)
           .child(div().flex_none().font_family(ID_FONT).text_size(11).text_color(t.dim).child(ticketRef(decision, target)))
           .child(stateChip(t, stage, need, kind, decision.settled?.outcome))
+          .when(Boolean(target?.playbook), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(String(target.playbook))))
+          .when(Boolean(target?.verification), (el) => el.child(div().flex_none().text_size(11).text_color(target.verification.verdict === "pass" ? t.ansi2 : t.ansi1).child(`verify ${target.verification.verdict}`)))
           .child(div().flex_shrink_1().min_w(0).truncate().text_color(t.muted).child(reason ?? ""))
           .when(!bare, (el) => el.child(div().flex_shrink(1000).min_w(0).truncate().text_color(t.dim).child(`· ${decision.space}`)))))
       .child(action(`collie-reply-${decision.id}`, "回复", true, () => replyToCoordinator(decision, target, receipt), t));
