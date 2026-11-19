@@ -1,5 +1,7 @@
 # Collie · 架构与流程
 
+> 公开命令面统一使用 `collie ticket` / `collie decision` / `collie task`；本文中的 `collie-task` 是内部 execution adapter，不是用户 prompt 契约。
+
 > 双循环。外部事件进 Ingress，人直接和 Coordinator 对话；两者共用同一个 Coordinator、Ledger、policy 和四态 Work。
 
 ---
