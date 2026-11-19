@@ -11,7 +11,8 @@ describe("collaboration registry", () => {
       const registry = new CollaborationRegistry(dir);
       expect(registry.roles.get("coordinator")?.modes?.chat).toBeDefined();
       expect(registry.roles.get("verifier")?.prohibitions).toContain("不改产品代码");
-      expect(registry.playbook("feature").stages.map((stage) => stage.id)).toEqual(["implement", "review", "verify", "accept"]);
+      expect(registry.playbook("feature").stages.map((stage) => stage.id)).toEqual(["explore", "design", "implement", "review", "verify", "accept"]);
+      expect(registry.playbook("dsx-playbook-feature").stages.map((stage) => stage.role)).toContain("verifier");
       expect(registry.defaultPlaybook("review")).toBe("review");
       expect(registry.defaultPlaybook("build")).toBe("feature");
     } finally { rmSync(dir, { recursive: true, force: true }); }

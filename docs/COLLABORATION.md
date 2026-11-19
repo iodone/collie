@@ -129,14 +129,35 @@ type Playbook = {
 };
 ```
 
-内置：
+内置 playbook 直接对齐 DSX：
 
-```text
-feature
-bug-fix
-review
-investigation
-```
+| DSX playbook | Collie playbook | 主要阶段 |
+|---|---|---|
+| `dsx-playbook-feature` | `feature` | explore → design → implement → review ∥ verify → accept |
+| `dsx-playbook-bug-fix` | `bug-fix` | reproduce → fix → review ∥ verify → accept |
+| `dsx-playbook-review` | `review` | review → accept |
+| `dsx-playbook-investigation` | `investigation` | investigate → accept |
+| `dsx-playbook-refactoring` | `refactoring` | test-net → refactor → review ∥ verify → accept |
+| `dsx-playbook-prototype` | `prototype` | build → observe → decide |
+| `dsx-playbook-ratchet` | `ratchet` | tighten → fix → review → verify → accept |
+| `dsx-playbook-hillclimb` | `hillclimb` | measure → iterate → verify → decide |
+| `dsx-playbook-eval` | `eval` | frame → candidates → judge → decide |
+| `dsx-playbook-orchestrate` | `orchestrate` | frame → drain → verify → decide |
+
+DSX 的 `name` 可以作为别名使用；Collie id 是 canonical。
+
+角色映射：
+
+| DSX 职责位 | Collie role | 备注 |
+|---|---|---|
+| 协调位 | `coordinator` | 判断、选择 playbook、分发 |
+| 执行位 | `worker` | 实现与提交 |
+| review 位 | `reviewer` | 三轴审查，不跑 verify |
+| 验证位 | `verifier` | 三验、verdict、evidence |
+| 方案位 | `planner` | 设计与 pass predicate |
+| 守护位 | `watcher` | 基础设施/异常观察 |
+| 决策位 | 人 | 不是 agent role |
+
 
 示例：
 
