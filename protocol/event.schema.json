@@ -24,8 +24,9 @@
       "description": "事件标识，ev_ 前缀加 8–32 位小写字母数字。由 Ingress 生成，写入后不变。"
     },
     "source": {
-      "enum": ["gitlab", "github", "flume", "cron", "im"],
-      "description": "事件来源，对应一道可替换的缝（DESIGN §1.2）。source 决定 key 的去重命名空间。"
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "description": "事件来源，对应一道可替换的缝（DESIGN §1.2）。source 决定 key 的去重命名空间；外部来源不必枚举。"
     },
     "key": {
       "type": "string",

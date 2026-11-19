@@ -97,34 +97,7 @@ export function githubEvent(config: SourceConfig, headers: Headers, body: string
   };
 }
 
-/** Flume envelope -> one Collie Event. The envelope is open-ended: Collie keeps it as data and lets the coordinator interpret it. */
-export function flumeEvent(config: SourceConfig, body: string, stateDir: string): Json {
-  const envelope = JSON.parse(body);
-  const eventType = String(envelope.event ?? "");
-  const subject = String(envelope.subject ?? "");
-  if (!envelope.native_id || !eventType || !subject || !envelope.occurred_at || !envelope.source) {
-    throw new Error("flume envelope requires native_id, event, occurred_at, source and subject");
-  }
-  const repo = subject.replace(/[!#].*$/, "");
-  const id = eventId(`flume:${eventType}:${envelope.native_id}`);
-  const received = now();
-  const ref = bodyRef(stateDir, id, body);
-  return {
-    id, source: "flume",
-    key: String(envelope.native_id).slice(0, 200),
-    type: eventType.slice(0, 80),
-    object: { kind: "none", id: subject.slice(0, 200) },
-    title: compact(`${eventType} ${subject}`, 200),
-    ...ref,
-    hops: 0,
-    received_at: received,
-    merge: { lane_key: "", object_key: `none:${subject.slice(0, 200)}`, first_seen_at: received, occurrences: 1 },
-    space_candidates: [spaceFor(config, repo)],
-  };
-}
-
 export function verifySource(adapter: string, headers: Headers, body: string, secret: string): boolean {
-  if (adapter === "flume") return true;
   if (!secret) return true;
   if (adapter === "gitlab") {
     const given = Buffer.from(header(headers, "x-gitlab-token"));
@@ -144,6 +117,5 @@ export function verifySource(adapter: string, headers: Headers, body: string, se
 export function sourceEvent(adapter: string, config: SourceConfig, headers: Headers, body: string, stateDir: string): Json {
   if (adapter === "gitlab") return gitlabEvent(config, headers, body, stateDir);
   if (adapter === "github") return githubEvent(config, headers, body, stateDir);
-  if (adapter === "flume") return flumeEvent(config, body, stateDir);
   throw new Error(`unknown source adapter ${adapter}`);
 }

@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { CollieService } from "./main.ts";
 import { clientAuth, loadIngressConfig, secretOf } from "./ingress-config.ts";
 import { sourceEvent, verifySource } from "./sources.ts";
+import { intakeEvent } from "./intake.ts";
 
 const MAX_BODY = 1_048_576;
 const routes = ["/answer", "/request", "/ticket", "/ticket/adopt", "/v1/ingress"];
@@ -68,7 +69,7 @@ export function serviceHandler(service: CollieService, { requireClientAuth = fal
         if ((requireClientAuth || Object.keys(config.clients ?? {}).length) && !clientAuth(config, request.headers.authorization).ok) {
           return send(response, 401, { error: "bad ingress token" });
         }
-        return send(response, 200, await service.handleEvent(input));
+        return send(response, 200, await service.handleEvent(intakeEvent(input, service.stateDir)));
       }
 
       const result = url === "/request"

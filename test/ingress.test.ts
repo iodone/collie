@@ -23,29 +23,6 @@ describe("source adapters", () => {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
-  test("flume envelope becomes a Collie Event without re-reading the webhook", () => {
-    const dir = mkdtempSync(join(tmpdir(), "collie-flume-"));
-    try {
-      const envelope = JSON.stringify({
-        native_id: "evt-7", event: "merge_request.opened",
-        occurred_at: "2026-11-19T10:00:00+00:00", source: "gitlab",
-        subject: "olap/miergo!169",
-        payload: {
-          object_kind: "merge_request",
-          project: { path_with_namespace: "olap/miergo", web_url: "https://git.n.xiaomi.com/olap/miergo" },
-          object_attributes: { iid: 169, title: "ALTER operator/clientId", url: "https://git.n.xiaomi.com/olap/miergo/-/merge_requests/169" },
-        },
-      });
-      const event = sourceEvent("flume", { space_map: { "olap/miergo": "spf57" } }, {}, envelope, dir);
-      expect(event.source).toBe("flume");
-      expect(event.key).toBe("evt-7");
-      expect(event.type).toBe("merge_request.opened");
-      expect(event.object).toEqual({ kind: "none", id: "olap/miergo!169" });
-      expect(event.space_candidates).toEqual(["spf57"]);
-      expect(event.data_ref).toMatch(/event-bodies\/ev_[0-9a-z]+\.md$/);
-    } finally { rmSync(dir, { recursive: true, force: true }); }
-  });
-
   test("GitLab token and GitHub HMAC are checked by the adapter boundary", () => {
     expect(verifySource("gitlab", { "x-gitlab-token": "secret" }, body, "secret")).toBe(true);
     expect(verifySource("gitlab", { "x-gitlab-token": "wrong" }, body, "secret")).toBe(false);
