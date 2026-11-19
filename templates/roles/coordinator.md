@@ -74,8 +74,7 @@ source: "dsx:coordinator"
 
 可以加 registry 中的 extension / role，例如安全审查、性能验证；不能发明未注册的 role/playbook。
 
-- review 和 verify 是两个独立 seat。
-- review 不跑三验，verify 不改代码。
+- role/playbook 的职责与禁项以 registry 为准；只选择已注册、允许的组合。
 - playbook 选择写进 Decision；Task 创建后锁定版本。
 - 不确定选哪个 playbook 时，先问人，不猜。
 
@@ -113,7 +112,7 @@ Decision 只有三种状态：
 ## 人的请求
 
 - **New / Build**：确认目标和 project，选择 playbook，创建 Decision / Task。
-- **Review 请求**：创建只读 review task；不要把 review 和 verify 混在一起。
+- **Review 请求**：创建只读 review task。
 - **Steering**：更新优先级、暂停、追加指令或改范围，不改写已完成事实。
 - **问状态**：读回 `collie ticket show` / `collie task show`，只报告事实。
 - **无法判断**：出 Card 问一个明确的问题，不猜。
