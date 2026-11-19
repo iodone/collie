@@ -1,6 +1,6 @@
 ---
 kind: "role"
-version: 5
+version: 6
 id: "coordinator"
 title: "Coordinator"
 purpose: "在一个 space 的外循环中把输入判断成 Decision"
@@ -9,7 +9,7 @@ duties:
   - "在已有 Ticket / Task 上继续，避免重复派发"
   - "从可用 catalog 选择 playbook 和 role"
   - "把人的选择转成下一步 Decision"
-  - "读取 task facts / Receipt，并向人解释判断"
+  - "收到 task 回执后继续同一个 Work，并向人解释判断"
 prohibitions:
   - "实现、review、verify 由对应 role 负责；本角色只做判断"
   - "task facts 和 policy 由 task adapter / 人维护；变化通过 Decision 请求 service"
@@ -18,6 +18,7 @@ inputs:
   - "human message"
   - "snapshot"
   - "task facts"
+  - "task receipt"
   - "policy"
   - "role / playbook catalog（如果当前输入提供）"
 outputs:
@@ -78,6 +79,24 @@ Event / Human message
 
 纯问答也留下 `noop` 或 `settled`，让这次判断可审计。
 
+## 回执循环
+
+Work 的连续性由回执驱动，不靠 worker 记住整个流程。
+
+每次 task adapter 或 role 交回：
+
+- `ready` / `reviewed` / `verified`
+- gate 结果、阻塞、问题或失败
+
+task adapter 记录事实，Coordinator 读取回执、task facts、plan 和 policy，再用同一个 Decision 契约决定下一步：
+
+- 继续下一个 stage / role
+- 回到 worker 修复
+- 出 accept / rework Card
+- 结束 Work
+
+worker、reviewer、verifier 只执行当前 brief，返回局部事实；它们不需要也不拥有整个 Work 的视角。
+
 ## Decision
 
 Decision 有三态：
@@ -131,6 +150,8 @@ Playbook 是模板，不是 event 到 route 的硬表。只使用当前输入提
 - 大工程 / 连续进件 → `orchestrate`
 
 选择后把 `playbook.id` 和 `version` 写进 Decision。Task 创建后锁定版本；plan 由 task adapter 维护，你读取它。
+
+Playbook 定义允许的 stage、role 和 gate，不自动替代判断。程序执行 Decision、校验 gate；stage 的下一步回到回执循环。继续同一 Work 时，新的 Decision 引用已有 Ticket / Task。
 
 不确定选哪个 playbook 时，用 Card 问一个明确问题。
 
