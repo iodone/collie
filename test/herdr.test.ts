@@ -67,6 +67,18 @@ describe("plugins/agent/herdr", () => {
     expect(result.errors).toEqual([]);
   });
 
+  test("verify 开启时 receipt 带独立 verifier verdict，且 task add 带 verify=on", async () => {
+    const view = readyView();
+    view.verifications = [{ verdict: "pass", evidence: "npm test: 55 passed", head: "9f2c1abd1234", by: "t100" }];
+    const fake = fakeRunner([view]);
+    const receipt = await runHerdrTask(decision, {
+      ...rule, to: { ...rule.to, verify: true },
+    }, { run: fake.run, now: () => fixedNow, sleep: async () => {} });
+    expect(fake.calls[0]).toContain("verify=on");
+    expect(receipt.verification).toMatchObject({ verdict: "pass", evidence: "npm test: 55 passed" });
+    expect(validate(receipt, "urn:collie:receipt:v1").errors).toEqual([]);
+  });
+
   test("长任务没 ready 只继续观察，不读最后消息、不判失败", async () => {
     const fake = fakeRunner([{ id: 42, key: "HAT-42", state: "running" }]);
     await expect(waitForHerdrReceipt(

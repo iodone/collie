@@ -471,6 +471,8 @@ export default class Inbox extends View {
           .child(stateChip(t, stage, need, kind, decision.settled?.outcome))
           .when(Boolean(target?.playbook), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(`${target.playbook}${target.stage?.id ? ` / ${target.stage.id}` : ""}`)))
           .when(Boolean(target?.verification), (el) => el.child(div().flex_none().text_size(11).text_color(target.verification.verdict === "pass" ? t.ansi2 : t.ansi1).child(`verify ${target.verification.verdict}`)))
+          .when(Boolean(target?.seats?.length), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(`${target.seats.length} seats`)))
+          .when(Boolean(target?.gateResults?.length), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(`${target.gateResults.filter((g) => g.verdict === "pass").length}/${target.gateResults.length} gates`)))
           .child(div().flex_shrink_1().min_w(0).truncate().text_color(t.muted).child(reason ?? ""))
           .when(!bare, (el) => el.child(div().flex_shrink(1000).min_w(0).truncate().text_color(t.dim).child(`· ${decision.space}`)))))
       .child(action(`collie-reply-${decision.id}`, "回复", true, () => replyToCoordinator(decision, target, receipt), t));
@@ -604,7 +606,12 @@ export default class Inbox extends View {
           .child(div().id("collie-thread-title").flex_1().min_w(0).truncate().text_size(TEXT.title).font_medium().child(title)))
         .child(h().h(16).min_w(0).gap(6).items_center()
           .child(stateChip(t, stage, need, kind, decision.settled?.outcome))
-          .child(div().flex_1().min_w(0).truncate().text_size(TEXT.label).text_color(t.muted).child(report))));
+          .child(div().flex_1().min_w(0).truncate().text_size(TEXT.label).text_color(t.muted).child(report)))
+        .when(Boolean(target?.playbook || target?.stage || target?.seats?.length || target?.gateResults?.length), (el) => el.child(
+          h().h(16).min_w(0).gap(8).items_center().text_size(11).text_color(t.dim)
+            .child([target?.playbook, target?.stage?.id].filter(Boolean).join(" / "))
+            .child(target?.seats?.length ? `${target.seats.length} seats` : "")
+            .child(target?.gateResults?.length ? `${target.gateResults.filter((g) => g.verdict === "pass").length}/${target.gateResults.length} gates` : ""))));
   }
 
   head(t, cx) {
