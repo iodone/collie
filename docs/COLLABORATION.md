@@ -72,9 +72,8 @@ Collie 保留两个 CLI 面，因为它们代表两个不同事实：
 |`collie ticket`|Decision / Ticket|人、Coordinator|
 |`collie decision`|Coordinator chat 提交 Decision|Coordinator chat|
 |`collie task`|公开的原子任务命令面|用户自定义 prompt、agent|
-|`collie-task`|内部 Task Adapter；实现 `collie task`|Collie runtime，不直接写给 agent|
 
-`collie-task add` 不是 Coordinator 的进件入口；它会绕过 Decision/playbook 选择。ticket/Decision 与 task 不合并成一个命令，否则边界会重新混在一起。
+`collie task add` 不是 Coordinator 的进件入口；它会绕过 Decision/playbook 选择。`collie-task` 是内部 adapter，不作为用户/prompt 契约。ticket/Decision 与 task 不合并成一个命令，否则边界会重新混在一起。
 
 ## 3. Role registry
 

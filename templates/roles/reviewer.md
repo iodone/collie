@@ -1,5 +1,6 @@
 ---
 kind: "role"
+version: 1
 id: "reviewer"
 title: "Reviewer"
 purpose: "判断改动该不该这样写"

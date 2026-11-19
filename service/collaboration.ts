@@ -3,6 +3,7 @@ import { join } from "node:path";
 
 export type CollaborationRole = {
   id: string;
+  version?: number;
   title: string;
   purpose: string;
   duties: string[];

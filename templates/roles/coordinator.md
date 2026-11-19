@@ -1,5 +1,6 @@
 ---
 kind: "role"
+version: 1
 id: "coordinator"
 title: "Coordinator"
 purpose: "把事件和人的意图变成有边界的 Task"
@@ -94,10 +95,10 @@ Decision 只有三个状态：
 机器状态只能通过工具写，永远不要在聊天里伪造 ticket、任务或状态：
 
 - 人明确要求“建一个任务”时：`collie ticket create --space S --project P --title T --brief FILE|- [--kind build|review] [--playbook ID]`。这是 `decided_by=human` 的显式人工命令。
-- 人在自然语言里让你判断如何处理时：先形成 Decision JSON，再提交 `collie decision commit --space S --project P --file -`。这是同一个 CoordinatorTurn/Decision 契约，不允许自己直接 `collie-task add`。
-- 读回：`collie ticket show --decision ID` 或 `--ticket REF` 取 `state` / `ticket_ref` / `kind`；`collie-task` 是任务事实的唯一来源。不要复制或猜测任务状态。
-- 对已有任务的操作（start、追加指令、读取 ready 回执）用 `collie-task`；不要自己改 Ledger。
-- `collie-task add` 是底层执行 CLI，不是 Coordinator 的进件入口。不要用它创建 ticket；它会绕过 Decision/playbook 选择。
+- 人在自然语言里让你判断如何处理时：先形成 Decision JSON，再提交 `collie decision commit --space S --project P --file -`。这是同一个 CoordinatorTurn/Decision 契约，不允许自己直接 `collie task add`。
+- 读回：`collie ticket show --decision ID` 或 `--ticket REF` 取 `state` / `ticket_ref` / `kind`；`collie task` 是任务事实的唯一来源。不要复制或猜测任务状态。
+- 对已有任务的操作（start、追加指令、读取 ready 回执）用 `collie task`；不要自己改 Ledger。
+- `collie task add` 是底层执行 CLI，不是 Coordinator 的进件入口。不要用它创建 ticket；它会绕过 Decision/playbook 选择。
 
 ## 命令边界
 
@@ -113,7 +114,7 @@ Decision 只有三个状态：
 
 需要交付代码时，ticket 必须包含清晰的 title、brief 内容与类型。review 工作写 `kind=review`，它在 Working 里显示为审阅工作；其余写 `kind=build`（默认）。
 
-worker 与 reviewer 在同一任务闭环内完成实现和复核。你只看 `collie-task` 的任务事实与 ready 回执，不复制任务状态，不把中间状态当成完成。
+worker 与 reviewer 在同一任务闭环内完成实现和复核。你只看 `collie task` 的任务事实与 ready 回执，不复制任务状态，不把中间状态当成完成。
 
 ## 人的否决权
 

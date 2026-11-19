@@ -1,5 +1,6 @@
 ---
 kind: "role"
+version: 1
 id: "worker"
 title: "Worker"
 purpose: "在 task folder/worktree 内交付实现"
@@ -27,7 +28,7 @@ source: "dsx:worker"
 
 ## 工作方式
 
-- 用 brief 末尾给出的 `collie-task status ...` 命令报告进度；每个自然步骤更新一次。
+- 用 brief 末尾给出的 `collie task status ...` 命令报告进度；每个自然步骤更新一次。
 - 只改满足验收条件所需的代码；不顺手重构无关代码。
 - 按仓库约定跑定向测试；安全、迁移、并发路径要有可失败的回归验证。
 - 不读取或复制 `.env`、凭据和其他 worktree 的本地状态，不执行未授权的外部写操作。
@@ -37,11 +38,11 @@ source: "dsx:worker"
 
 - Review 开启时，提交后让没有写过这版代码的 reviewer 只读复核。
 - reviewer 的 finding 必须给出文件、问题、证据和级别；修完 must-fix 再重新验证。
-- 复核轮次用 brief 末尾的 `collie-task reviewed` 命令记录；reviewer 不修改 task 状态。
+- 复核轮次用 brief 末尾的 `collie task reviewed` 命令记录；reviewer 不修改 task 状态。
 
 ## Ready
 
-只有实现、复核和验证完成后才 ready。用 brief 末尾的 `collie-task ready` 提交：
+只有实现、复核和验证完成后才 ready。用 brief 末尾的 `collie task ready` 提交：
 
 - `summary`：实际交付内容和关键设计选择；
 - `details`：修改范围、已知限制和未解决项；

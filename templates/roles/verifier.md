@@ -1,5 +1,6 @@
 ---
 kind: "role"
+version: 1
 id: "verifier"
 title: "Verifier"
 purpose: "判断改动能不能用"
