@@ -11,7 +11,7 @@ import { deliverGitlab } from "../plugins/delivery/gitlab.ts";
 import { deliverGithub } from "../plugins/delivery/github.ts";
 import { deliverIm } from "../plugins/delivery/im.ts";
 import type { DeliveryRunner } from "../plugins/delivery/common.ts";
-import { startAnswerServer } from "./answer-server.ts";
+import { startAnswerServer, startIngressServer } from "./answer-server.ts";
 import { coordinatorConfig, type CoordinatorRunner } from "../plugins/agent/coordinator.ts";
 import { defaultHelperRunner, enqueueHelperJob, ensureHelper, listCoordinators, runHelperJob, type HelperRunner } from "../plugins/agent/helper.ts";
 import { createHash } from "node:crypto";
@@ -76,6 +76,15 @@ export class CollieService {
 
   async process(event: Json): Promise<Json[]> {
     return (await this.handleEvent(event)).decisions;
+  }
+
+  /** Event status for ingress clients: the durable Event and every Decision it produced. */
+  eventStatus(eventId: string): Json | null {
+    const event = this.ledger.events.find((item) => item.id === eventId);
+    if (!event) return null;
+    const key = `${event.source}:${event.key}`;
+    const decisions = this.ledger.decisions.filter((item) => item.event_ref === event.id || item.key === key);
+    return { event, decisions };
   }
 
   #policy(space: string): string {
@@ -483,6 +492,11 @@ if (import.meta.main) {
   const socketPath = join(stateDir, "service.sock");
   if (existsSync(socketPath)) unlinkSync(socketPath);
   startAnswerServer(service, socketPath);
+  const ingressPort = Number(process.env.COLLIE_INGRESS_PORT ?? 0);
+  if (Number.isInteger(ingressPort) && ingressPort > 0) {
+    startIngressServer(service, ingressPort, process.env.COLLIE_INGRESS_HOST ?? "127.0.0.1");
+    console.error(`collie ingress listening on ${process.env.COLLIE_INGRESS_HOST ?? "127.0.0.1"}:${ingressPort}`);
+  }
   const incoming = join(stateDir, "incoming");
   let draining = false;
   const drain = async () => {

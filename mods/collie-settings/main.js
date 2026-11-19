@@ -11,6 +11,8 @@ export default class InboxSettings extends View {
     this.section = "coordinator";
     this.cfg = {};
     this.raw = null;
+    this.ingressCfg = {};
+    this.ingressRaw = null;
     this.savedAt = 0;
     this.model = InputState.new({ placeholder: "default" });
     this.model.on("blur", (_e, cx) => this.save({ model: this.model.content().text.trim() }, cx));
@@ -26,6 +28,9 @@ export default class InboxSettings extends View {
     this.raw = await readTextFile(coordinatorPath(home())).catch(() => null);
     try { this.cfg = JSON.parse(this.raw ?? "{}"); } catch { this.cfg = {}; }
     this.model.set_value(this.cfg.everywhere?.coordinator?.model ?? "default");
+    const ingressPath = `${home()}/.local/state/collie/sources.json`;
+    this.ingressRaw = await readTextFile(ingressPath).catch(() => null);
+    try { this.ingressCfg = JSON.parse(this.ingressRaw ?? "{}"); } catch { this.ingressCfg = {}; }
   }
 
   save(patch, cx) {
@@ -44,6 +49,58 @@ export default class InboxSettings extends View {
       cx.notify();
       cx.timer.after(2200, (cx) => { this.savedAt = 0; cx.notify(); });
     });
+  }
+
+  saveIngress(patch, cx) {
+    cx.spawn(async (cx) => {
+      try {
+        const path = `${home()}/.local/state/collie/sources.json`;
+        const next = {
+          ...this.ingressCfg,
+          sources: { ...(this.ingressCfg.sources ?? {}) },
+          clients: { ...(this.ingressCfg.clients ?? {}) },
+          ...patch,
+        };
+        await writeTextFile(path, JSON.stringify(next, null, 2) + "\n", this.ingressRaw);
+        this.ingressCfg = next;
+        this.ingressRaw = JSON.stringify(next, null, 2) + "\n";
+        this.savedAt = Date.now();
+      } catch (error) { this.error = String(error?.message ?? error); }
+      cx.notify();
+      cx.timer.after(2200, (cx) => { this.savedAt = 0; cx.notify(); });
+    });
+  }
+
+  setSourceEnabled(name, enabled, cx) {
+    const sources = { ...(this.ingressCfg.sources ?? {}) };
+    sources[name] = { ...(sources[name] ?? {}), enabled };
+    this.saveIngress({ sources }, cx);
+  }
+
+  setClientEnabled(name, enabled, cx) {
+    const clients = { ...(this.ingressCfg.clients ?? {}) };
+    clients[name] = { ...(clients[name] ?? {}), enabled };
+    this.saveIngress({ clients }, cx);
+  }
+
+  ingress(t) {
+    const sources = Object.entries(this.ingressCfg.sources ?? {});
+    const clients = Object.entries(this.ingressCfg.clients ?? {});
+    if (!sources.length && !clients.length) {
+      return v_flex().gap(6).py(12)
+        .child(div().text_size(TEXT.title).font_semibold().text_color(t.foreground).child("Ingress"))
+        .child(div().text_size(TEXT.label).text_color(t.dim).child("No sources or clients configured. Add ~/.local/state/collie/sources.json."));
+    }
+    return v_flex()
+      .child(div().pb(6).text_size(TEXT.title).font_semibold().text_color(t.foreground).child("Ingress"))
+      .children(sources.map(([name, source]) => this.row(t, name,
+        `${source.adapter ?? name} · ${Object.keys(source.space_map ?? {}).length} space mapping(s)`,
+        segmented(`ingress-source-${name}`, [["off", "Off"], ["on", "On"]], source.enabled === false ? "off" : "on",
+          (v, _e, cx) => this.setSourceEnabled(name, v === "on", cx)))))
+      .children(clients.map(([name, client]) => this.row(t, `client · ${name}`,
+        `native Event client${client.space ? ` · ${client.space}` : ""}`,
+        segmented(`ingress-client-${name}`, [["off", "Off"], ["on", "On"]], client.enabled === false ? "off" : "on",
+          (v, _e, cx) => this.setClientEnabled(name, v === "on", cx)))));
   }
 
   close() { closeOverlay(props().overlay); }
@@ -100,6 +157,7 @@ export default class InboxSettings extends View {
           .child(div().px(28).py(22)
             .child(this.levelBar(t))
             .child(this.coordinator(t))
+            .child(this.ingress(t))
             .when(this.error, (el) => el.child(div().pt(16).text_size(TEXT.label).text_color(t.ansi1).child(this.error)))))
         .child(Scrollbar.vertical("collie-settings-body").absolute().inset_0()));
     return div().id("collie-settings-root").size_full().flex().items_center().justify_center()

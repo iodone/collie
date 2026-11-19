@@ -808,7 +808,7 @@ class _UnixHTTPConnection(http.client.HTTPConnection):
         self.sock.connect(str(self.socket_path))
 
 
-def _service_post(root: Path, route: str, payload: dict, state_dir: Path | None = None) -> dict:
+def _service_post(root: Path, route: str, payload: dict, state_dir: Path | None = None, headers: dict | None = None) -> dict:
     state = Path(state_dir).expanduser().resolve() if state_dir else target_path(root, STATE)
     socket_path = state / "service.sock"
     if not socket_path.exists():
@@ -816,7 +816,7 @@ def _service_post(root: Path, route: str, payload: dict, state_dir: Path | None 
     body = json.dumps(payload).encode("utf-8")
     try:
         connection = _UnixHTTPConnection(socket_path)
-        connection.request("POST", route, body=body, headers={"content-type": "application/json", "connection": "close"})
+        connection.request("POST", route, body=body, headers={"content-type": "application/json", "connection": "close", **(headers or {})})
         response = connection.getresponse()
         raw = response.read()
         status = response.status
@@ -1130,7 +1130,9 @@ def intake_event(args) -> int:
         raise InstallError(f"invalid event JSON: {exc}") from exc
     if args.space:
         event["space_candidates"] = [args.space]
-    result = _service_post(args.root, "/v1/ingress", event, args.state_dir)
+    token = args.token or (os.environ.get(args.token_env) if args.token_env else None)
+    result = _service_post(args.root, "/v1/ingress", event, args.state_dir,
+                           {"authorization": f"Bearer {token}"} if token else None)
     print(json.dumps(result, ensure_ascii=False))
     return 0
 
@@ -1200,6 +1202,8 @@ def parser() -> argparse.ArgumentParser:
     intake_event.add_argument("--state-dir", type=Path)
     intake_event.add_argument("--file", default="-", help="Event JSON file, or - for stdin")
     intake_event.add_argument("--space", help="set space_candidates to this space")
+    intake_event.add_argument("--token", help="native ingress bearer token")
+    intake_event.add_argument("--token-env", help="environment variable holding the ingress token")
     intake_event.set_defaults(function=intake_event)
 
     coordinator = sub.add_parser("coordinator")
