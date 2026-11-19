@@ -2,6 +2,8 @@
 
 > 公开命令面：`collie ticket` / `collie decision` / `collie task` / `collie roles`。  
 > `collie-task` 是内部 execution adapter，不是用户或 role prompt 的契约。
+>
+> **双循环。** 外循环判断，内循环交付；外部事件进 Ingress，人直接和 Coordinator 对话。两者共用同一个 Coordinator、Ledger、policy 和四态 Work。
 
 ---
 
@@ -25,6 +27,53 @@ Collie 不是一个“自动写代码的 agent”，而是一个**事件 → 判
 ```text
 结构消解问题，而不是在 prompt 里堆规则。
 Role 管职责，Playbook 管顺序，Task 管事实，Coordinator 管判断，人管裁决。
+```
+
+### 1.1 双循环
+
+Collie 的核心不是一条流水线，而是双循环：
+
+```mermaid
+flowchart TB
+  H["人<br/>chat：新建 / steering / 回答"] <--> C["Coordinator<br/>每 space 一个"]
+  E["外部事件<br/>GitLab / GitHub / cron / bot IM"] --> I["Ingress<br/>验签 · 去重 · 归并 · space"]
+  I --> C
+
+  subgraph OUTER["外循环 · 判断与注意力"]
+    C --> D["Decision<br/>spawn / ask / noop"]
+    D --> V["service<br/>schema · guard · dispatch"]
+    V --> W["Card / waiting"]
+    L[("Ledger<br/>Event · Decision · Receipt")]
+    C <--> L
+  end
+
+  subgraph INNER["内循环 · 执行与交付"]
+    V --> T["Task adapter<br/>worker / reviewer / verifier"]
+    V --> O["Delivery<br/>merge / comment / notify"]
+    T --> R["Receipt<br/>summary · details · proof · gates"]
+    O --> R
+    R --> C
+  end
+
+  W --> H
+  C -->|"Card / 状态投影"| H
+  T -. "Work 四态投影" .-> H
+  D -. "Ticket / Inbox 投影" .-> H
+```
+
+- **外循环**：Event 或人的消息进入 Coordinator；Coordinator 判断、选择 playbook、产生 Decision。  
+  这里只有判断和注意力，没有执行。
+- **内循环**：Decision 变成 Task；worker / reviewer / verifier 执行；Receipt / gates 回到 Coordinator。  
+  这里只有执行和事实，没有第二个判断者。
+- **人的循环**：Card 和状态投影回到人；人的回答再进入外循环。
+- 两个循环共用同一个 Ledger、同一份 policy、同一个 Coordinator role；不是两套系统。
+
+关键不是“消息经过几个阶段”，而是：
+
+```text
+外循环决定做什么；
+内循环交付做成了什么；
+人在中间保留裁决权。
 ```
 
 ---
@@ -200,10 +249,28 @@ sequenceDiagram
 
 人的消息不经过 Event 去重、归并和 hops。
 
-### 4.3 Work 生命周期
+### 4.3 状态机
 
-```text
-Todo → Working → Needs you → Working → Settled
+Decision 是唯一持久状态机：
+
+```mermaid
+stateDiagram-v2
+  open --> waiting: 需要人
+  waiting --> open: 人回答 / 授权
+  open --> settled: 完成 / 放弃 / 终结
+  waiting --> settled: 人直接结掉
+```
+
+Work 是 Decision + task facts 的投影，不是第二套持久状态机：
+
+```mermaid
+stateDiagram-v2
+  Todo --> Working: agent 启动
+  Working --> Needs you: 提问 / 待验收 / 阻塞
+  Needs you --> Working: 回答 / Rework
+  Working --> Settled: 完成 / 自动接受
+  Needs you --> Settled: Accept / Drop
+  Todo --> Settled: 取消
 ```
 
 | 状态 | 含义 |
