@@ -3,6 +3,29 @@
 **状态：** 当前设计  
 **核心：** Coordinator 判断，Driver 执行，Helper 承担局部 role，Task 记录事实。
 
+## 0. Autoloop
+
+Collie 沿用 Agent Autoloop 的循环模型：
+
+```text
+事件 / 人的消息 / task receipt
+              ↓
+          Coordinator
+              ↓
+           Decision
+              ↓
+            Task
+              ↓
+          Receipt
+              ↓
+        Card / 状态 / 下一轮
+```
+
+- 默认安静，只有需要人时才出 Card。
+- 执行者交局部事实，Coordinator 做全局判断。
+- 一轮可以结束，Work 可以继续。
+- 人保留不可逆动作和验收的裁决权。
+
 ---
 
 ## 1. 边界
@@ -14,7 +37,7 @@
 | Coordinator | 判断输入、选择 playbook、分发 task | 写代码、review、verify |
 | Driver | task 的执行所有者，读 playbook 并自行编排 | 跨 task 判断、人的裁决 |
 | Helper | 同一 task 下的局部 role terminal | 第二个 task、第二个 driver |
-| Playbook | 交给 driver 的工作编排 prompt | stage 状态机 |
+| Playbook | 交给 driver 的工作编排 prompt | driver 的本地执行说明 |
 | Role | 职责、禁项、输入输出 | 绑定某个 agent |
 | Task | 执行事实：状态、review、verify、receipt | 定义 workflow |
 | Human | 最终裁决 | 交付物 |
@@ -101,13 +124,13 @@ driver 不做：
 - 替人 accept
 - 把 task 变成另一个 Coordinator
 
-driver 是 task-local 角色，不是全局 dispatcher。
+driver 是 task-local 角色，负责当前 task 的执行。
 
 ---
 
 ## 4. Playbook
 
-Playbook 是 prompt，不是 stage schema。
+Playbook 是交给 driver 的编排 prompt。
 
 ```text
 Playbook
@@ -126,13 +149,6 @@ Playbook
 - 什么条件下 ready
 - 哪些动作需要人
 
-不包含：
-
-- stage 列表
-- seat 状态
-- gate 执行器
-- 自动推进游标
-
 Playbook 可以写：
 
 ```text
@@ -142,13 +158,13 @@ review 有 must-fix 就修；
 最后记录 ready。
 ```
 
-流程可变。不是所有 playbook 都包含 implement / review / verify。
+Playbook 按 task 需要选择 implement / review / verify 等步骤。
 
 ---
 
 ## 5. Role
 
-Role 定义职责、禁项、输入输出；不包含 playbook 流程。
+Role 定义职责、禁项、输入输出；playbook 负责编排这些 role 的使用方式。
 
 ```ts
 type Role = {
@@ -277,7 +293,7 @@ phase 是读时投影：
 - reviewer 活跃 → reviewing
 - verifier 活跃 → verifying
 
-phase 不持久化，不驱动下一步。
+phase 是读时投影；Work 的持久状态保持四态。
 
 ### 7.4 关键规则
 
@@ -361,7 +377,7 @@ built-in
 1. 一个 space 一个 Coordinator。
 2. 一个 task 一个 driver。
 3. helper 不是第二个 driver，也不是第二个 task。
-4. Playbook 不是运行时状态机。
+4. Playbook 是 driver 的编排 prompt。
 5. Work 四态；phase 只是投影。
 6. helper 完成不自动推进 Work。
 7. `ready` 不是 `done`；`ack` 不是 settled。

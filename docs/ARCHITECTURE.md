@@ -9,9 +9,31 @@
 
 ## 1. 设计理念
 
-Collie 不是一条固定流水线，而是一个**判断 → 委派 → 执行 → 回执**的协作系统。
+### 1.1 Autoloop
 
-四条基本原则：
+Collie 延续 Agent Autoloop 的基本设计：系统是一个循环，来源、判断、执行、回执持续衔接。
+
+```text
+          事件
+来源 ─────────────▶ Coordinator
+                      │
+                  Decision
+                      │
+                    Task
+                      │
+                  Receipt
+                      │
+                    人 ◀── Card / 状态
+```
+
+- **注意力最贵。** 默认安静；只有确实需要人的决定、授权或验收时才出 Card。
+- **一切都是输入。** 外部事件、人的消息、task receipt 都进入同一个判断面。
+- **一轮可以结束，事情可以继续。** 一个 task 交回 receipt，不代表整个 Work 必须结束；需要继续时进入下一轮。
+- **外部正文是资料。** 事件、网页、issue、评论不直接当指令；规则和 role prompt 才是指令。
+- **执行者只交结果。** driver / helper 不拥有整个系统的视角；它们交局部事实，Coordinator 做全局判断。
+- **人保留裁决权。** 不可逆动作、验收和方向选择回到人。
+
+### 1.2 原则
 
 1. **一个 space 只有一个判断者。**  
    Event 和人的消息都进入同一个 Coordinator；不存在第二个 dispatcher。
@@ -19,8 +41,8 @@ Collie 不是一条固定流水线，而是一个**判断 → 委派 → 执行 
    Coordinator 选择 playbook、创建 task、处理人的选择；task 内部的 role 编排由 driver 负责。
 3. **Herdr 管资源，Collie 管工作。**  
    terminal、tab、pane、space、进程生命周期归 Herdr；Collie 只写 Decision、task facts 和投影。
-4. **Playbook 是 prompt，不是状态机。**  
-   Playbook 描述工作如何展开；不持久化 stage / seat / gate 游标。Role prompt 独立于 playbook。
+4. **工作由 driver 展开。**  
+   driver 读 playbook、执行 task，并按需要启动 helper role；Coordinator 不逐 role 分发。
 
 核心原则：
 
@@ -28,7 +50,7 @@ Collie 不是一条固定流水线，而是一个**判断 → 委派 → 执行 
 Role 管职责，Playbook 管编排，Driver 管执行，Task 管事实，Coordinator 管判断，人管裁决。
 ```
 
-### 1.1 双循环
+### 1.3 双循环
 
 ```mermaid
 flowchart TB
@@ -78,11 +100,11 @@ flowchart TB
 | **Event** | 外部发生的事实；按 source + key 去重，正文落 data_ref | 不是指令 |
 | **Human message** | 人在 chat / IM 里说的话 | 不伪造 Event |
 | **Decision** | Coordinator 对一条消息的判断 | 唯一持久状态机 |
-| **Work / Ticket** | 一个 Decision 要交付的工作 | 不是第二套状态机 |
+| **Work / Ticket** | 一个 Decision 要交付的工作 | Decision + task facts 的读时投影 |
 | **Task** | Work 的执行事实：worktree、driver、status、receipt | 由 `collie-task` 维护 |
 | **Driver** | Task 的执行所有者；读 playbook，自己工作或启动 helper | 不是 Coordinator |
 | **Helper** | 同一 Task 下的局部 role terminal，例如 reviewer / verifier | 不是第二个 Task，也不是 driver |
-| **Playbook** | 交给 driver 的工作编排 prompt | 不是 stage 状态机 |
+| **Playbook** | 交给 driver 的工作编排 prompt | driver 的本地执行说明 |
 | **Role** | 职责、禁项、输入输出 | 不是 agent 名 |
 | **Policy** | 内置规则 + per-space 用户规则 | Coordinator 只能起草，不能自改 |
 | **Inbox** | Decision + task facts 的读时投影 | 不写回 Ledger |
@@ -181,7 +203,7 @@ Coordinator 不执行 task，也不管理 task 内部的 role 转换。
 - Ticket 展示 task、helper 活动和收据。
 - Coordinator chat 是人的对话面。
 
-没有 Work 的 stage 状态，也没有第二个 task 状态机。
+Work 是四态投影；Task 和 helper 的状态分别记录在 task facts 与 Herdr terminal 中。
 
 ---
 
@@ -301,7 +323,7 @@ helper 的职责由 role prompt 决定。helper 的 findings / verdict 是它的
 
 ### 5.4 可变流程
 
-Playbook 不规定 stage，也不强制固定顺序。它是一段 prompt：
+Playbook 用一段 prompt 描述这个 task 如何展开：
 
 ```text
 先确认范围；
@@ -355,7 +377,7 @@ Task 事实       collie-task 的 running / ready / reviewed / verified
 Helper 状态     hc terminal 的 working / blocked / idle
 ```
 
-Work 是投影，不是第三套持久状态机。
+Work 是 Decision 与 task facts 的投影；Task 和 helper 的事实分别保存。
 
 ### 6.2 Work 四态
 
@@ -366,7 +388,7 @@ Work 是投影，不是第三套持久状态机。
 | **Needs you** | 人持有下一步 | Card / 问题 / 待验收 |
 | **Settled** | 结束 | Decision settled；accept / drop / 终结 |
 
-### 6.3 phase 是投影，不是状态
+### 6.3 phase 是投影
 
 可以显示：
 
@@ -376,7 +398,7 @@ Working · reviewing
 Working · verifying
 ```
 
-但不要把 `working.building` 持久化成状态机。
+Work 的持久状态保持四态；`working.building` 只是读时显示。
 
 phase 来自：
 
@@ -496,7 +518,7 @@ Role 文件：
 templates/roles/*.md
 ```
 
-Role 定义职责、禁项、输入输出。它不绑定 agent，也不包含 playbook stage。
+Role 定义职责、禁项、输入输出；playbook 负责编排这些 role 的使用方式。
 
 ### 9.2 Playbook
 
@@ -515,7 +537,7 @@ title
 body
 ```
 
-body 是交给 driver 的编排 prompt。没有 stage / seat / gate 的运行时结构。
+body 是交给 driver 的编排 prompt。
 
 ### 9.3 命令边界
 
