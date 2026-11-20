@@ -1,16 +1,7 @@
 # Collie Collaboration Protocol
 
-**状态：** v1 设计，代码逐步落地（issue #39）
-
-Collie 的协作模型把“谁负责什么”和“按什么顺序工作”分开。
-
-```text
-Space / Project / Task / CoordinatorTurn / Role / Playbook / Gate / Inbox
-```
-
-一句话：
-
-> Role 管职责，Playbook 管顺序，Task 管执行，Coordinator 管判断，人管裁决。
+**状态：** 当前设计  
+**核心：** Coordinator 判断，Driver 执行，Helper 承担局部 role，Task 记录事实。
 
 ---
 
@@ -20,64 +11,144 @@ Space / Project / Task / CoordinatorTurn / Role / Playbook / Gate / Inbox
 |---|---|---|
 | Space | 协作域：Coordinator、policy、Inbox | git repo、worktree |
 | Project | 执行域：repo、folder、task store | 人的决策 |
-| Task | 一件被执行的工作 | 定义 workflow |
-| Coordinator | 判断、选择 playbook、分发 Ticket/Task | 写代码、review、verify、裁决 |
-| Role | 一类职责和禁项 | 绑定某个 agent |
-| Playbook | stage 序列、role 引用、gate | 运行时状态 |
-| Gate | 通过条件与结果 | 第二套 Inbox 状态 |
+| Coordinator | 判断输入、选择 playbook、分发 task | 写代码、review、verify |
+| Driver | task 的执行所有者，读 playbook 并自行编排 | 跨 task 判断、人的裁决 |
+| Helper | 同一 task 下的局部 role terminal | 第二个 task、第二个 driver |
+| Playbook | 交给 driver 的工作编排 prompt | stage 状态机 |
+| Role | 职责、禁项、输入输出 | 绑定某个 agent |
+| Task | 执行事实：状态、review、verify、receipt | 定义 workflow |
 | Human | 最终裁决 | 交付物 |
 
+接收 playbook 的 agent 是 **driver**；它本身也可以工作，也可以启动 helper role。
+
 ---
 
-## 2. CoordinatorTurn
+## 2. Coordinator
 
-Event 和 human message 是同一个 `CoordinatorTurn` / `Case` 的两个 origin，不是两套协议。
+Coordinator 是 space 内唯一判断者。
+
+输入：
+
+- Event
+- Human message
+- task-level receipt
+- policy / queue / recent / budget
+
+输出：
 
 ```text
-CoordinatorTurn
+Decision
 ├── origin: event | human
-├── stream: job_turn | chat_turn
-├── input_ref
-├── snapshot
-├── Decision
-└── reply?          # chat only
+├── playbook: { id, version }?
+├── project?
+├── why
+├── actions[]
+└── state: open | waiting | settled
 ```
 
-| Origin | 上下文 | 输出 |
-|---|---|---|
-| `event` | event data、queue、policy | Decision JSON；不进入 chat |
-| `human` | conversation、queue、policy | Decision + optional reply |
+常用 action：
 
-两者共享同一 role prompt、Ledger、policy、task fact。运行器可能把它们放在不同 session 里，但这不产生第二个 Coordinator role，也不产生单独的 helper turn/helper prompt。event 不可见对话；human 可直接回答 Card 或创建 ticket。
+- `spawn_task`
+- `ask`
+- `priority` / `hold`
+- `emit_command`
+- `propose_policy`
+- `noop`
 
-纯问答也产生 `noop/settled` Decision，保持 turn 可审计。显式人工表单（UI New/Build）是 `decided_by=human` 的直接 Decision，不属于 Coordinator 模型判断。
+Coordinator 负责：
 
-`Decision` 只追加，包含：
+- 识别输入意图
+- 继续已有 Ticket / Task
+- 选择 playbook
+- 处理人的 steering / Card / accept
+- 读 task receipt 决定继续、rework、settle
 
-- `origin`
-- `playbook: {id, version}`
-- `project`
-- `why`
-- `actions`
-- 状态与 Card
+Coordinator 不负责：
+
+- task 内部 role 顺序
+- 启动 reviewer / verifier
+- 执行实现、review、verify
+- 写 task facts
+
+Event 和 human message 共用同一 Decision 契约；入口只改变输入。
 
 ---
 
-## 2.1 Command boundary
+## 3. Driver
 
-Collie 保留两个 CLI 面，因为它们代表两个不同事实：
+每个 task 有一个 driver。
 
-|命令面|事实|谁能用|
-|---|---|---|
-|`collie ticket`|Decision / Ticket|人、Coordinator|
-|`collie decision`|Coordinator chat 提交 Decision|Coordinator chat|
-|`collie task`|公开的原子任务命令面|用户自定义 prompt、agent|
+driver 收到：
 
-`collie task add` 不是 Coordinator 的进件入口；它会绕过 Decision/playbook 选择。`collie-task` 是内部 adapter，不作为用户/prompt 契约。ticket/Decision 与 task 不合并成一个命令，否则边界会重新混在一起。
+- task brief
+- playbook prompt
+- role catalog
+- task 命令
 
-## 3. Role registry
+driver 可以做：
 
-Role 定义职责、禁项、输入、输出；不绑定具体 agent。
+- 自己完成工作
+- 启动 helper role
+- 等待 helper 的 findings / verdict
+- 修复并继续
+- 记录 review / verify
+- 提交 ready receipt
+
+driver 不做：
+
+- 修改 Ledger
+- 修改 policy
+- 替人 accept
+- 把 task 变成另一个 Coordinator
+
+driver 是 task-local 角色，不是全局 dispatcher。
+
+---
+
+## 4. Playbook
+
+Playbook 是 prompt，不是 stage schema。
+
+```text
+Playbook
+├── id
+├── version
+├── title
+└── body
+```
+
+`body` 交给 driver，描述这个 task 如何展开：
+
+- 先做什么
+- 何时启动 reviewer
+- 如何处理 findings
+- 何时启动 verifier
+- 什么条件下 ready
+- 哪些动作需要人
+
+不包含：
+
+- stage 列表
+- seat 状态
+- gate 执行器
+- 自动推进游标
+
+Playbook 可以写：
+
+```text
+实现并提交；需要时启动 reviewer；
+review 有 must-fix 就修；
+需要三验时启动 verifier；
+最后记录 ready。
+```
+
+流程可变。不是所有 playbook 都包含 implement / review / verify。
+
+---
+
+## 5. Role
+
+Role 定义职责、禁项、输入输出；不包含 playbook 流程。
 
 ```ts
 type Role = {
@@ -88,209 +159,215 @@ type Role = {
   prohibitions: string[];
   inputs?: string[];
   outputs?: string[];
-  // 可选的 I/O adapter 元数据；不是第二个 role，也不是运行时 prompt 分支。
 };
 ```
 
-内置：
+内置角色示例：
 
-- `coordinator`
-- `worker`
-- `reviewer`：只判断该不该这样写，不跑三验
-- `verifier`：只判断能不能用，不改代码
-- `planner`
-- `researcher`
+- `coordinator`：外循环判断
+- `driver`：task 所有者，负责局部编排
+- `reviewer`：只读审查
+- `verifier`：独立验证
+- `planner` / `researcher` / `watcher`：按需局部角色
 
-Runner 单独配置：
-
-```json
-{
-  "roles": {
-    "verifier": {
-      "agent": "pi",
-      "model": "default",
-      "effort": "high",
-      "perm": "read-only"
-    }
-  }
-}
-```
-
----
-
-## 4. Playbook registry
-
-Playbook 是 task 的工作配方：定义可用 stage、role 引用和 gate。它不复制 role 文本，也不是运行时状态机；实际执行由 task worker 在同一个 task 内串起来。
-
-```ts
-type Playbook = {
-  id: string;
-  title: string;
-  version: number;
-  when?: string[];
-  stages: Array<{
-    id: string;
-    role: string;
-    needs?: string[];
-    parallel_with?: string;
-    outputs?: string[];
-    gate?: string;
-  }>;
-  gates?: Array<{ id: string; predicate: string }>;
-  allowed_next?: string[];
-};
-```
-
-内置 playbook 直接对齐 DSX：
-
-| DSX playbook | Collie playbook | 主要阶段 |
-|---|---|---|
-| `dsx-playbook-feature` | `feature` | explore → design → implement → review ∥ verify → accept |
-| `dsx-playbook-bug-fix` | `bug-fix` | reproduce → fix → review ∥ verify → accept |
-| `dsx-playbook-review` | `review` | review → accept |
-| `dsx-playbook-investigation` | `investigation` | investigate → accept |
-| `dsx-playbook-refactoring` | `refactoring` | test-net → refactor → review ∥ verify → accept |
-| `dsx-playbook-prototype` | `prototype` | build → observe → decide |
-| `dsx-playbook-ratchet` | `ratchet` | tighten → fix → review → verify → accept |
-| `dsx-playbook-hillclimb` | `hillclimb` | measure → iterate → verify → decide |
-| `dsx-playbook-eval` | `eval` | frame → candidates → judge → decide |
-| `dsx-playbook-orchestrate` | `orchestrate` | frame → drain → verify → decide |
-
-DSX 的 `name` 可以作为别名使用；Collie id 是 canonical。
-
-角色映射：
-
-| DSX 职责位 | Collie role | 备注 |
-|---|---|---|
-| 协调位 | `coordinator` | 判断、选择 playbook、分发 |
-| 执行位 | `worker` | 实现与提交 |
-| review 位 | `reviewer` | 三轴审查，不跑 verify |
-| 验证位 | `verifier` | 三验、verdict、evidence |
-| 方案位 | `planner` | 设计与 pass predicate |
-| 守护位 | `watcher` | 基础设施/异常观察 |
-| 决策位 | 人 | 不是 agent role |
-
-
-示例：
+Role 和 Playbook 解耦：
 
 ```text
-feature:
-  implement(worker)
-  review(reviewer) ∥ verify(verifier)
-  accept(human)
-
-review:
-  review(reviewer)
-  accept(human)
+Playbook 决定何时用 role
+Role prompt 决定这个 role 怎么做
 ```
 
-Playbook 是模板，不是硬路由表，也不是自动执行器。Coordinator 在 allowlist 内选择；task worker 按 brief 执行内部 role 步骤；未注册的 playbook/role 直接失败。
+driver 从 catalog 取 role prompt，再把 prompt 交给 helper terminal。
 
 ---
 
-## 5. Task
+## 6. Task 与 helper
 
-Task 只持久化运行事实，不持久化 playbook 定义。
+### 6.1 启动
+
+Coordinator 的 Decision：
 
 ```json
 {
+  "state": "open",
   "playbook": { "id": "feature", "version": 1 },
-  "reviews": [{ "round": 1, "result": "report", "head": "abc1234" }],
-  "verifications": [{ "verdict": "pass", "head": "abc1234", "evidence": "artifact:..." }]
+  "actions": [{
+    "kind": "spawn_task",
+    "risk_tags": [],
+    "spawn": { "title": "...", "brief_ref": "...", "base": "current" }
+  }]
 }
 ```
 
-不存：
+service 创建 task，启动 driver。driver 读 brief 和 playbook body。
 
-- 运行时 stage 状态
-- seat 状态
-- gate 执行器
-- playbook 的自动推进游标
-- role prompt
+### 6.2 helper 连接
 
-这些由 registry 提供，Inbox 读时投影。
+driver 启动 helper：
+
+```text
+hc run --bg
+  --name <task>-review
+  --label herdr.task=<task>
+  --label herdr.role=reviewer
+  --label herdr.agent=<cli>
+  -- <reviewer prompt>
+```
+
+约束：
+
+- helper 是 driver 的 `hc` child
+- helper 共享 `herdr.task`
+- helper 用 `herdr.role` 标识局部角色
+- helper 不创建新 task
+- helper 不写 Work 状态
+
+### 6.3 交接
+
+driver 用：
+
+```text
+hc wait <helper>
+hc read <helper>
+hc kill <helper>
+```
+
+读取局部结果。
+
+driver 用 `collie task reviewed` / `collie task verified` 记录事实；最后 `collie task ready` 提交 receipt。
+
+helper 的 findings / verdict 不等于 Worker 状态，也不等于 Work 状态。
 
 ---
 
-## 6. Review 与 Verify
+## 7. 状态同步
 
-这是两个职责，不是一个 reviewer 的两种工作。
-
-| Seat | 问题 | 禁止 |
-|---|---|---|
-| reviewer | 该不该这样写 | 跑三验、改代码、裁决 |
-| verifier | 能不能用 | 改产品代码、听转述、裁决 |
-
-两者钉同一个 commit，可以并行。合并规则：
+### 7.1 三层事实
 
 ```text
-review pass + verify pass → human accept
-review blocking finding   → 回 worker
-verify fail / uncertain   → 阻塞，事实优先
+Work       Todo / Working / Needs you / Settled
+Task       running / ready / reviewed / verified
+Helper     working / blocked / idle
 ```
 
-`ready` 不再只要求 reviewed；它按 playbook 的 gate 要求。
+### 7.2 Work 投影
+
+| Work | 来源 |
+|---|---|
+| Todo | task 未 running；Decision open |
+| Working | driver 或 helper 活跃 |
+| Needs you | 问题、阻塞、待验收、approval |
+| Settled | Decision settled |
+
+Work 只由 Decision + task facts 投影，不写回 Ledger。
+
+### 7.3 phase
+
+可以显示：
+
+```text
+Working · building
+Working · reviewing
+Working · verifying
+```
+
+phase 是读时投影：
+
+- driver 工作 → building
+- reviewer 活跃 → reviewing
+- verifier 活跃 → verifying
+
+phase 不持久化，不驱动下一步。
+
+### 7.4 关键规则
+
+- helper 完成不会自动推进 Work。
+- `ready` 不等于 `done`。
+- `ack` 不等于 settled。
+- 只有 accept / drop / 终结让 Work 进入 Settled。
+- helper 提问且 driver 无法代答时，Work 才是 Needs you。
 
 ---
 
-## 7. Inbox
-
-Inbox 状态机不变：
+## 8. 回执循环
 
 ```text
-Todo → Working → Needs you → Settled
+Coordinator chooses playbook
+  → task
+  → driver
+  → helpers / local work
+  → task facts / receipt
+  → Coordinator
 ```
 
-映射：
-
-| Inbox | Decision | Task |
-|---|---|---|
-| Todo | open，未执行 | 未启动 |
-| Working | open | worker/reviewer/verifier 在跑 |
-| Needs you | waiting | 需要人回答、授权、验收 |
-| Settled | settled | 完成或明确不做 |
-
-review / verify 只是 task 内部步骤和详情展示；Work 仍是 Todo / Working / Needs you / Settled，不进入 stage 状态机。
+- helper 级结果回到 driver。
+- driver 级结果回到 Coordinator。
+- Coordinator 不需要每个 helper 的 turn。
+- 需要继续同一 Work 时，新 Decision 引用已有 Ticket / Task。
 
 ---
 
-## 8. 配置与加载
+## 9. 失败
 
-内置定义不是 TypeScript 常量，而是模板目录：
+- reviewer findings → driver 修复
+- verifier fail → driver 修复
+- helper 崩溃 / 超时 → driver 重试或升级
+- driver 无法处理 → task blocked / Card
+- Coordinator 读 task receipt，决定 continue / rework / ask / settle
+
+不可逆动作必须 approval Card。
+
+---
+
+## 10. 命令边界
+
+| 动作 | 命令 |
+|---|---|
+| 人明确建 Ticket | `collie ticket create` |
+| Coordinator 提交 Decision | `collie decision commit` |
+| 读 Ticket / Decision | `collie ticket show` |
+| 读 task facts | `collie task show/status` |
+| 执行 task 操作 | `collie task ...` |
+| 查看 registry | `collie roles list` |
+
+`collie-task` 是内部 task CLI，不是用户/prompt 契约。
+
+---
+
+## 11. 配置
+
+加载层级：
 
 ```text
-templates/roles/*.json       # 角色定义
-templates/playbooks/*.json   # playbook 定义
-```
-
-安装后它们落在 `~/.config/herdr-core/templates/roles` 和 `~/.config/herdr-core/templates/playbooks`；Service 的 registry 从这里加载，用户/项目配置再覆盖。
-
-加载层级（后者覆盖前者）：
-
-```text
-Collie built-in
+built-in
   → ~/.config/collie/roles, playbooks
   → <project>/.collie/roles, playbooks
   → <project>/.agents/skills/collie/roles, playbooks
-  → task/space explicit override
+  → task / space override
 ```
 
 规则：
 
-- 未知 role/playbook、非法 stage、未知 role 引用：fail closed。
-- repo 可以提供 role/playbook 内容，但不能自动提高 runner 权限。
-- event payload 不能选择 role/playbook。
-- Coordinator 或人可以选择；Task 锁定 playbook id/version/digest。
-- playbook 变更不静默改写运行中的 Task。
+- 后者覆盖前者
+- 未知 role / playbook fail closed
+- repo 不能自动提高 driver/helper 权限
+- Event payload 不能选择 role/playbook
+- Task 锁定 playbook id/version
 
 ---
 
-## 9. 迁移路径
+## 12. 不变量
 
-1. 先把三份静态模板注册为 role；保持现有行为。
-2. 新增 `verifier`，把 reviewer 的 checks 职责移出。
-3. 给 Decision/Task 加 `playbook`；内置 feature/review/bug-fix/investigation。
-4. 支持 review/verify 的 task 事实与 ready gate。
-5. 最后开放用户/repo 自定义 role/playbook 与 UI 编辑。
+1. 一个 space 一个 Coordinator。
+2. 一个 task 一个 driver。
+3. helper 不是第二个 driver，也不是第二个 task。
+4. Playbook 不是运行时状态机。
+5. Work 四态；phase 只是投影。
+6. helper 完成不自动推进 Work。
+7. `ready` 不是 `done`；`ack` 不是 settled。
+8. Coordinator 只看 task-level receipt。
+9. Task facts 是唯一执行事实源。
+10. 人保留最终裁决权。
 
-Inbox 的状态机在每一步都不变。
+---
+

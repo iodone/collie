@@ -1,41 +1,38 @@
 # Collie · 架构
 
 > 公开命令面：`collie ticket` / `collie decision` / `collie task` / `collie roles`。  
-> `collie-task` 是内部 execution adapter，不是用户或 role prompt 的契约。
+> `collie-task` 是内部 task CLI 和 task store，不是用户或 role prompt 的契约。
 >
-> **双循环。** 外循环判断，内循环交付；外部事件进 Ingress，人直接和 Coordinator 对话。两者共用同一个 Coordinator、Ledger、policy 和四态 Work。
+> **双循环。** 外循环判断，内循环交付；外部事件和人共用同一个 Coordinator。内循环由一个 task driver 负责，driver 可以在同一个 task 下启动 helper role。
 
 ---
 
 ## 1. 设计理念
 
-Collie 不是一个“自动写代码的 agent”，而是一个**事件 → 判断 → 工作 → 验收**的协作系统。
+Collie 不是一条固定流水线，而是一个**判断 → 委派 → 执行 → 回执**的协作系统。
 
-四条基本判断：
+四条基本原则：
 
 1. **一个 space 只有一个判断者。**  
-   外部事件和人的消息都进入同一个 Coordinator；不存在第二个 dispatcher。
-2. **判断与执行分离。**  
-   Coordinator 产出 Decision，不直接写代码、review、verify 或启动 task。
+   Event 和人的消息都进入同一个 Coordinator；不存在第二个 dispatcher。
+2. **Coordinator 不进入 task 内部。**  
+   Coordinator 选择 playbook、创建 task、处理人的选择；task 内部的 role 编排由 driver 负责。
 3. **Herdr 管资源，Collie 管工作。**  
-   terminal、tab、pane、space、进程生命周期是 Herdr core 的事实；Collie 只写 Decision、task facts 和 UI 投影。
-4. **定义可组合，运行有边界。**  
-   Role 和 Playbook 是可组合的定义；Task 只记录一次运行的实际选择与结果。
+   terminal、tab、pane、space、进程生命周期归 Herdr；Collie 只写 Decision、task facts 和投影。
+4. **Playbook 是 prompt，不是状态机。**  
+   Playbook 描述工作如何展开；不持久化 stage / seat / gate 游标。Role prompt 独立于 playbook。
 
 核心原则：
 
 ```text
-结构消解问题，而不是在 prompt 里堆规则。
-Role 管职责，Playbook 管配方，Task 管执行事实，Coordinator 管判断，人管裁决。
+Role 管职责，Playbook 管编排，Driver 管执行，Task 管事实，Coordinator 管判断，人管裁决。
 ```
 
 ### 1.1 双循环
 
-Collie 的核心不是一条流水线，而是双循环：
-
 ```mermaid
 flowchart TB
-  H["人<br/>chat：新建 / steering / 回答"] <--> C["Coordinator<br/>每 space 一个"]
+  H["人<br/>New / Build / steering / Card"] <--> C["Coordinator<br/>每 space 一个"]
   E["外部事件<br/>GitLab / GitHub / cron / bot IM"] --> I["Ingress<br/>验签 · 去重 · 归并 · space"]
   I --> C
 
@@ -47,33 +44,27 @@ flowchart TB
     C <--> L
   end
 
-  subgraph INNER["内循环 · 执行与交付"]
-    V --> T["Task adapter<br/>worker / reviewer / verifier"]
-    V --> O["Delivery<br/>merge / comment / notify"]
-    T --> R["Receipt<br/>summary · details · proof · gates"]
-    O --> R
+  subgraph INNER["内循环 · Task 执行"]
+    V --> T["Task<br/>driver + helper terminals"]
+    T --> R["Task receipt<br/>summary · details · proof"]
     R --> C
   end
 
   W --> H
   C -->|"Card / 状态投影"| H
-  T -. "Work 四态投影" .-> H
+  T -. "Work 投影" .-> H
   D -. "Ticket / Inbox 投影" .-> H
 ```
 
-- **外循环**：Event 或人的消息进入 Coordinator；Coordinator 判断、选择 playbook、产生 Decision。  
-  这里只有判断和注意力，没有执行。
-- **内循环**：Decision 变成 Task；worker / reviewer / verifier 执行；Receipt / gates 回到 Coordinator。  
-  这里只有执行和事实，没有第二个判断者。
+- **外循环**：输入进入 Coordinator；Coordinator 判断、选择 playbook、产生 Decision。
+- **内循环**：Decision 变成一个 Task；driver 执行，并按 playbook 启动 helper role；Task 交回 task-level receipt。
 - **人的循环**：Card 和状态投影回到人；人的回答再进入外循环。
-- 两个循环共用同一个 Ledger、同一份 policy、同一个 Coordinator role；不是两套系统。
-
-关键不是“消息经过几个阶段”，而是：
+- 两个循环共用同一个 Ledger、policy 和四态 Work。
 
 ```text
 外循环决定做什么；
-内循环交付做成了什么；
-人在中间保留裁决权。
+内循环决定怎么做；
+人保留裁决权。
 ```
 
 ---
@@ -86,13 +77,13 @@ flowchart TB
 | **Project** | 执行域：repo、folder、worktree、task store | 不决定谁来判断 |
 | **Event** | 外部发生的事实；按 source + key 去重，正文落 data_ref | 不是指令 |
 | **Human message** | 人在 chat / IM 里说的话 | 不伪造 Event |
-| **Decision** | Coordinator 对一条消息的判断：做什么、为什么 | 唯一持久状态机 |
+| **Decision** | Coordinator 对一条消息的判断 | 唯一持久状态机 |
 | **Work / Ticket** | 一个 Decision 要交付的工作 | 不是第二套状态机 |
-| **Task** | Work 的执行事实：worktree、agent、status、ready | 由 task adapter 维护 |
-| **Receipt** | task 的 summary / details / proof / risk | 验收依据，不是“最后一条消息” |
-| **Role** | 一类职责、禁项、输入输出 | 不是 agent 名 |
-| **Playbook** | task 的工作配方：需要哪些 role、review/verify 要求 | 不是运行时状态机 |
-| **Gate** | review / verify 等通过条件与结果 | 不新增 Inbox 状态 |
+| **Task** | Work 的执行事实：worktree、driver、status、receipt | 由 `collie-task` 维护 |
+| **Driver** | Task 的执行所有者；读 playbook，自己工作或启动 helper | 不是 Coordinator |
+| **Helper** | 同一 Task 下的局部 role terminal，例如 reviewer / verifier | 不是第二个 Task，也不是 driver |
+| **Playbook** | 交给 driver 的工作编排 prompt | 不是 stage 状态机 |
+| **Role** | 职责、禁项、输入输出 | 不是 agent 名 |
 | **Policy** | 内置规则 + per-space 用户规则 | Coordinator 只能起草，不能自改 |
 | **Inbox** | Decision + task facts 的读时投影 | 不写回 Ledger |
 | **Ledger** | 只追加的事实日志 | 唯一持久记忆 |
@@ -104,9 +95,10 @@ Space
   └── Project
         └── Work / Ticket
               ├── Decision
-              ├── Playbook
               ├── Task
-              └── Receipt / Gates
+              │     ├── Driver
+              │     └── Helper roles
+              └── Receipt
 ```
 
 ---
@@ -120,21 +112,17 @@ flowchart TB
     H["Human messages"]
   end
 
-  subgraph COORD["判断层"]
-    I["Ingress<br/>验签 · 去重 · 归并"]
-    C["Coordinator<br/>判断 · 选 playbook"]
-  end
-
-  subgraph DISPATCH["决策分发层"]
+  subgraph COORD["外循环 · Coordinator"]
+    I["Ingress"]
+    C["Coordinator"]
     D["Decision"]
-    V["service<br/>schema · guard · dispatch"]
-    R["Role / Playbook registry"]
   end
 
-  subgraph EXEC["执行层"]
-    T["Task adapter<br/>collie task"]
-    A["worker / reviewer / verifier"]
-    P["Receipt / gates"]
+  subgraph EXEC["内循环 · Task"]
+    S["service<br/>dispatch · guard"]
+    T["Task driver"]
+    R["Helper role terminals"]
+    F["task facts / receipt"]
   end
 
   subgraph VIEW["投影层"]
@@ -145,23 +133,25 @@ flowchart TB
 
   E --> I --> C
   H --> C
-  R --> C
-  C --> D --> V
-  V --> T --> A --> P
-  P --> V
-  V --> IN
-  V --> TI
-  V --> CH
+  C --> D --> S
+  S --> T
+  T --> R
+  R --> T
+  T --> F
+  F --> S
+  S --> IN
+  S --> TI
+  S --> CH
 ```
 
 ### 3.1 输入层
 
-- **Event**：GitLab / GitHub / cron / bot IM；Ingress 负责验签、归一、去重、归并、space/project 解析。
-- **Human message**：UI / IM 的对话；不经过 Event 的 dedupe/merge/hops。
+- **Event**：GitLab / GitHub / cron / bot IM；Ingress 负责验签、归一、去重、归并、space 解析。
+- **Human message**：UI / IM 对话；不经过 Event 的 dedupe / merge / hops。
 
-输入层不判断业务，只把消息交给 Coordinator。
+输入层只把消息交给 Coordinator，不判断业务。
 
-### 3.2 判断层
+### 3.2 外循环：Coordinator
 
 Coordinator 读：
 
@@ -169,175 +159,336 @@ Coordinator 读：
 - queue / running / recent / policy / budget
 - role / playbook catalog
 
-输出：
+Coordinator 输出：
 
 - Decision
-- 人的消息可以额外带 reply
+- 可选的自然语言 reply
 
-Coordinator 不直接执行 task，也不直接写 Ledger。
+Coordinator 不执行 task，也不管理 task 内部的 role 转换。
 
-### 3.3 决策分发层
+### 3.3 内循环：Task driver
 
-service 负责：
+- service 根据 Decision 创建 task。
+- task 有一个 driver。
+- driver 拿到 task brief、playbook prompt、role catalog。
+- driver 可以自己执行，也可以启动 helper role。
+- helper 是 driver 的 `hc` child，共享同一个 task label。
+- driver 收 helper 的结果，记录 task facts，最后交 task-level receipt。
 
-1. Decision schema 校验
-2. guard / risk / hops / budget
-3. playbook / project / folder 解析
-4. Task 创建或外部 delivery
-5. Ticket / Inbox 投影
+### 3.4 投影层
 
-### 3.4 执行层
+- Inbox 只读 Decision + task facts。
+- Ticket 展示 task、helper 活动和收据。
+- Coordinator chat 是人的对话面。
 
-- task adapter：`collie-task` 内部实现；公开命令是 `collie task`
-- worker / reviewer / verifier：由 playbook 定义和 Task 记录
-- ready / reviewed / verified：写 task facts 和 receipt
-
-### 3.5 投影层
-
-- Inbox 只读 Decision + task facts
-- Ticket 展示 Work / Task / Receipt
-- Coordinator chat 是人的对话面
-
-没有第二套 Work 状态机。
+没有 Work 的 stage 状态，也没有第二个 task 状态机。
 
 ---
 
-## 4. 交互流程
+## 4. 外循环
 
-### 4.1 Event
+### 4.1 输入
 
-```mermaid
-sequenceDiagram
-  participant S as Source
-  participant I as Ingress
-  participant C as Coordinator
-  participant V as service
-  participant T as Task adapter
-  participant U as Human
+| 输入 | 入口 | 处理 |
+|---|---|---|
+| **Event** | GitLab / GitHub / cron / bot IM → Ingress | 验签、归一、`source + key` 去重、归并、space/project 解析 |
+| **Human message** | UI / IM chat | 直接进入 Coordinator；不经过 Event dedupe/merge/hops |
 
-  S->>I: webhook
-  I->>I: verify · normalize · dedupe · merge · space
-  I->>C: event message + snapshot + catalog
-  C->>V: Decision
-  V->>V: validate / guard
-  alt spawn_task
-    V->>T: create / start task
-    T-->>V: task facts
-    V->>U: Ticket / Inbox projection
-  else ask
-    V->>U: Card (Needs you)
-  else noop / settled
-    V->>V: close
-  end
-```
+Event 正文只通过 `data_ref` 读取；人的消息不需要伪造 Event。
 
-### 4.2 Human message
+### 4.2 输出
 
-```mermaid
-sequenceDiagram
-  participant U as Human
-  participant C as Coordinator
-  participant V as service
-  participant T as Task adapter
-
-  U->>C: ask / build / steering / answer
-  C->>V: Decision + optional reply
-  V->>V: validate / guard
-  V->>T: dispatch when needed
-  V-->>U: reply / Ticket / Card
-```
-
-人的消息不经过 Event 去重、归并和 hops。
-
-### 4.3 状态机
-
-Decision 是唯一持久状态机：
-
-```mermaid
-stateDiagram-v2
-  open --> waiting: 需要人
-  waiting --> open: 人回答 / 授权
-  open --> settled: 完成 / 放弃 / 终结
-  waiting --> settled: 人直接结掉
-```
-
-Work 是 Decision + task facts 的投影，不是第二套持久状态机：
-
-```mermaid
-stateDiagram-v2
-  Todo --> Working: agent 启动
-  Working --> Needs you: 提问 / 待验收 / 阻塞
-  Needs you --> Working: 回答 / Rework
-  Working --> Settled: 完成 / 自动接受
-  Needs you --> Settled: Accept / Drop
-  Todo --> Settled: 取消
-```
-
-| 状态 | 含义 |
-|---|---|
-| Todo | 没有 agent 在跑：待派发、排队、依赖、定时 |
-| Working | agent 在跑；build / review / verify 是 task 内部步骤 |
-| Needs you | 人持有：Card |
-| Settled | 结束，带 outcome |
-
-`review` / `verify` / `merge` 不是 Work 状态；它们是 task worker 按 brief 执行的内部步骤。Coordinator 只读 task-level 事实。
-
-### 4.4 Review 与 Verify
-
-由 task 内部执行：
-
-```text
-worker   → 实现并串起本地流程
-reviewer → 判断该不该这样写
-verifier → 判断能不能用
-```
-
-review / verify 可以并行，钉同一个 commit。review 不跑三验，verify 不改代码。task worker 负责按 brief 启动和收集这些局部结果；Coordinator 只读最终 task receipt / 异常。
-
-### 4.5 Decision 投递失败
+Decision 是唯一正式机器输出：
 
 ```text
 Decision
-  → schema / guard
-  ├── ok → dispatch
-  ├── transport error → retry same turn_id
-  ├── correctable error → Coordinator 修正后重新提交
-  └── terminal error → Card / human
+├── origin: event | human
+├── playbook: { id, version }?
+├── project?
+├── why
+├── actions[]
+└── state: open | waiting | settled
 ```
 
-- 同 `turn_id` 幂等，不重复创建 Task。
-- 修正最多 3 轮。
-- 同一错误重复、预算耗尽或无法修正时出 Card。
-- error 是系统数据，不是外部指令。
+常用 action：
+
+- `spawn_task`：创建一个 task
+- `ask`：向人出 Card
+- `priority` / `hold`：调整已有 task
+- `emit_command`：请求对外动作
+- `propose_policy`：起草 policy
+- `noop`：不行动
+
+一条 Decision 只创建一个 `spawn_task`。需要多个 task 时，产生多个 Decision。
+
+### 4.3 Coordinator 的边界
+
+Coordinator 负责：
+
+- 判断消息要求什么
+- 继续已有 Ticket / Task
+- 选择 playbook
+- 处理人的 steering、Card 和验收结果
+- 读 task-level receipt，决定继续、rework 或 settle
+
+Coordinator 不负责：
+
+- 启动 reviewer / verifier
+- 管理 task 内部 role 顺序
+- 实现、review、verify
+- 写 task facts
 
 ---
 
-## 5. 重要细节流程实施
+## 5. 内循环
 
-### 5.1 Schema 边界
-
-需要 schema：
-
-- `Event`：外部输入
-- `Decision`：唯一正式机器输出
-- `Task` / `Receipt`：执行事实
-- `DeliveryResult`：Decision 提交结果
-
-不需要 schema：
-
-- normalize
-- Coordinator 内存上下文
-- snapshot / catalog 的内部结构
-
-`Case` 可以保留为内部审计记录，但不是新的公共协议。
-
-### 5.2 Role registry
-
-Role 是职责定义，不是 agent 名：
+### 5.1 启动
 
 ```text
-coordinator / worker / reviewer / verifier / planner / researcher / watcher
+Coordinator
+  └── Decision(spawn_task, playbook)
+        └── service
+              └── Task
+                    └── driver
 ```
+
+driver 的输入：
+
+- task brief：目标、范围、验收条件、项目路径
+- playbook prompt：这个 task 如何展开
+- role catalog：可用的 helper role 及其 prompt
+- task 命令：状态、review、verify、ready
+
+### 5.2 driver 的职责
+
+driver 是 task 的执行所有者。它可以：
+
+- 自己完成工作
+- 启动一个或多个 helper role
+- 等待 helper 结果
+- 根据结果修复或继续
+- 记录 review / verify facts
+- 提交 ready receipt
+
+driver 不负责：
+
+- 写 Ledger
+- 改 policy
+- 替人验收
+- 把 task 变成另一个 Coordinator
+
+### 5.3 helper role
+
+helper 和 driver 在同一个 task 下：
+
+```text
+driver terminal
+  └── hc run --label herdr.task=T
+        --label herdr.role=reviewer
+        --label herdr.agent=...
+        -- <reviewer prompt>
+```
+
+连接靠三件事：
+
+```text
+parent       → 谁是它的 owner
+herdr.task   → 它属于哪个 task
+herdr.role   → 它承担什么局部 role
+```
+
+helper 的职责由 role prompt 决定。helper 的 findings / verdict 是它的局部输出，不回写 Work 状态。
+
+### 5.4 可变流程
+
+Playbook 不规定 stage，也不强制固定顺序。它是一段 prompt：
+
+```text
+先确认范围；
+实现并提交；
+需要时启动 reviewer，读 findings，修 must-fix；
+需要时启动 verifier，记录 verdict；
+最后 ready。
+```
+
+所以：
+
+- 可以是 implement → review → verify
+- 可以只有 review
+- 可以只有 investigate
+- 可以没有 review，也没有 verify
+- 顺序和并行由 playbook prompt 决定
+
+driver 执行的是 **task-local 编排**，Coordinator 不逐 role 驱动。
+
+### 5.5 回执
+
+task 结束时，driver 只交 task-level receipt：
+
+- `ready`
+- summary
+- details
+- proof
+- review / verify facts
+
+receipt 回到 service，再由 service 投影成 Work / Ticket；需要判断时回到 Coordinator。
+
+```text
+driver / helpers
+      ↓
+task facts / receipt
+      ↓
+Coordinator（task-level）
+```
+
+不是每个 helper 都产生 Coordinator turn。
+
+---
+
+## 6. 状态同步
+
+### 6.1 三份事实，不要混用
+
+```text
+Work 状态       Todo / Working / Needs you / Settled
+Task 事实       collie-task 的 running / ready / reviewed / verified
+Helper 状态     hc terminal 的 working / blocked / idle
+```
+
+Work 是投影，不是第三套持久状态机。
+
+### 6.2 Work 四态
+
+| Work | 含义 | 来源 |
+|---|---|---|
+| **Todo** | 没有 driver 在跑：待启动、排队、依赖、定时 | task 未 running；Decision open |
+| **Working** | driver 或 helper 在跑 | task running；有活跃 terminal |
+| **Needs you** | 人持有下一步 | Card / 问题 / 待验收 |
+| **Settled** | 结束 | Decision settled；accept / drop / 终结 |
+
+### 6.3 phase 是投影，不是状态
+
+可以显示：
+
+```text
+Working · building
+Working · reviewing
+Working · verifying
+```
+
+但不要把 `working.building` 持久化成状态机。
+
+phase 来自：
+
+- driver 当前工作
+- 活跃 helper 的 `herdr.role`
+- helper 是否在等待
+
+推荐规则：
+
+```text
+driver 在工作，没有 helper        → building
+reviewer 活跃                     → reviewing
+verifier 活跃                     → verifying
+helper 提问，driver 无法代答       → Needs you
+driver 等待 helper                 → Working（phase 仍是对应 role）
+```
+
+helper 完成不会自动推进 Work；它只把结果交给 driver。
+
+### 6.4 什么时候变成 Needs you
+
+- helper 或 driver 向人提问
+- driver 被阻塞，需要人的决定
+- task ready，等待 accept / rework
+- 不可逆动作需要 approval
+
+不是“某个 role 完成了”就变成 Needs you。
+
+### 6.5 什么时候 Settled
+
+只有 Decision 进入 settled 才是 Work Settled：
+
+- 人 accept
+- 人 drop
+- Coordinator 明确终结
+- 已完成的自动接受
+
+`ready` 只是交付，不是 done。
+
+---
+
+## 7. Herdr 集成
+
+Collie 不拥有 terminal / tab / pane / space：
+
+| 能力 | 归属 |
+|---|---|
+| space / tab / pane / terminal | Herdr core |
+| 进程启动 / 保活 | `hc run --bg --keep` |
+| 身份 / 归属 | Herdr labels |
+| screen / wait / get | `hc read` / `hc wait` / `hc get` |
+| Decision / policy / Inbox | Collie |
+| task store / scheduler / ready | `collie-task` |
+
+关键 label：
+
+```text
+herdr.role=coordinator
+herdr.role=reviewer
+herdr.role=verifier
+herdr.role=helper
+herdr.task=<task>
+herdr.task.space=<space>
+herdr.coordinator=<tab>
+herdr.chat=<pane>
+herdr.chat.slot=<slot>
+```
+
+- `herdr.task` 标识 task 归属。
+- `herdr.role` 标识局部角色。
+- `parent` 标识 helper 的 owner。
+- `herdr.space` 是 Herdr pane 的 space；task 使用 `herdr.task.space`。
+
+---
+
+## 8. 失败与恢复
+
+### 8.1 helper 失败
+
+driver 负责发现和处理：
+
+- reviewer findings → driver 修复
+- verifier fail → driver 修复
+- helper 崩溃 / 超时 → driver 重试或升级为 task blocked
+
+如果 driver 无法处理，交 task-level blocked / Card；Coordinator 不需要知道每个 helper 细节。
+
+### 8.2 task 失败
+
+task 状态和 receipt 记录失败原因。Coordinator 读 receipt / facts 后决定：
+
+- continue same Work
+- rework
+- ask human
+- settle failed
+
+### 8.3 人的验收
+
+`ready` 之后：
+
+- 自动接受 → Settled
+- 需要人 → Needs you + accept Card
+- rework → 回到 Working
+- drop → Settled
+
+`ack` 不是 settled。
+
+---
+
+## 9. 配置与命令边界
+
+### 9.1 Role
 
 Role 文件：
 
@@ -345,37 +496,9 @@ Role 文件：
 templates/roles/*.md
 ```
 
-格式：
+Role 定义职责、禁项、输入输出。它不绑定 agent，也不包含 playbook stage。
 
-```md
----
-kind: role
-id: reviewer
-version: 1
-title: Reviewer
-purpose: 判断改动该不该这样写
-duties: [...]
-prohibitions: [...]
----
-# Reviewer
-...
-```
-
-Runner 配置独立：
-
-```json
-{
-  "roles": {
-    "verifier": { "agent": "pi", "effort": "high", "perm": "read-only" }
-  }
-}
-```
-
-Role 可由用户、项目 `.collie`、`.agents/skills/collie` 覆盖；未知 role fail closed。
-
-### 5.3 Playbook registry
-
-Playbook 是 task 的工作配方。frontmatter 描述需要哪些 role 和 gate；它不是运行时状态机，也不会由程序按 stage 自动推进 Work。
+### 9.2 Playbook
 
 Playbook 文件：
 
@@ -383,48 +506,18 @@ Playbook 文件：
 templates/playbooks/*.md
 ```
 
-frontmatter 示例：
-
-```yaml
-kind: playbook
-id: feature
-version: 1
-stages:
-  - id: implement
-    role: worker
-  - id: review
-    role: reviewer
-    needs: [commit]
-    parallel_with: verify
-  - id: verify
-    role: verifier
-    needs: [commit]
-  - id: accept
-    role: human
-```
-
-正文是流程说明，不是机器契约；frontmatter 是唯一流程定义。
-
-DSX 名称可作别名：
+Playbook 只有：
 
 ```text
-dsx-playbook-feature
-dsx-playbook-review
-...
+id
+version
+title
+body
 ```
 
-### 5.4 Coordinator
+body 是交给 driver 的编排 prompt。没有 stage / seat / gate 的运行时结构。
 
-Coordinator 是一个 role，可能由两个运行时 session 加载同一份 prompt：
-
-- 人可见 session
-- 常驻 ingress session
-
-两者不是两个 role，不是两个协议，也不存在独立的 helper prompt。
-
-Coordinator 只输出 Decision；不直接 spawn、不写 task 状态、不做 review/verify。
-
-### 5.5 命令边界
+### 9.3 命令边界
 
 | 动作 | 命令 |
 |---|---|
@@ -435,116 +528,27 @@ Coordinator 只输出 Decision；不直接 spawn、不写 task 状态、不做 r
 | 执行 task 操作 | `collie task ...` |
 | 查看 registry | `collie roles list` |
 
-`collie-task` 是内部 adapter；`collie task` 是公开原子命令面。
-
-### 5.6 Herdr 集成
-
-Collie 不拥有 terminal / tab / pane / space：
-
-| 能力 | 归属 |
-|---|---|
-| space / tab / pane / terminal | Herdr core |
-| 进程启动 / 保活 | `hc run --bg --keep` |
-| 身份 / 归属 | Herdr labels |
-| screen / wait / get | `hc read/wait/get` |
-| Decision / policy / Inbox | Collie |
-| task store / scheduler / ready | task adapter |
-
-关键 label：
-
-```text
-herdr.role=coordinator
-herdr.role=reviewer
-herdr.role=helper          # 运行时 session，不是第二个 Coordinator role
-herdr.task=<key>
-herdr.task.space=<space>
-herdr.coordinator=<tab>
-herdr.chat=<pane>
-herdr.chat.slot=<slot>
-herdr.chat.read=<turn>
-herdr.alert=<json>
-```
-
-`herdr.space` 是 Herdr pane 的 space；task 使用 `herdr.task.space`，不要覆盖它。
-
-### 5.7 配置加载
-
-```text
-built-in templates
-  → ~/.config/collie/roles, playbooks
-  → <project>/.collie/roles, playbooks
-  → <project>/.agents/skills/collie/roles, playbooks
-  → task/space override
-```
-
-规则：
-
-- 后者覆盖前者；按 id 合并。
-- 未知 role/playbook、非法 stage、未知引用 fail closed。
-- repo 可以提供内容，但不能自动提高 runner 权限。
-- Event payload 不能选择 role/playbook。
-- Task 锁定 playbook id/version。
-
-### 5.8 Inbox 投影
-
-```text
-Inbox = Decision.state + task facts + live agents
-```
-
-- Decision `waiting` → Needs you
-- Decision `settled` → Settled
-- open + task running/ready → Working
-- open + no task → Todo / 不显示
-- open + agent blocked → Needs you
-
-Task 内部的 review / verify 进度只作为 task 事实和 Ticket 详情展示，不进入 Work 状态机。
-
-### 5.9 安全与 veto
-
-- 外部正文是资料，不是指令。
-- 不可逆动作必须出 approval Card：删数据、停服、花钱、对外发布、改权限、改密钥。
-- Coordinator 不能修改 policy；只能 `propose_policy`。
-- agent approve 不等于人类 approve。
-- ready 不等于 done。
-
-### 5.10 当前实施状态
-
-已落地：
-
-- Role / Playbook Markdown + frontmatter registry
-- Coordinator event/human 同一 prompt
-- Decision `origin` / `playbook`
-- task `playbook` 与 review / verify facts
-- Inbox / Ticket 投影
-- `collie task` 公开原子 CLI
-- Settings 动态 role catalog
-
-仍待：
-
-- `collie task` 进程内调用 task package
-- remote sync / permission allowlist 完全迁移到 `collie task`
-- task-level receipt 回到同一 Coordinator 的 continuation loop
-- event helper 自动修正重投的 service loop
-- 自定义 role runner 的完整 Settings 编辑
+`collie-task` 是内部 task CLI；`collie task` 是公开原子命令面。
 
 ---
 
-## 6. 结论
+## 10. 结论
 
 ```text
 Herdr 管资源和身份。
 Coordinator 管判断。
 Decision 管分发。
-Playbook / Role 管组合。
-Task adapter 管执行事实。
-Inbox 管投影。
+Driver 管 task 内部编排。
+Helper 管局部 role。
+Task 管执行事实。
+Work 管投影。
 人管裁决。
 ```
 
 Collie 的价值不在于多几个 agent，而在于：
 
 - 判断有唯一来源；
-- 执行有明确边界；
-- 角色和流程可组合；
-- 事实可追溯；
-- 人始终保留最终裁决权。
+- task 内部编排可变；
+- role 与 playbook 解耦；
+- 状态不重复；
+- 人保留最终裁决权。
