@@ -105,6 +105,15 @@ def cmd_add(args):
         # The person's setting wins: worktrees off for this repo means in the folder, --worktree or not.
         mode = "here" if args.here or not worktrees_on(s) else "worktree"
         t = s.new(args.title.strip(), prompt, mode)
+        if getattr(args, "plan", None):
+            try:
+                plan = json.loads(args.plan)
+            except ValueError as exc:
+                raise Fail(f"plan is not JSON: {exc}") from exc
+            t["playbook"] = plan.get("playbook") or t.get("playbook")
+            t["stage"] = plan.get("stage") or t.get("stage")
+            t["seats"] = plan.get("seats") or []
+            t["gate_results"] = plan.get("gate_results") or []
         set_opts(t, args)
         space = bare(args.space) if args.space else caller_space()
         set_base(s, t, args.base, space, new=True)
@@ -205,6 +214,26 @@ def set_notes(t, args):
             t[f"{which}_notes"] = v.strip()
         elif v is not None:
             t.pop(f"{which}_notes", None)
+
+
+def cmd_plan(args):
+    """Attach the selected playbook/stage and current seat facts to a task. The playbook definition
+    stays in Collie; this is only the runtime selection snapshot."""
+    try:
+        plan = json.loads(args.plan)
+    except ValueError as exc:
+        raise Fail(f"plan is not JSON: {exc}") from exc
+    if not isinstance(plan, dict):
+        raise Fail("plan must be a JSON object")
+    with open_store(args) as s:
+        t = s.find(args.id)
+        t["playbook"] = plan.get("playbook") or t.get("playbook")
+        t["stage"] = plan.get("stage") or t.get("stage")
+        t["seats"] = plan.get("seats") or []
+        t["gate_results"] = plan.get("gate_results") or []
+        s.dirty = True
+        v = view(s, t)
+    say(args, v, f"{s.ref(t)}: plan {json.dumps({'stage': t.get('stage'), 'seats': len(t.get('seats') or []), 'gates': len(t.get('gate_results') or [])}, ensure_ascii=False)}")
 
 
 def cmd_show(args):
@@ -355,6 +384,8 @@ def cmd_ready(args):
             t["head"] = git(wt, "rev-parse", "HEAD")[1]
             own_work(s, t)
         refused = review_refusal(s, t, wt)
+        if not refused:
+            refused = verification_refusal(s, t, wt)
         if refused:
             # Kept (the task's line says why it waits); refused after the store is saved.
             s.dirty = True
@@ -453,6 +484,57 @@ def review_refusal(s, t, wt):
     return (f"Review is on and {what} isn't reviewed. Have it reviewed as your brief says, fix what must be fixed, record the "
             f"round with `{ht} reviewed {ref} --folder {folder} --report \"<findings, a line>\"` (on the commit you'd say "
             f"ready at), then run ready again. {rounds - rounds_used(t)} of {rounds} rounds left.")
+
+
+def verification_refusal(s, t, wt=None):
+    """Why ready is refused for verification, or None. Verification is on for playbooks with a
+    verifier seat; the final commit needs a recorded pass, not a review report."""
+    on = (t.get("set") or {}).get("verify") == "on" if "verify" in (t.get("set") or {}) else t.get("verify") is True
+    if not on:
+        return None
+    head = t.get("head")
+    if not head and wt and os.path.isdir(wt):
+        ok, out, _ = git(wt, "rev-parse", "HEAD")
+        head = out if ok else None
+    checks = [v for v in t.get("verifications") or [] if v.get("head") == head]
+    latest = checks[-1] if checks else None
+    if latest and latest.get("verdict") == "pass":
+        return None
+    if latest:
+        return (f"Verification is on and the final commit is {latest.get('verdict')}. Fix it, verify again, "
+                f"then run `{own_path()} verified {s.ref(t)} --folder {shlex.quote(s.loc['folder'])} "
+                f"--verdict pass --evidence \"<evidence>\"`, then run ready again.")
+    return (f"Verification is on and this commit has no verifier verdict. Have an independent verifier run the gates, "
+            f"record it with `{own_path()} verified {s.ref(t)} --folder {shlex.quote(s.loc['folder'])} "
+            f"--verdict pass --evidence \"<evidence>\"`, then run ready again.")
+
+
+def cmd_verified(args):
+    with open_store(args) as s:
+        t = s.find(args.id)
+        if t["state"] not in ("running", "ready"):
+            raise Fail(f"{s.ref(t)} isn't being worked on ({t['state']}); nothing to verify.")
+        wt = t.get("worktree") if t.get("mode") == "worktree" else None
+        head = t.get("head")
+        if wt and os.path.isdir(wt):
+            ok, out, _ = git(wt, "rev-parse", "HEAD")
+            if ok:
+                head = out
+        if not head:
+            raise Fail("There is no commit to verify yet.")
+        evidence = " ".join(str(args.evidence or "").split()).strip()
+        report = str(args.report or "").strip()
+        if not evidence:
+            raise Fail("verified needs --evidence: the command/output, screenshot path or check that supports the verdict.")
+        if args.verdict not in ("pass", "fail", "uncertain"):
+            raise Fail("verdict is pass, fail or uncertain.")
+        t.setdefault("verifications", []).append({
+            "verdict": args.verdict, "evidence": evidence, "report": report,
+            "at": now(), "head": head, "by": os.environ.get("HC_TERMINAL_ID"),
+        })
+        s.dirty = True
+        v = view(s, t)
+    say(args, v, f"{s.ref(t)}: verification {args.verdict}.")
 
 
 def cmd_reviewed(args):

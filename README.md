@@ -3,7 +3,7 @@
 **herdr 的双循环插件：事件进，判断，行动出。**
 
 ```
-外部事件 → Ingress → coordinator → collie-task → coordinator →（collie-task | 发外部命令）
+外部事件 → Ingress → coordinator → collie task → coordinator →（collie task | 发外部命令）
 人的对话 ─────────────→ coordinator（新建 / steering / 回答）
 ```
 
@@ -20,7 +20,7 @@ Work 只有四个一级状态，它们是 `Decision + Task + Receipt` 的投影�
 | **Working** | 有 agent 在跑；`kind = build / review / merge` |
 | **Settled** | Decision 带 `settled { at, by, outcome }` |
 
-`Queued`、`Scheduled`、`Merging` 是 collie-task 的执行细节，写在 Todo / Working 行的第二行，不单独占一级状态。`failed` 不是 Settled；`ack` 也不等于 settled。
+`Queued`、`Scheduled`、`Merging` 是 collie task 的执行细节，写在 Todo / Working 行的第二行，不单独占一级状态。`failed` 不是 Settled；`ack` 也不等于 settled。
 
 ### 投影映射
 
@@ -33,7 +33,7 @@ Work 只有四个一级状态，它们是 `Decision + Task + Receipt` 的投影�
 | `open` | task `queued` / `scheduled` / `todo` | **Todo** |
 | `open` | task `running` / `ready` / `merging` / `done`，或 task_ref 暂不可读 | **Working** |
 
-Ticket 必须有 Decision。只有 `collie-task`、没有 Decision 的孤儿 task 不进 Inbox；用 `collie ticket adopt` 补链，不重复 spawn。
+Ticket 必须有 Decision。只有 `collie task`、没有 Decision 的孤儿 task 不进 Inbox；用 `collie ticket adopt` 补链，不重复 spawn。
 
 ## 为什么
 
@@ -68,7 +68,7 @@ flowchart TB
     CO <--> L
   end
   subgraph INNER["内循环 · 执行与交付"]
-    T["collie-task<br/>worktree + worker + reviewer"]
+    T["collie task<br/>worktree + worker + reviewer"]
     R["Receipt<br/>summary / details / proof"]
     T --> R
   end
@@ -91,6 +91,6 @@ flowchart TB
 
 ## 依赖
 
-herdr-app（含 herdr-core）、bun、git、至少一个已登录的 CLI agent。执行层与 artifacts 都由 collie vendored 源码提供（`collie-task` / `collie-artifact`），不再需要 shepherdr 的 `tasks` / `chat` / `artifacts` add-on。
+herdr-app（含 herdr-core）、bun、git、至少一个已登录的 CLI agent。执行层与 artifacts 都由 collie vendored 源码提供（`collie task` / `collie-artifact`），不再需要 shepherdr 的 `tasks` / `chat` / `artifacts` add-on。
 
 Event / Ingress 的机制参照 [agent-autoloop](https://github.com/KKKKhazix/agent-autoloop)：来源自己连进来、`source + key` 去重、同对象归并、hops 熔断。

@@ -89,6 +89,8 @@ export async function spawnHerdrTask(
     "--set", "review=on", "--set", "proof=on",
     "--set", `merge=${spawn.merge ? "on its own" : "ask me first"}`,
   ];
+  if (rule.to.playbook) args.push("--set", `playbook=${rule.to.playbook.id}@${rule.to.playbook.version}`);
+  if (rule.to.verify) args.push("--set", "verify=on");
   if (spawn.base === "branch") args.push("--base", text(spawn.branch, "spawn.branch"));
   else if (spawn.base === "main") args.push("--base", "main");
   if (rule.agent?.cli) args.push("--agent", rule.agent.cli);
@@ -106,6 +108,7 @@ export async function waitForHerdrReceipt(
   task: SpawnedTask,
   decision: Json,
   options: HerdrAgentOptions = {},
+  verify = false,
 ): Promise<Json> {
   const run = options.run ?? defaultRunner;
   const now = options.now ?? (() => new Date());
@@ -145,6 +148,9 @@ export async function waitForHerdrReceipt(
     const tags = decision.risk?.tags ?? [];
     const spawn = decision.actions.find((action: Json) => action.kind === "spawn_task").spawn;
     const autoAccept = tags.length === 0 && spawn.merge === true;
+    const verifications = Array.isArray(view.verifications) ? view.verifications : [];
+    const lastVerification = verifications.at(-1);
+    if (verify && lastVerification?.verdict !== "pass") throw new Error("task reached ready without a passing verifier verdict");
 
     return {
       id: receiptId(),
@@ -173,6 +179,14 @@ export async function waitForHerdrReceipt(
         reviewer_ref: text(review.ref ?? review.reviewer ?? review.by ?? review.head ?? review.commit, "reviewer ref"),
         must_fix: 0,
       },
+      ...(lastVerification ? {
+        verification: {
+          verdict: lastVerification.verdict,
+          evidence: lastVerification.evidence,
+          head: lastVerification.head ?? null,
+          by: lastVerification.by ?? null,
+        },
+      } : {}),
       risk: { tags, level: tags.length ? "high" : "low", auto_accept: autoAccept },
     };
   }
@@ -186,5 +200,5 @@ export async function runHerdrTask(
 ): Promise<Json> {
   const task = await spawnHerdrTask(decision, rule, options);
   await options.onSpawn?.(task);
-  return waitForHerdrReceipt(task, decision, options);
+  return waitForHerdrReceipt(task, decision, options, rule.to?.verify === true);
 }

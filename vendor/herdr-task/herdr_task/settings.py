@@ -16,13 +16,13 @@ AGENTS = {"claude": ["claude"], "codex": ["codex", "--no-daemon"]}
 # ---- the person's settings ------------------------------------------------------------------
 
 SETTINGS = os.environ.get("COLLIE_TASK_SETTINGS") or os.environ.get("HERDR_TASK_SETTINGS") or os.path.join(HOME, ".config", "collie", "settings.json")
-# The role instructions are herdr-core templates (`hc templates` lists them): collie-coordinator.md, collie-worker.md and
-# collie-reviewer.md. Workers and reviewers used ~/.herdr/instructions.
+# The role instructions are herdr-core templates (`hc templates` lists them): roles/coordinator.md, roles/worker.md and
+# roles/reviewer.md. Workers and reviewers used ~/.herdr/instructions.
 TEMPLATES = os.environ.get("COLLIE_TASK_TEMPLATES") or os.environ.get("HERDR_TASK_TEMPLATES") or os.path.join(HOME, ".config", "herdr-core", "templates")
 OLD_INSTRUCTIONS = os.path.join(HOME, ".herdr", "instructions")
 ASSISTANT_TEMPLATES = ("assistant", "coordinator", "collie-coordinator")  # "coordinator": Assistants started before the rename
 DEFAULTS = {"tasks": {"merge": "ask", "review_rounds": 0, "must_fix": "major", "max_running": MAX_RUNNING, "worktrees": True,
-                      "start_notes": "", "finish_notes": "", "archive_after": 7, "proof": True, "base": "", "branch": ""},
+                      "start_notes": "", "finish_notes": "", "archive_after": 7, "proof": True, "verify": False, "base": "", "branch": ""},
             "automations": {"enabled": True}, "worker": {}, "reviewer": {}, "coordinator": {}, "backup": {},
             "agents": {"reactions": True, "feedback": True, "feedback_repo": "iodone/collie"}}
 LEVELS = ["blocker", "major", "minor"]
@@ -255,7 +255,7 @@ SET_KEYS = {"review": "review", "brief.review": "review", "merge": "merge", "bri
             "mustfix": "must_fix", "must-fix": "must_fix", "must_fix": "must_fix", "review.mustfix": "must_fix",
             "agent": "agent", "task.agent": "agent", "model": "model", "task.model": "model", "effort": "effort", "task.effort": "effort",
             "reviewer": "reviewer", "reviewer.agent": "reviewer", "reviewer.model": "reviewer_model", "reviewer.effort": "reviewer_effort",
-            "proof": "proof", "brief.proof": "proof"}
+            "proof": "proof", "brief.proof": "proof", "playbook": "playbook", "verify": "verify"}
 # The Proof line (as Shepherdr's skill asks of its task agents), on and off.
 PROOF_WORDS = {"on": "show verifiable proof in one recipe artifact: each proof with a one-line caption, real and from this work now, "
                      "plus a \"Not proven\" list; then say ready with --proof <its id>",
@@ -283,7 +283,7 @@ def set_task(t, key, value):
             t.pop("set", None)
         return
     low = v.lower()
-    if field in ("review", "proof"):
+    if field in ("review", "proof", "verify"):
         if low not in ONOFF:
             raise Fail(f"{field} is on or off.")
         sets[field] = ONOFF[low]
@@ -395,6 +395,9 @@ def task_settings(s, t, space=None, argv=None):
     proof = sets["proof"] == "on" if "proof" in sets else k.get("proof") is not False
     add("Proof", PROOF_WORDS["on" if proof else "off"], proof,
         "task" if "proof" in sets else by_layer(s, space, "tasks", "proof", proof, True))
+    verify = sets["verify"] == "on" if "verify" in sets else k.get("verify") is True
+    add("Verify", "on" if verify else "off", verify,
+        "task" if "verify" in sets else by_layer(s, space, "tasks", "verify", verify, False))
     model, effort = argv_model(argv)
     text = agent + (f", model {model}" if model else "") + (f", effort {effort}" if effort else "")
     a_by = "task" if any(t.get(f) for f in ("agent", "model", "effort")) else \

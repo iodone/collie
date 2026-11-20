@@ -166,6 +166,7 @@ function jobPrompt(options: HelperJobOptions, jobPath: string, outputPath: strin
     `Role: ${options.rolePromptRef}`,
     "Read the job, follow the role prompt and the job snapshot/policy, and write one Decision JSON to the output path.",
     "Every action needs kind and risk_tags ([] when none). spawn_task needs spawn{title,brief_ref,base,review,merge,access,tells}; ask needs ask{kind,question,options}; waiting needs a card.",
+    "Include playbook{id,version} when the Decision selects one; at most one spawn_task per Decision.",
     "For spawn_task set brief_ref to /pending/brief; the service renders the trusted brief.",
     "Do not write the Ledger or policy and do not spawn anything yourself. Reply DONE.",
   ].join("\n");
@@ -263,11 +264,13 @@ export function validateProposal(value: unknown, options: { space: string; at: s
 
   const run: Json = { claimed_until: null, unknown_policy: "normal", task_ref: null, coordinator_ref: null };
   if (proposal.run && typeof proposal.run === "object" && proposal.run.kind) run.kind = proposal.run.kind;
+  const playbook = proposal.playbook ?? null;
   const waiting = proposal.state === "waiting";
   const candidate = {
     id: "dc_00000000", key: "helper:validate", space: options.space,
     space_candidates: [options.space], event_ref: null, case_ref: null,
     state: proposal.state, why: proposal.why, decided_by: "coordinator", decided_at: options.at,
+    playbook,
     occurrence: { object_key: "none:helper", kind: "none", round: 1, hops: 0 },
     actions: proposal.actions,
     risk: { tags: [], forced_waiting: false },
@@ -291,6 +294,7 @@ export function validateProposal(value: unknown, options: { space: string; at: s
     state: proposal.state,
     why: proposal.why,
     actions: proposal.actions,
+    ...(playbook ? { playbook } : {}),
     ...(run.kind ? { run: { kind: run.kind } } : {}),
     ...(proposal.priority ? { priority: proposal.priority } : {}),
     ...(proposal.hold ? { hold: proposal.hold } : {}),

@@ -103,7 +103,7 @@ class InstallTest(unittest.TestCase):
         self.assertGreater(len(manifest["files"]), 5)
         for relative, expected in manifest["files"].items():
             self.assertEqual(sha256(self.root / relative), expected)
-        for role in ("collie-coordinator.md", "collie-worker.md", "collie-reviewer.md"):
+        for role in ("roles/coordinator.md", "roles/worker.md", "roles/reviewer.md", "roles/verifier.md"):
             self.assertTrue((self.root / ".config/herdr-core/templates" / role).is_file())
         self.assertFalse((self.root / ".config/herdr-core/templates/assistant.md").exists())
         self.assertFalse((self.root / ".config/herdr-core/templates/dev").exists())
@@ -239,7 +239,7 @@ class InstallTest(unittest.TestCase):
     def test_uninstall_removes_clean_files_and_preserves_modified(self):
         self.install()
         layout = self.root / ".config/herdr-app/layouts/collie.json"
-        template = self.root / ".config/herdr-core/templates/collie-coordinator.md"
+        template = self.root / ".config/herdr-core/templates/roles/coordinator.md"
         template.write_text("local notes\n")
         self.run_cli("uninstall", "--root", self.root, "--dry-run")
         self.assertTrue(layout.exists())
@@ -247,7 +247,7 @@ class InstallTest(unittest.TestCase):
         self.assertFalse(layout.exists())
         self.assertEqual(template.read_text(), "local notes\n")
         manifest = json.loads((self.root / ".config/herdr-app/installed.collie.json").read_text())
-        self.assertIn(".config/herdr-core/templates/collie-coordinator.md", manifest["files"])
+        self.assertIn(".config/herdr-core/templates/roles/coordinator.md", manifest["files"])
         self.assertTrue((self.root / ".local/state/collie").exists())
 
     def test_install_replaces_old_shep_chat_hooks(self):

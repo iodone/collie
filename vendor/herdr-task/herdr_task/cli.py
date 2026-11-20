@@ -13,7 +13,7 @@ from .agents import LINE_MAX, SUMMARY_MAX
 from .launch import cmd_allow, name_tabs
 from .commands import (
     cmd_accept, cmd_add, cmd_alert, cmd_config, cmd_edit, cmd_fix, cmd_list, cmd_merge, cmd_ready,
-    cmd_resume, cmd_review, cmd_review_more, cmd_reviewed, cmd_rm, cmd_show, cmd_start, cmd_state, cmd_status,
+    cmd_resume, cmd_review, cmd_review_more, cmd_reviewed, cmd_verified, cmd_plan, cmd_rm, cmd_show, cmd_start, cmd_state, cmd_status,
     cmd_switch, cmd_unarchive, cmd_where,
 )
 from .tick import cmd_tick
@@ -172,9 +172,12 @@ def main():
     c.add_argument("--after", help="start only once these tasks are done: 3,5; another folder's by its id (WEB-2), another "
                                    "machine's with the machine first (vm-b:HAT-12)")
     c.add_argument("--space", help="the space it's for, whose settings it takes (default: yours)")
+    c.add_argument("--plan", help=argparse.SUPPRESS)
     when_opts(c)
     c = cmd("show", cmd_show, "one task")
     c.add_argument("--evidence", action="store_true", help="with what its Accept card shows: commits, changed files, checks and its proof")
+    c = cmd("plan", cmd_plan, "record the selected playbook/stage/seat facts for a task")
+    c.add_argument("--plan", required=True, help="JSON {playbook, stage, seats, gate_results}")
     c = cmd("start", cmd_start, "start a task's agent (no tab: an hc child of the space's coordinator)")
     agent_opts(c)
     c.add_argument("--space")
@@ -197,6 +200,10 @@ def main():
     c = cmd("reviewed", cmd_reviewed, "a task's agent records one review round of its current commit (Review: on): ready then "
                                       "accepts that commit; uses one of its Review rounds")
     c.add_argument("--report", help="the round's findings in a line (levels, what was fixed)")
+    c = cmd("verified", cmd_verified, "a verifier records the final commit's verdict (Verify: on): ready then requires a pass")
+    c.add_argument("--verdict", required=True, choices=("pass", "fail", "uncertain"))
+    c.add_argument("--evidence", required=True, help="the command/output, screenshot path or check supporting the verdict")
+    c.add_argument("--report", help="optional short report")
     cmd("review-more", cmd_review_more, "the Assistant gives a task one more review round, once all are used (never its own agent)")
     c = cmd("status", cmd_status, "a task's agent says what it's doing now, at the start and each natural step: status 4 \"Fixing the two failing tests\" --done 40 --left 5m")
     c.add_argument("text", help=f"what it is doing, at most {LINE_MAX} characters (longer is cut at a word)")

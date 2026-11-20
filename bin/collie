@@ -832,6 +832,46 @@ def _service_post(root: Path, route: str, payload: dict, state_dir: Path | None 
     return data
 
 
+def _service_get(root: Path, route: str, state_dir: Path | None = None) -> dict:
+    state = Path(state_dir).expanduser().resolve() if state_dir else target_path(root, STATE)
+    socket_path = state / "service.sock"
+    if not socket_path.exists():
+        raise InstallError(f"collie service is not running (no socket at {socket_path})")
+    try:
+        connection = _UnixHTTPConnection(socket_path)
+        connection.request("GET", route, headers={"connection": "close"})
+        response = connection.getresponse()
+        raw = response.read()
+        status = response.status
+        connection.close()
+    except OSError as exc:
+        raise InstallError(f"can't reach collie service: {exc}") from exc
+    try:
+        data = json.loads(raw.decode("utf-8") or "{}")
+    except ValueError as exc:
+        raise InstallError("collie service returned invalid JSON") from exc
+    if status != 200:
+        raise InstallError(str(data.get("error") or f"collie service returned {status}"))
+    return data
+
+
+def task_command(args) -> int:
+    """Public atomic task surface; the vendored collie-task remains the internal adapter."""
+    helper = target_path(args.root, APP / "bin" / "collie-task")
+    if not helper.is_file():
+        found = shutil.which("collie-task")
+        helper = Path(found) if found else helper
+    if not helper.is_file():
+        raise InstallError("collie-task is not installed")
+    command = [str(helper), *args.rest] if args.rest else [str(helper), "--help"]
+    return subprocess.run(command).returncode
+
+
+def roles_list(args) -> int:
+    print(json.dumps(_service_get(args.root, "/v1/collaboration", args.state_dir), ensure_ascii=False))
+    return 0
+
+
 def ticket_create(args) -> int:
     space, title, source = args.space, args.title, args.brief
     if source == "-":
@@ -841,7 +881,22 @@ def ticket_create(args) -> int:
     payload = {"space": space, "title": title, "brief": brief, "kind": args.kind}
     if args.project:
         payload["project"] = args.project
+    if args.playbook:
+        payload["playbook"] = args.playbook
     result = _service_post(args.root, "/ticket", payload, args.state_dir)
+    print(json.dumps(result, ensure_ascii=False))
+    return 0
+
+
+def decision_commit(args) -> int:
+    raw = sys.stdin.read() if args.file == "-" else Path(args.file).read_text(encoding="utf-8")
+    try:
+        decision = json.loads(raw)
+    except ValueError as exc:
+        raise InstallError(f"invalid decision JSON: {exc}") from exc
+    result = _service_post(args.root, "/decision", {
+        "space": args.space, "project": args.project, "decision": decision, "turn_id": args.turn_id,
+    }, args.state_dir)
     print(json.dumps(result, ensure_ascii=False))
     return 0
 
@@ -883,7 +938,8 @@ def ticket_show(args) -> int:
         raise InstallError(f"no decision for {args.decision or args.ticket}")
     print(json.dumps({
         "decision_id": decision.get("id"), "state": decision.get("state"), "space": decision.get("space"),
-        "ticket_ref": decision.get("run", {}).get("task_ref"), "project": decision.get("project"), "kind": decision.get("run", {}).get("kind", "build"),
+        "ticket_ref": decision.get("run", {}).get("task_ref"), "project": decision.get("project"),
+        "playbook": (decision.get("playbook") or {}).get("id"), "kind": decision.get("run", {}).get("kind", "build"),
         "why": decision.get("why"),
     }, ensure_ascii=False))
     return 0
@@ -1063,7 +1119,7 @@ def coordinator_restart(args) -> int:
         if role == "coordinator":
             new_labels += ["--label", "herdr.role=coordinator"]
 
-    tpl = home / ".config" / "herdr-core" / "templates" / "collie-coordinator.md"
+    tpl = home / ".config" / "herdr-core" / "templates" / "roles" / "coordinator.md"
     parsed = _template(tpl) or ("", "")
     own_command, body = parsed
     body = body.strip()
@@ -1101,7 +1157,7 @@ def coordinator_restart(args) -> int:
             else:
                 msg = body + "\n\n" + handoff
         one = f"herdr-handoff-{os.getpid()}"
-        template = home / ".config" / "herdr-core" / "templates" / f"{one}.md"
+        template = home / ".config" / "herdr-core" / "templates" / "roles" / f"{one}.md"
         template.write_text(
             f"---\nname: {one}\ndescription: A one-off Herdr handoff, removed after use.\n"
             f"command: {CLEAN_ENV} exec {line}\n---\n{msg}\n", encoding="utf-8")
@@ -1173,6 +1229,17 @@ def parser() -> argparse.ArgumentParser:
         command.add_argument("--root", type=Path, default=Path.home())
         command.add_argument("--dry-run", action="store_true")
         command.set_defaults(function=function)
+    task = sub.add_parser("task", help="atomic task execution commands (status, ready, review, verify, show)")
+    task.add_argument("rest", nargs=argparse.REMAINDER)
+    task.set_defaults(function=task_command)
+
+    roles = sub.add_parser("roles")
+    roles_sub = roles.add_subparsers(dest="roles_command", required=True)
+    roles_list_command = roles_sub.add_parser("list")
+    roles_list_command.add_argument("--root", type=Path, default=Path.home())
+    roles_list_command.add_argument("--state-dir", type=Path)
+    roles_list_command.set_defaults(function=roles_list)
+
     ticket = sub.add_parser("ticket")
     ticket_sub = ticket.add_subparsers(dest="ticket_command", required=True)
     create = ticket_sub.add_parser("create")
@@ -1180,6 +1247,7 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("--state-dir", type=Path)
     create.add_argument("--space", required=True)
     create.add_argument("--project", help="project folder under the space's projects directory")
+    create.add_argument("--playbook", help="playbook id from the role/playbook registry")
     create.add_argument("--title", required=True)
     create.add_argument("--brief", required=True)
     create.add_argument("--kind", choices=("build", "review"), default="build")
@@ -1209,6 +1277,17 @@ def parser() -> argparse.ArgumentParser:
     intake_event_command.add_argument("--token", help="native ingress bearer token")
     intake_event_command.add_argument("--token-env", help="environment variable holding the ingress token")
     intake_event_command.set_defaults(function=intake_event)
+
+    decision = sub.add_parser("decision")
+    decision_sub = decision.add_subparsers(dest="decision_command", required=True)
+    commit = decision_sub.add_parser("commit")
+    commit.add_argument("--root", type=Path, default=Path.home())
+    commit.add_argument("--state-dir", type=Path)
+    commit.add_argument("--space", required=True)
+    commit.add_argument("--project")
+    commit.add_argument("--file", default="-")
+    commit.add_argument("--turn-id")
+    commit.set_defaults(function=decision_commit)
 
     coordinator = sub.add_parser("coordinator")
     coordinator_sub = coordinator.add_subparsers(dest="coordinator_command", required=True)

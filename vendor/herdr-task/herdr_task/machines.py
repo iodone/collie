@@ -34,7 +34,7 @@ from .news import news_send, send_or_hold, typing
 # current is skipped, an older copy never replaces a newer one, and a template someone changed
 # there is kept (--force replaces it). Nothing else there is touched.
 
-ROLES = ("collie-coordinator", "collie-worker", "collie-reviewer")
+ROLES = ("coordinator", "worker", "reviewer", "verifier")
 ARTIFACT_HOME = ".local/share/collie/artifacts"
 STAMP = ".herdr/tools.json"
 MACHINES = os.path.join(STORE, ".machines.json")
@@ -99,7 +99,7 @@ def manifest():
     if browser:
         add(".local/bin/herdr-browser", _read(browser), 0o755, [browser])
     for role in ROLES:
-        rel = f".config/herdr-core/templates/{role}.md"
+        rel = f".config/herdr-core/templates/roles/{role}.md"
         p = os.path.join(HOME, rel)
         if os.path.isfile(p):
             add(rel, _read(p), 0o644, [p], protect=True)

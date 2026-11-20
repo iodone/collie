@@ -62,7 +62,7 @@
     "recent_decisions": 1
   },
   "instruction": {
-    "role_prompt_ref": "/home/user/.config/herdr-core/templates/collie-coordinator.md",
+    "role_prompt_ref": "/home/user/.config/herdr-core/templates/roles/coordinator.md",
     "output_contract": "urn:collie:decision:v1"
   }
 }

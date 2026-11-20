@@ -33,6 +33,7 @@ function fakeAgent() {
       id: 42, key: "HAT-42", state: "ready", started: 1_763_664_030_000, ready_at: 1_763_666_480_000,
       evidence: { summary: "ticket 完成", details: "- 已复核", commits: { list: [["abc1234", "ticket"]] }, proof: { id: "proof-1", title: "tests passed" } },
       reviews: [{ result: "report", by: "t99", head: "abc1234" }],
+      verifications: [{ verdict: "pass", evidence: "fake checks passed", head: "abc1234" }],
     };
   } };
 }
@@ -89,6 +90,8 @@ describe("collie ticket create", () => {
       decision.id === response.body.decision_id && decision.actions.some((action: Json) => action.kind === "spawn_task"),
     );
     expect(created.state).toBe("open");
+    expect(created.origin).toBe("human");
+    expect(created.playbook).toEqual({ id: "review", version: 1 });
     expect(created.run.kind).toBe("review");
     expect(created.actions).toHaveLength(1);
     expect(created.actions[0].spawn).toMatchObject({
@@ -231,6 +234,7 @@ describe("project-aware ticket", () => {
     const add = calls.find((call) => call[0] === "add")!;
     expect(add).toContain("--folder");
     expect(add[add.indexOf("--folder") + 1]).toBe(project);
+    expect(add).toContain("playbook=review@1");
     const created = service.ledger.history("decision").filter((item) => item.id === response.body.decision_id).at(-1);
     expect(created.project).toBe("collie");
     expect(created.run.task_ref).toBe("COLLIE-7");
@@ -249,5 +253,63 @@ describe("project-aware ticket", () => {
     });
     expect(response.status).toBe(400);
     expect(agent.calls).toEqual([]);
+  });
+});
+
+describe("coordinator chat decision commit", () => {
+  test("commits the same Decision contract as the event helper", async () => {
+    const dir = scratch();
+    const service = new CollieService({
+      stateDir: dir, ruleset,
+      workspaces: { collie: { folder: "/repo/collie" } },
+    });
+    const socket = await serve(service, dir);
+    const response = await post(socket, "/decision", {
+      space: "collie",
+      decision: {
+        state: "settled", why: "human chat needs no work", actions: [],
+        settled: { at: new Date().toISOString(), by: "coordinator", outcome: "dropped" },
+        run: { kind: "build" },
+      },
+    });
+    expect(response.status).toBe(200);
+    const decision = service.ledger.history("decision").at(-1)!;
+    expect(decision).toMatchObject({
+      origin: "human", decided_by: "coordinator", playbook: { id: "feature", version: 1 },
+    });
+    expect(response.body).toMatchObject({ origin: "human", state: "settled" });
+  });
+});
+
+describe("decision delivery errors", () => {
+  test("returns a structured correctable error and keeps a retry idempotent", async () => {
+    const dir = scratch();
+    const service = new CollieService({
+      stateDir: dir, ruleset,
+      workspaces: { collie: { folder: "/repo/collie" } },
+    });
+    const socket = await serve(service, dir);
+    const base = {
+      state: "settled", why: "noop", actions: [],
+      settled: { at: new Date().toISOString(), by: "coordinator", outcome: "dropped" },
+      run: { kind: "build" },
+    };
+    const bad = await post(socket, "/decision", {
+      space: "collie", turn_id: "turn-retry-1",
+      decision: { ...base, playbook: { id: "missing", version: 1 } },
+    });
+    expect(bad.status).toBe(400);
+    expect(bad.body).toMatchObject({
+      ok: false,
+      error: { code: "unknown_playbook", field: "playbook.id", retryable: false, max_attempts: 3 },
+    });
+
+    const payload = { space: "collie", turn_id: "turn-retry-1", decision: base };
+    const first = await post(socket, "/decision", payload);
+    const second = await post(socket, "/decision", payload);
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(second.body.id).toBe(first.body.id);
+    expect(service.ledger.decisions.filter((item) => item.id === first.body.id)).toHaveLength(1);
   });
 });

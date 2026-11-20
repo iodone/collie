@@ -1,6 +1,6 @@
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, Scrollbar, InputState, Input } from "gpui-base";
-import { closeOverlay, home, props, readTextFile, spaces, theme, writeTextFile } from "herdr";
+import { appHome, closeOverlay, exec, home, props, readTextFile, spaces, theme, writeTextFile } from "herdr";
 import { coordinatorPath, mergeCoordinator, mergeRole, mergeTaskSetting, taskSettingsPath } from "./lib/inbox-settings.js";
 import { TEXT, RADIUS, H, button, segmented } from "./lib/ui.js";
 
@@ -18,6 +18,8 @@ export default class InboxSettings extends View {
     this.ingressRaw = null;
     this.taskCfg = {};
     this.taskRaw = null;
+    this.roles = [];
+    this.playbooks = [];
     this.savedAt = 0;
     this.model = InputState.new({ placeholder: "CLI default" });
     this.workerModel = InputState.new({ placeholder: "CLI default" });
@@ -49,6 +51,18 @@ export default class InboxSettings extends View {
     try { this.taskCfg = JSON.parse(this.taskRaw ?? "{}"); } catch { this.taskCfg = {}; }
     this.workerModel.set_value(this.taskCfg.worker?.model ?? "");
     this.reviewerModel.set_value(this.taskCfg.reviewer?.model ?? "");
+    try {
+      const result = await exec(`${appHome()}/bin/collie`, ["roles", "list", "--json"]);
+      const catalog = JSON.parse(result.stdout || "{}");
+      this.roles = Array.isArray(catalog.roles) ? catalog.roles : [];
+      this.playbooks = Array.isArray(catalog.playbooks) ? catalog.playbooks : [];
+    } catch {
+      this.roles = [
+        { id: "coordinator", title: "Coordinator", purpose: "判断、选择 playbook、分发 Ticket/Task" },
+        { id: "worker", title: "Worker", purpose: "实现与提交" },
+        { id: "reviewer", title: "Reviewer", purpose: "设计审查" },
+      ];
+    }
   }
 
   saved() { return this.savedAt ? div().text_size(TEXT.label).text_color(theme().dim).child("Saved") : null; }
@@ -302,7 +316,7 @@ export default class InboxSettings extends View {
     return v_flex()
       .child(this.heading(t, "Helper", "The persistent ingress session is not a separate role."))
       .child(this.row(t, "Agent", "The Helper uses the Coordinator role's agent and template; it is always kept alive.", div()))
-      .child(this.row(t, "Prompt", "Role template: collie-coordinator.md; helper jobs add the Decision contract.",
+      .child(this.row(t, "Prompt", "Role template: roles/coordinator.md; helper jobs add the Decision contract.",
         div().text_size(TEXT.label).text_color(t.dim).child("Read-only")));
   }
 
@@ -343,6 +357,18 @@ export default class InboxSettings extends View {
         .child(button("ingress-add-source", "Add source", { kind: "secondary", onClick: (_e, cx) => this.addSource(cx) })));
   }
 
+  roleDetail(t, role) {
+    if (role.id === "coordinator") return this.coordinator(t);
+    if (role.id === "worker") return this.worker(t);
+    if (role.id === "reviewer") return this.reviewer(t);
+    return v_flex()
+      .child(this.heading(t, role.title ?? role.id, role.purpose ?? "Custom role"))
+      .child(this.row(t, "Source", "Loaded from the role registry.", div().text_size(TEXT.label).text_color(t.dim).child(role.source ?? "custom")))
+      .when(Array.isArray(role.duties) && role.duties.length, (el) => el.child(this.row(t, "Duties", role.duties.join(" · "), div())))
+      .when(Array.isArray(role.prohibitions) && role.prohibitions.length, (el) => el.child(this.row(t, "Does not", role.prohibitions.join(" · "), div())))
+      .child(this.row(t, "Runner", "Runner overrides for custom roles are not editable here yet.", div().text_size(TEXT.label).text_color(t.dim).child("Read-only")));
+  }
+
   navItem(t, id, label, icon = null) {
     const on = this.section === id;
     return h_flex().id(`collie-settings-${id}`).h(30).gap(8).px(8).flex_none().items_center().rounded(RADIUS.card)
@@ -359,6 +385,8 @@ export default class InboxSettings extends View {
     if (this.section === "reviewer") return this.levelBar(t).child(this.reviewer(t));
     if (this.section === "helper") return this.helper(t);
     if (this.section === "ingress") return this.ingress(t);
+    const role = this.roles.find((item) => item.id === this.section);
+    if (role) return this.levelBar(t).child(this.roleDetail(t, role));
     if (this.section === "spaces") return this.spacesSection(t);
     if (this.section === "diagnostics") return this.diagnostics(t);
     return div();
@@ -369,9 +397,7 @@ export default class InboxSettings extends View {
     const nav = v_flex().flex_none().w(190).h_full().p(10).gap(2).border_r(1).border_color(t.border)
       .child(div().px(8).pt(6).pb(10).text_size(TEXT.title).font_semibold().text_color(t.foreground).child("Collie"))
       .child(div().px(8).pt(6).pb(4).text_size(TEXT.label).font_medium().text_color(t.dim).child("Roles"))
-      .child(this.navItem(t, "coordinator", "Coordinator", sectionIcon))
-      .child(this.navItem(t, "worker", "Worker"))
-      .child(this.navItem(t, "reviewer", "Reviewer"))
+      .children(this.roles.map((role) => this.navItem(t, role.id, role.title ?? role.id, role.id === "coordinator" ? sectionIcon : null)))
       .child(this.navItem(t, "helper", "Helper"))
       .child(div().px(8).pt(14).pb(4).text_size(TEXT.label).font_medium().text_color(t.dim).child("Connections"))
       .child(this.navItem(t, "ingress", "Ingress", "mods/collie-chrome/network.svg"))
