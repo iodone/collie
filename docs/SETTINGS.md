@@ -14,26 +14,20 @@
 
 ```text
 Roles
-  System roles
-    Coordinator
-    Driver
+  Coordinator
+  Driver
   Builtin
-    Builtin roles
   User
-    User roles
   Project
-    Project roles
 
 Playbooks
   Builtin
-    Builtin playbooks
   User
-    User playbooks
   Project
-    Project playbooks
 ```
 
-- `System roles` 单独铺开，因为它们是固定角色。
+- 不再有第二级分组标题。
+- Coordinator / Driver 是固定系统角色的独立页面。
 - Builtin / User / Project 各只有一个页面。
 - 不在侧栏铺平每个 role 和 playbook 文件名。
 - 文件名在页面内用下拉框选择。
@@ -83,9 +77,9 @@ coordinator / driver
 
 ## 3. Role 页面
 
-### 3.1 System roles
+### 3.1 Coordinator / Driver
 
-Coordinator / Driver 是独立页面：
+它们是固定系统角色的独立页面：
 
 - definition 固定，read-only
 - 可以显示 runner 配置
@@ -211,7 +205,7 @@ file
 
 ## 8. 不变式
 
-1. System roles 单独展示。
+1. Coordinator / Driver 作为固定系统角色单独展示。
 2. Builtin / User / Project 各一个页面。
 3. 页面内用下拉框选择文件，不铺平列表。
 4. 选择后才读取和展示文件。

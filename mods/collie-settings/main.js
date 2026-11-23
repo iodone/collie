@@ -399,25 +399,17 @@ export default class InboxSettings extends View {
     if (this.tab === "connections") return v_flex().flex_none().w(190).h_full().p(10).gap(2).border_r(1).border_color(t.border).children([item("ingress", "Ingress")]);
     if (this.tab === "workspace") return v_flex().flex_none().w(190).h_full().p(10).gap(2).border_r(1).border_color(t.border).children([item("spaces", "Spaces")]);
     if (this.tab === "system") return v_flex().flex_none().w(190).h_full().p(10).gap(2).border_r(1).border_color(t.border).children([item("diagnostics", "Diagnostics")]);
-    const systems = this.roles.filter((role) => ["coordinator", "driver"].includes(role.id));
-    const heading = (label) => div().px(8).pt(10).pb(4).text_size(TEXT.label).font_medium().text_color(t.dim).child(label);
     return v_flex().flex_none().w(190).h_full().p(10).gap(2).border_r(1).border_color(t.border)
       .child(div().px(8).pt(6).pb(4).text_size(TEXT.label).font_medium().text_color(t.dim).child("Roles"))
-      .child(heading("System roles"))
-      .children(systems.map((role) => item(role.id, role.title ?? role.id)))
-      .child(heading("Builtin"))
-      .child(item("role:builtin", "Builtin roles"))
-      .child(heading("User"))
-      .child(item("role:user", "User roles"))
-      .child(heading("Project"))
-      .child(item("role:project", "Project roles"))
+      .child(item("coordinator", "Coordinator"))
+      .child(item("driver", "Driver"))
+      .child(item("role:builtin", "Builtin"))
+      .child(item("role:user", "User"))
+      .child(item("role:project", "Project"))
       .child(div().px(8).pt(14).pb(4).text_size(TEXT.label).font_medium().text_color(t.dim).child("Playbooks"))
-      .child(heading("Builtin"))
-      .child(item("book:builtin", "Builtin playbooks"))
-      .child(heading("User"))
-      .child(item("book:user", "User playbooks"))
-      .child(heading("Project"))
-      .child(item("book:project", "Project playbooks"));
+      .child(item("book:builtin", "Builtin"))
+      .child(item("book:user", "User"))
+      .child(item("book:project", "Project"));
   }
 
   categoryRoleList(category) {
