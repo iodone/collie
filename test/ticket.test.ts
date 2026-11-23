@@ -91,7 +91,7 @@ describe("collie ticket create", () => {
     );
     expect(created.state).toBe("open");
     expect(created.origin).toBe("human");
-    expect(created.playbook).toEqual({ id: "review", version: 4 });
+    expect(created.playbook).toEqual({ id: "review", version: 5 });
     expect(created.run.kind).toBe("review");
     expect(created.actions).toHaveLength(1);
     expect(created.actions[0].spawn).toMatchObject({
@@ -234,7 +234,7 @@ describe("project-aware ticket", () => {
     const add = calls.find((call) => call[0] === "add")!;
     expect(add).toContain("--folder");
     expect(add[add.indexOf("--folder") + 1]).toBe(project);
-    expect(add).toContain("playbook=review@4");
+    expect(add).toContain("playbook=review@5");
     const created = service.ledger.history("decision").filter((item) => item.id === response.body.decision_id).at(-1);
     expect(created.project).toBe("collie");
     expect(created.run.task_ref).toBe("COLLIE-7");
