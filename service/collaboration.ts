@@ -51,8 +51,6 @@ const PLAYBOOK_ALIASES: Record<string, string> = {
   "dsx-playbook-prototype": "prototype",
   "dsx-playbook-ratchet": "ratchet",
   "dsx-playbook-hillclimb": "hillclimb",
-  "dsx-playbook-eval": "eval",
-  "dsx-playbook-orchestrate": "orchestrate",
 };
 
 type Definition<T> = { value: T; body: string; file: string };

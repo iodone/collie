@@ -148,7 +148,6 @@ Playbook 是 driver 的工作编排说明。只使用当前输入提供的 catal
 - bug / 回归 → `bug-fix`
 - 只读调查 → `investigation`
 - 行为保持重构 → `refactoring`
-- 大工程 / 连续进件 → `orchestrate`
 
 选择后把 `playbook.id` 和 `version` 写进 Decision。Task 创建后锁定版本；内部步骤由 driver 按 brief 串起来。
 
