@@ -1,393 +1,223 @@
-# Collie · Settings 设计
+# Collie · Settings
 
-> 目标：把“角色定义”和“角色运行配置”分开，把“系统固定”“默认提供”“用户自定义”“项目自定义”分开。
->
-> **定义编辑只在文件系统完成。** Settings 只负责展示来源、路径和可编辑的 runner；不提供 role / playbook 定义编辑器。
+> 定义编辑只在文件系统完成。Settings 负责展示目录、选择文件、预览 frontmatter 和正文；不提供 role / playbook 编辑器。
 
 ---
 
-## 1. 数据模型
-
-### 1.1 Role
-
-```ts
-type Role = {
-  id: string;
-  title: string;
-  purpose: string;
-  duties: string[];
-  prohibitions: string[];
-  inputs?: string[];
-  outputs?: string[];
-  origin: "builtin" | "user" | "project";
-  file: string;
-};
-```
-
-`origin` 表示实际加载来源，`file` 表示实际读取的 Markdown 文件。
-
-### 1.2 Playbook
-
-```ts
-type Playbook = {
-  id: string;
-  version: number;
-  title: string;
-  body: string;
-  origin: "builtin" | "user" | "project";
-  file: string;
-};
-```
-
-Playbook 没有 `stage` / `seat` / `gate` 运行时结构。`body` 是交给 driver 的编排 prompt。
-
-### 1.3 Runner
-
-Runner 是角色的运行配置，不属于角色定义：
-
-```json
-{
-  "driver": {
-    "agent": "codex",
-    "model": "default",
-    "effort": "high",
-    "perm": "auto"
-  }
-}
-```
-
-- Role 定义不可被 runner 改写。
-- Runner 不改 role 的职责、禁项或 prompt。
-- 系统角色只允许修改 runner。
-
----
-
-## 2. 来源和优先级
-
-### 2.1 角色
-
-```text
-system fixed
-  coordinator
-  driver
-
-built-in defaults
-  reviewer
-  verifier
-  planner
-  researcher
-  watcher
-
-user custom
-  ~/.config/collie/roles/*.md
-
-project custom
-  <project>/.collie/roles/*.md
-```
-
-优先级：
-
-```text
-built-in defaults
-  < user custom
-  < project custom
-```
-
-固定角色例外：
-
-```text
-coordinator / driver 不能出现在 user 或 project 的 roles 目录中。
-出现即拒绝加载，提示 system role cannot be overridden。
-```
-
-### 2.2 Playbook
-
-```text
-built-in playbooks
-  templates/playbooks/*.md
-
-user playbooks
-  ~/.config/collie/playbooks/*.md
-
-project playbooks
-  <project>/.collie/playbooks/*.md
-```
-
-优先级相同：
-
-```text
-built-in < user < project
-```
-
-每个 playbook 加载后记录：
-
-```text
-origin
-file
-version
-```
-
-Task 实际使用哪个 playbook、版本和来源，要从 task facts / Decision 里可查。
-
-### 2.3 不再加载
-
-```text
-<project>/.agents/skills/collie/roles
-<project>/.agents/skills/collie/playbooks
-```
-
-这与 `.collie` 重叠，保留会让来源和优先级不清晰。
-
----
-
-## 3. Settings 导航
-
-顶层 tab：
+## 1. 顶层结构
 
 ```text
 协作模式 | 连接 | 工作区 | 系统
 ```
 
-`协作模式` 下的左侧导航：
+### 协作模式
+
+```text
+Roles
+  System roles
+    Coordinator
+    Driver
+  Builtin
+    Builtin roles
+  User
+    User roles
+  Project
+    Project roles
+
+Playbooks
+  Builtin
+    Builtin playbooks
+  User
+    User playbooks
+  Project
+    Project playbooks
+```
+
+- `System roles` 单独铺开，因为它们是固定角色。
+- Builtin / User / Project 各只有一个页面。
+- 不在侧栏铺平每个 role 和 playbook 文件名。
+- 文件名在页面内用下拉框选择。
+- 每个页面只读。
+
+---
+
+## 2. 配置路径
 
 ```text
 System roles
-  Coordinator
-  Driver
+  ~/.config/herdr-core/templates/roles/
 
-Default roles
-  Reviewer
-  Verifier
-  Planner
-  Researcher
-  Watcher
+Builtin defaults
+  installed roles / playbooks
 
-Custom roles
-  <user/project roles>
-
-Playbooks
-
-Connections
-  Ingress
-  Sources
-
-Workspace
-  Spaces
-
-System
-  Diagnostics
-```
-
-规则：
-
-- `System roles` 始终置顶。
-- 空组隐藏，不显示空标题。
-- 分组本身就是来源；列表项不重复显示 origin / path。
-- 加载优先级只在文档中说明：`builtin < user < project`；Settings 页面不重复展示。
-- Playbook 使用 `playbook:<id>` 作为 section key，避免和 role id 冲突。
-
----
-
-## 4. Role 详情
-
-### 4.1 通用头部
-
-```text
-Title
-Purpose
-Duties
-Prohibitions
-```
-
-来源由所在分组表达，不在详情里重复显示。
-
-### 4.2 系统角色
-
-`coordinator` / `driver`：
-
-```text
-Definition
-  System fixed. Only runner settings are editable.
-
-Runner
-  Agent
-  Model
-  Effort
-  Permission
-```
-
-- 不显示 prompt 编辑器。
-- 不显示 delete / rename。
-- 只保存 runner 配置。
-- Runner 配置仍按 Everywhere / space 覆盖。
-
-### 4.3 默认角色
-
-例如 `reviewer`：
-
-```text
-Definition: built-in
-Runner: editable
-```
-
-- 可以编辑 runner。
-- 可以通过 user/project 同名 role 覆盖定义。
-- 覆盖后归入 `User roles` / `Project roles` 分组。
-
-### 4.4 自定义角色
-
-```text
-Title
-Duties / Prohibitions
-Runner: read-only
-```
-
-- 定义只从 Markdown 文件读取。
-- Settings 不提供 definition 编辑器、创建或删除。
-- 第一版 custom role 的 runner 也是只读；运行配置先只开放给系统/默认角色。
-- 修改、删除都由文件系统完成；Settings 只反映下一次加载后的状态。
-
-### 4.5 Runner 表单
-
-适用于系统角色和默认角色；custom role 第一版只读。
-
-| 字段 | 控件 | 规则 |
-|---|---|---|
-| Agent | segmented | claude / codex |
-| Model | text input | 空 = CLI default |
-| Effort | segmented | low / medium / high / xhigh / max |
-| Permission | segmented | auto / ask / acceptEdits |
-
-保存规则：
-
-- segmented 立即保存。
-- text 在 blur 保存。
-- 保存成功显示 `Saved`，2 秒后消失。
-- 校验失败显示 inline error，不写文件。
-- 系统角色保存到 `~/.config/collie/settings.json` 的对应 role key。
-- Coordinator 保存到 `~/.config/collie/coordinator.json`。
-
----
-
-## 5. Playbook 详情
-
-### 5.1 列表
-
-```text
-Feature
-feature@1 · builtin · templates/playbooks/feature.md
-
-Review
-review@1 · builtin · templates/playbooks/review.md
-```
-
-分组：
-
-```text
-Built-in
 User
+  ~/.config/collie/roles/
+  ~/.config/collie/playbooks/
+
 Project
+  <project>/.collie/roles/
+  <project>/.collie/playbooks/
 ```
 
-### 5.2 详情
+不再加载：
 
 ```text
-Title
-id@version
-
-Body
-  <prompt preview>
+<project>/.agents/skills/collie
 ```
 
+优先级：
+
+```text
+builtin < user < project
+```
+
+固定角色：
+
+```text
+coordinator / driver
+```
+
+定义不可覆盖；用户或项目写入这两个 id 会被拒绝。
+
+---
+
+## 3. Role 页面
+
+### 3.1 System roles
+
+Coordinator / Driver 是独立页面：
+
+- definition 固定，read-only
+- 可以显示 runner 配置
+- 不在 Builtin / User / Project 中重复出现
+
+### 3.2 Builtin / User / Project roles
+
+每个页面结构相同：
+
+```text
+Roles
+  directory: /path/to/roles
+
+  [ Select file ▾ ]
+
+  Frontmatter
+    id
+    version
+    title
+    purpose
+    duties
+    prohibitions
+
+  Content
+    # Role
+    ...
+```
+
+交互：
+
+- 打开页面时只显示目录，不自动加载文件。
+- 下拉框列出来自该目录、且 origin 匹配的 role 文件。
+- 选中文件名后才读取文件。
+- 前端展示 frontmatter 和正文。
+- 全部只读。
+
+---
+
+## 4. Playbook 页面
+
+### Builtin / User / Project playbooks
+
+每个页面结构相同：
+
+```text
+Playbooks
+  directory: /path/to/playbooks
+
+  [ Select file ▾ ]
+
+  Frontmatter
+    id
+    version
+    title
+
+  Content
+    <playbook prompt>
+```
+
+交互：
+
+- 打开页面不自动加载。
+- 下拉框列出该 origin 的 playbook 文件名。
+- 选中后读取文件并显示 frontmatter / body。
 - 不显示 stage / seat / gate。
-- 不提供 stage 编辑器。
-- 不提供创建、删除或复制动作。
-- 编辑 playbook 就是编辑文件系统中的 Markdown body。
-- 内置 playbook 可以被 user/project 同名文件覆盖；详情显示最终来源。
-- 覆盖时提示：
-
-```text
-This playbook is overridden by <project>/.collie/playbooks/feature.md.
-```
-
-### 5.3 文件管理
-
-Settings 不创建或覆盖 playbook。文件位置就是唯一入口：
-
-```text
-~/.config/collie/playbooks/<id>.md
-<project>/.collie/playbooks/<id>.md
-```
-
-覆盖内置 playbook 时使用同名 id；下次加载后归入 `User playbooks` / `Project playbooks` 分组。
-
-不在 Settings 内做 Markdown frontmatter / body 编辑器。
+- 全部只读。
 
 ---
 
-## 6. 交互细节
+## 5. 下拉框行为
 
-### 6.1 加载
-
-```text
-GET /v1/collaboration
-```
-
-返回：
-
-```json
-{
-  "roles": [{ "id": "driver", "origin": "builtin", "file": "...", ... }],
-  "playbooks": [{ "id": "feature", "version": 1, "origin": "builtin", "file": "...", "instructions": "..." }]
-}
-```
-
-- Settings 不自己扫描目录。
-- 来源和覆盖由 service registry 给出。
-- 项目级 role/playbook 只有在当前项目加载后才出现。
-
-### 6.2 空状态
-
-- 没有自定义角色：隐藏 `Custom roles` 分组。
-- 没有 playbook：显示“无 playbook”。
-- 加载失败：显示错误和重试按钮，不缓存半份数据。
-
-### 6.3 固定角色冲突
-
-如果用户/项目目录出现 `coordinator.md` 或 `driver.md`：
-
-```text
-coordinator is a system role and cannot be overridden
-```
-
-Settings 显示：
-
-```text
-Invalid override
-  ~/.config/collie/roles/coordinator.md
-  coordinator is a system role and cannot be overridden
-```
-
-服务启动时也应 fail closed，而不是静默忽略。
-
-### 6.4 项目切换
-
-- 当前项目决定 project 层 role/playbook。
-- 切换项目时重新请求 `/v1/collaboration`。
-- 不把上一个项目的自定义 role 留在导航里。
+- 当前选择显示文件名。
+- 点击展开文件列表。
+- 选中后：
+  - 关闭列表
+  - 读取文件
+  - 显示 frontmatter 和 content
+- 文件为空：显示 `No files loaded`。
+- 文件读取失败：显示错误，不伪造内容。
+- 不跨 origin 混列文件。
 
 ---
 
-## 7. 不变式
+## 6. 只读约束
 
-1. 系统角色定义只读，runner 可改。
-2. Settings 不编辑任何 role / playbook 定义。
-3. 默认角色定义可被 user/project 覆盖。
-4. 内置 playbook 可被 user/project 覆盖。
-5. 自定义目录只有两个层级：user、project。
-6. 不加载 `.agents/skills/collie`。
-7. Role 定义与 runner 分开。
-8. Playbook 是 prompt，不提供 stage 编辑器。
-9. 每个加载项有 `origin` 和 `file`。
-10. Task 记录实际 playbook id / version / origin。
-11. 固定角色冲突 fail closed。
+Settings 不提供：
+
+- role 定义编辑
+- playbook 定义编辑
+- 创建 / 删除 / 复制 / 覆盖按钮
+- frontmatter 表单
+- Markdown 编辑器
+
+修改定义的方式：
+
+```text
+编辑 ~/.config/collie/roles/*.md
+编辑 ~/.config/collie/playbooks/*.md
+编辑 <project>/.collie/roles/*.md
+编辑 <project>/.collie/playbooks/*.md
+```
+
+下一次打开或重新加载后，Settings 展示新内容。
+
+---
+
+## 7. 加载与来源
+
+每个 role / playbook 记录：
+
+```text
+origin: builtin | user | project
+file
+```
+
+- 分组表达来源。
+- 页面内不重复显示 origin。
+- 加载优先级只在文档说明。
+- 项目切换后重新加载 catalog。
+- 上一个项目的自定义内容不保留。
+
+---
+
+## 8. 不变式
+
+1. System roles 单独展示。
+2. Builtin / User / Project 各一个页面。
+3. 页面内用下拉框选择文件，不铺平列表。
+4. 选择后才读取和展示文件。
+5. frontmatter 和 content 只读。
+6. Settings 不编辑 role / playbook 定义。
+7. 固定角色定义不可覆盖。
+8. 不加载 `.agents/skills/collie`。
+9. 每个加载项记录 origin 和 file。
+10. Task 锁定实际 playbook id / version。

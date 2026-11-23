@@ -2,7 +2,7 @@ import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, Scrollbar, InputState, Input } from "gpui-base";
 import { appHome, closeOverlay, exec, home, props, readTextFile, spaces, theme, writeTextFile } from "herdr";
 import { coordinatorPath, mergeCoordinator, mergeRole, mergeTaskSetting, taskSettingsPath } from "./lib/inbox-settings.js";
-import { TEXT, RADIUS, H, button, segmented } from "./lib/ui.js";
+import { TEXT, RADIUS, H, button, segmented, menuRow } from "./lib/ui.js";
 
 const sectionIcon = "mods/collie-chrome/network.svg";
 
@@ -21,6 +21,10 @@ export default class InboxSettings extends View {
     this.taskRaw = null;
     this.roles = [];
     this.playbooks = [];
+    this.picks = {};
+    this.menu = null;
+    this.fileText = {};
+    this.loading = {};
     this.savedAt = 0;
     this.model = InputState.new({ placeholder: "CLI default" });
     this.driverModel = InputState.new({ placeholder: "CLI default" });
@@ -391,25 +395,107 @@ export default class InboxSettings extends View {
   }
 
   sidebar(t) {
-    const system = this.roles.filter((role) => ["coordinator", "driver"].includes(role.id));
-    const builtin = this.roles.filter((role) => role.origin === "builtin" && !["coordinator", "driver"].includes(role.id));
-    const user = this.roles.filter((role) => role.origin === "user");
-    const project = this.roles.filter((role) => role.origin === "project");
-    const group = (title, roles) => roles.length
-      ? [div().px(8).pt(10).pb(4).text_size(TEXT.label).font_medium().text_color(t.dim).child(title), ...roles.map((role) => this.navItem(t, role.id, role.title ?? role.id, role.id === "coordinator" ? sectionIcon : null))]
-      : [];
-    const playbookGroup = (title, origin) => {
-      const rows = this.playbooks.filter((book) => (book.origin ?? "builtin") === origin);
-      return rows.length ? [div().px(8).pt(10).pb(4).text_size(TEXT.label).font_medium().text_color(t.dim).child(title), ...rows.map((book) => this.navItem(t, `playbook:${book.id}`, book.title ?? book.id))] : [];
-    };
-    if (this.tab === "connections") return v_flex().flex_none().w(190).h_full().p(10).gap(2).border_r(1).border_color(t.border).children([this.navItem(t, "ingress", "Ingress", "mods/collie-chrome/network.svg")]);
-    if (this.tab === "workspace") return v_flex().flex_none().w(190).h_full().p(10).gap(2).border_r(1).border_color(t.border).children([this.navItem(t, "spaces", "Spaces")]);
-    if (this.tab === "system") return v_flex().flex_none().w(190).h_full().p(10).gap(2).border_r(1).border_color(t.border).children([this.navItem(t, "diagnostics", "Diagnostics")]);
+    const item = (id, label) => this.navItem(t, id, label);
+    if (this.tab === "connections") return v_flex().flex_none().w(190).h_full().p(10).gap(2).border_r(1).border_color(t.border).children([item("ingress", "Ingress")]);
+    if (this.tab === "workspace") return v_flex().flex_none().w(190).h_full().p(10).gap(2).border_r(1).border_color(t.border).children([item("spaces", "Spaces")]);
+    if (this.tab === "system") return v_flex().flex_none().w(190).h_full().p(10).gap(2).border_r(1).border_color(t.border).children([item("diagnostics", "Diagnostics")]);
+    const systems = this.roles.filter((role) => ["coordinator", "driver"].includes(role.id));
+    const heading = (label) => div().px(8).pt(10).pb(4).text_size(TEXT.label).font_medium().text_color(t.dim).child(label);
     return v_flex().flex_none().w(190).h_full().p(10).gap(2).border_r(1).border_color(t.border)
       .child(div().px(8).pt(6).pb(4).text_size(TEXT.label).font_medium().text_color(t.dim).child("Roles"))
-      .children([...group("System roles", system), ...group("Builtin roles", builtin), ...group("User roles", user), ...group("Project roles", project)])
+      .child(heading("System roles"))
+      .children(systems.map((role) => item(role.id, role.title ?? role.id)))
+      .child(heading("Builtin"))
+      .child(item("role:builtin", "Builtin roles"))
+      .child(heading("User"))
+      .child(item("role:user", "User roles"))
+      .child(heading("Project"))
+      .child(item("role:project", "Project roles"))
       .child(div().px(8).pt(14).pb(4).text_size(TEXT.label).font_medium().text_color(t.dim).child("Playbooks"))
-      .children([...playbookGroup("Builtin playbooks", "builtin"), ...playbookGroup("User playbooks", "user"), ...playbookGroup("Project playbooks", "project")]);
+      .child(heading("Builtin"))
+      .child(item("book:builtin", "Builtin playbooks"))
+      .child(heading("User"))
+      .child(item("book:user", "User playbooks"))
+      .child(heading("Project"))
+      .child(item("book:project", "Project playbooks"));
+  }
+
+  categoryRoleList(category) {
+    const system = ["coordinator", "driver"];
+    if (category === "system") return this.roles.filter((role) => system.includes(role.id));
+    if (category === "builtin") return this.roles.filter((role) => role.origin === "builtin" && !system.includes(role.id));
+    return this.roles.filter((role) => role.origin === category);
+  }
+
+  categoryPlaybookList(category) {
+    if (category === "system") return [];
+    return this.playbooks.filter((book) => (book.origin ?? "builtin") === category);
+  }
+
+  directory(category, kind) {
+    const first = (kind === "roles" ? this.categoryRoleList(category) : this.categoryPlaybookList(category))[0];
+    if (first?.file) return first.file.slice(0, first.file.lastIndexOf("/"));
+    if (category === "user") return `${home()}/.config/collie/${kind}`;
+    if (category === "project") return "No project loaded";
+    return `${home()}/.config/herdr-core/templates/${kind}`;
+  }
+
+  fileName(file) { return file?.split("/").at(-1) ?? ""; }
+
+  async readPreview(file, cx) {
+    if (!file || this.fileText[file] !== undefined || this.loading[file]) return;
+    this.loading[file] = true;
+    cx.spawn(async (cx) => {
+      this.fileText[file] = await readTextFile(file).catch((error) => `Can't read ${file}: ${error?.message ?? error}`);
+      this.loading[file] = false;
+      cx.notify();
+    });
+  }
+
+  preview(t, file) {
+    if (!file) return div().py(10).text_size(TEXT.label).text_color(t.dim).child("Select a file to load.");
+    if (this.loading[file] || this.fileText[file] === undefined) return div().py(10).text_size(TEXT.label).text_color(t.dim).child("Loading…");
+    const text = String(this.fileText[file]);
+    const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
+    const frontmatter = match?.[1] ?? "";
+    const body = match ? text.slice(match[0].length) : text;
+    const lines = (value) => value.split("\n").map((line) => div().min_h(18).text_size(12).line_height("18px").text_color(t.foreground).child(line || " "));
+    return v_flex().gap(12).py(10)
+      .when(Boolean(frontmatter), (el) => el.child(v_flex().gap(4)
+        .child(div().text_size(TEXT.label).font_medium().text_color(t.dim).child("Frontmatter"))
+        .child(div().p(10).rounded(RADIUS.card).bg(t.background).border_1().border_color(t.border).children(lines(frontmatter)))))
+      .child(v_flex().gap(4)
+        .child(div().text_size(TEXT.label).font_medium().text_color(t.dim).child("Content"))
+        .child(div().p(10).rounded(RADIUS.card).bg(t.background).border_1().border_color(t.border).children(lines(body))));
+  }
+
+  filePicker(t, category, kind, files, cx) {
+    const key = `${category}:${kind}`;
+    const picked = this.picks[key];
+    const title = kind === "roles" ? "Roles" : "Playbooks";
+    const open = this.menu === key;
+    return v_flex().gap(6).py(10).border_b(1).border_color(t.border)
+      .child(h_flex().gap(10).items_center()
+        .child(div().w(120).flex_none().text_size(TEXT.body).font_medium().text_color(t.foreground).child(title))
+        .child(div().flex_1().min_w(0).text_size(TEXT.label).text_color(t.dim).child(this.directory(category, kind)))
+        .child(h_flex().id(`pick-${key}`).h(H.sm).px(8).gap(6).items_center().rounded(RADIUS.control).border_1().border_color(t.input).bg(t.background).cursor_pointer()
+          .hover((s) => s.bg(t.hover)).on_click((_e, c) => { c.stop_propagation(); this.menu = open ? null : key; c.notify(); })
+          .child(div().min_w(110).max_w(220).truncate().text_size(TEXT.label).text_color(picked ? t.foreground : t.dim).child(picked ? this.fileName(picked) : "Select file"))
+          .child(svg("mods/collie-chrome/chevron-down.svg").size(12).text_color(t.dim))))
+      .when(open, (el) => el.child(v_flex().w_full().p(4).rounded(RADIUS.card).border_1().border_color(t.border).bg(t.popover)
+        .when(!files.length, (x) => x.child(div().px(8).py(6).text_size(TEXT.label).text_color(t.dim).child("No files loaded.")))
+        .children(files.map((file) => menuRow(`pick-${key}-${file}`, this.fileName(file), { check: picked === file, onClick: (_e, c) => {
+          this.picks[key] = file; this.menu = null; this.readPreview(file, c); c.notify();
+        } })))))
+      .child(this.preview(t, picked));
+  }
+
+  categoryPage(t, category, kind, cx) {
+    const files = kind === "roles" ? this.categoryRoleList(category).map((role) => role.file) : this.categoryPlaybookList(category).map((book) => book.file);
+    const title = `${category[0].toUpperCase() + category.slice(1)} ${kind}`;
+    return v_flex()
+      .child(this.heading(t, title, "Read-only files loaded from the path below."))
+      .child(this.filePicker(t, category, kind, files, cx));
   }
 
   navItem(t, id, label, icon = null) {
@@ -423,6 +509,8 @@ export default class InboxSettings extends View {
   }
 
   body(t) {
+    if (this.section.startsWith("role:")) return this.categoryPage(t, this.section.slice(5), "roles", this._cx);
+    if (this.section.startsWith("book:")) return this.categoryPage(t, this.section.slice(5), "playbooks", this._cx);
     if (this.section === "coordinator") return this.levelBar(t).child(this.coordinator(t));
     if (this.section === "driver") return this.levelBar(t).child(this.driver(t));
     if (this.section === "reviewer") return this.levelBar(t).child(this.reviewer(t));
@@ -437,6 +525,7 @@ export default class InboxSettings extends View {
   }
 
   render(_cx) {
+    this._cx = _cx;
     const t = theme();
     const nav = this.sidebar(t);
     const tabs = h_flex().flex_none().h(42).px(12).gap(4).items_center().border_b_1().border_color(t.border)
