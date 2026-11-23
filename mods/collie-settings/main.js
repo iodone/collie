@@ -275,33 +275,39 @@ export default class InboxSettings extends View {
   }
 
   roleSummary(t, id) {
-    const role = this.roles.find((item) => item.id === id);
-    if (!role) return v_flex();
+    const text = id === "coordinator" ? {
+      purpose: "负责看消息、判断下一步，并把要做的事交给执行的人。",
+      duties: ["看外部消息或你的话", "判断是新建事情、继续已有事情，还是先问你", "把要做的事交给负责执行的人", "需要你决定时向你确认"],
+      not: ["不直接写代码", "不审查、不验证", "不替你接受结果"],
+    } : id === "driver" ? {
+      purpose: "负责把一件任务做完，并按需要找其他人帮忙。",
+      duties: ["读懂任务说明和工作方式", "自己完成，或找适合的人协作", "把结果整理好交回来"],
+      not: ["不修改系统规则", "不替你做最终决定", "不跨项目协调"],
+    } : null;
+    if (!text) return v_flex();
     const list = (items) => v_flex().gap(3).children(items.map((item) => h_flex().gap(6).items_start()
       .child(div().w(8).flex_none().text_size(TEXT.label).text_color(t.dim).child("•"))
       .child(div().flex_1().text_size(TEXT.label).line_height("17px").text_color(t.muted).child(item))));
     return v_flex().pb(12).gap(6)
-      .when(Boolean(role.purpose), (el) => el.child(div().text_size(TEXT.label).line_height("17px").text_color(t.muted).child(role.purpose)))
-      .when(Array.isArray(role.duties) && role.duties.length, (el) => el.child(v_flex().gap(3)
-        .child(div().text_size(TEXT.label).font_medium().text_color(t.foreground).child("Duties"))
-        .child(list(role.duties))))
-      .when(Array.isArray(role.prohibitions) && role.prohibitions.length, (el) => el.child(v_flex().gap(3)
-        .child(div().text_size(TEXT.label).font_medium().text_color(t.foreground).child("Does not"))
-        .child(list(role.prohibitions))));
+      .child(div().text_size(TEXT.label).line_height("17px").text_color(t.muted).child(text.purpose))
+      .child(v_flex().gap(3).child(div().text_size(TEXT.label).font_medium().text_color(t.foreground).child("它负责"))
+        .child(list(text.duties)))
+      .child(v_flex().gap(3).child(div().text_size(TEXT.label).font_medium().text_color(t.foreground).child("它不负责"))
+        .child(list(text.not)));
   }
 
   coordinator(t) {
     const current = this.cfg.everywhere?.coordinator ?? {};
     return v_flex()
-      .child(this.heading(t, "Coordinator", "System role · definition read-only. New sessions inherit these runner defaults."))
+      .child(this.heading(t, "Coordinator", "系统固定，不能改；这里只调整它怎么运行。"))
       .child(this.roleSummary(t, "coordinator"))
-      .child(this.row(t, "Agent", "CLI used for Coordinator chat and ingress decisions.",
+      .child(this.row(t, "工具", "运行 Coordinator 时使用的工具。",
         segmented("coordinator-agent", AGENTS, current.cli ?? "claude", (cli, _e, cx) => this.saveCoordinator({ cli }, cx))))
-      .child(this.row(t, "Model", "CLI default, or a model id for this role.",
+      .child(this.row(t, "模型", "使用工具默认模型，或指定一个模型。",
         div().w(220).child(Input.new(this.model)), this.saved()))
-      .child(this.row(t, "Effort", "How much reasoning the Coordinator spends on each decision.",
+      .child(this.row(t, "思考强度", "每次判断时投入多少思考。",
         segmented("coordinator-effort", EFFORTS, current.effort ?? "high", (effort, _e, cx) => this.saveCoordinator({ effort }, cx), { size: "lg" })))
-      .child(this.row(t, "Permission", "Default permission mode for new Coordinator sessions.",
+      .child(this.row(t, "权限", "Coordinator 默认可以做什么。",
         segmented("coordinator-perm", [["auto", "Auto"], ["manual", "Ask"], ["acceptEdits", "Accept edits"]], current.perm ?? "auto",
           (perm, _e, cx) => this.saveCoordinator({ perm }, cx))));
   }
@@ -312,18 +318,18 @@ export default class InboxSettings extends View {
     return v_flex()
       .child(this.heading(t, title, about))
       .when(summary, (el) => el.child(this.roleSummary(t, role)))
-      .child(this.row(t, "Agent", "CLI used for this role; task-level selection can override it.",
+      .child(this.row(t, "工具", "执行这个角色时使用的工具。",
         segmented(`${role}-agent`, AGENTS, current.agent ?? "claude", (agent, _e, cx) => this.saveRole(role, { agent }, cx))))
-      .child(this.row(t, "Model", "CLI default, or a model id for this role.",
+      .child(this.row(t, "模型", "使用工具默认模型，或指定一个模型。",
         div().w(220).child(Input.new(model)), this.saved()))
-      .child(this.row(t, "Effort", "Default reasoning effort for this role.",
+      .child(this.row(t, "思考强度", "执行这个角色时投入多少思考。",
         segmented(`${role}-effort`, EFFORTS, current.effort ?? "high", (effort, _e, cx) => this.saveRole(role, { effort }, cx), { size: "lg" })));
   }
 
   driver(t) {
     const rounds = this.taskCfg.tasks?.review_rounds;
-    return this.roleEditor(t, "driver", "Driver", "System role · definition read-only. Reads the playbook and starts helper roles.", true)
-      .child(this.row(t, "Review", "Review is enabled per task; this is the default number of rounds.",
+    return this.roleEditor(t, "driver", "Driver", "系统固定，不能改；这里只调整它怎么运行。", true)
+      .child(this.row(t, "检查轮次", "每个任务默认检查几轮。",
         segmented("driver-review-rounds", [["0", "Off"], ["1", "1"], ["2", "2"], ["3", "3"]], String(rounds ?? 0),
           (value, _e, cx) => this.saveTasks({ review_rounds: Number(value) }, cx))));
   }
@@ -419,8 +425,8 @@ export default class InboxSettings extends View {
     if (this.tab === "system") return v_flex().flex_none().w(190).h_full().p(10).gap(2).border_r(1).border_color(t.border).children([item("diagnostics", "Diagnostics")]);
     return v_flex().flex_none().w(190).h_full().p(10).gap(2).border_r(1).border_color(t.border)
       .child(div().px(8).pt(6).pb(4).text_size(TEXT.label).font_medium().text_color(t.dim).child("Roles"))
-      .child(item("coordinator", "Coordinator", "system"))
-      .child(item("driver", "Driver", "system"))
+      .child(item("coordinator", "Coordinator", "系统"))
+      .child(item("driver", "Driver", "系统"))
       .child(div().h(1).mx(8).my(6).bg(t.border))
       .child(item("role:builtin", "Builtin"))
       .child(item("role:user", "User"))
@@ -447,7 +453,7 @@ export default class InboxSettings extends View {
     const first = (kind === "roles" ? this.categoryRoleList(category) : this.categoryPlaybookList(category))[0];
     if (first?.file) return first.file.slice(0, first.file.lastIndexOf("/"));
     if (category === "user") return `${home()}/.config/collie/${kind}`;
-    if (category === "project") return "No project loaded";
+    if (category === "project") return "尚未加载项目";
     return `${home()}/.config/herdr-core/templates/${kind}`;
   }
 
@@ -464,8 +470,8 @@ export default class InboxSettings extends View {
   }
 
   preview(t, file) {
-    if (!file) return div().py(10).text_size(TEXT.label).text_color(t.dim).child("Select a file to load.");
-    if (this.loading[file] || this.fileText[file] === undefined) return div().py(10).text_size(TEXT.label).text_color(t.dim).child("Loading…");
+    if (!file) return div().py(10).text_size(TEXT.label).text_color(t.dim).child("选择文件后查看内容。");
+    if (this.loading[file] || this.fileText[file] === undefined) return div().py(10).text_size(TEXT.label).text_color(t.dim).child("正在读取…");
     const text = String(this.fileText[file]);
     const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
     const frontmatter = match?.[1] ?? "";
@@ -473,10 +479,10 @@ export default class InboxSettings extends View {
     const lines = (value) => value.split("\n").map((line) => div().min_h(18).text_size(12).line_height("18px").text_color(t.foreground).child(line || " "));
     return v_flex().gap(12).py(10)
       .when(Boolean(frontmatter), (el) => el.child(v_flex().gap(4)
-        .child(div().text_size(TEXT.label).font_medium().text_color(t.dim).child("Frontmatter"))
+        .child(div().text_size(TEXT.label).font_medium().text_color(t.dim).child("文件属性"))
         .child(div().p(10).rounded(RADIUS.card).bg(t.background).border_1().border_color(t.border).children(lines(frontmatter)))))
       .child(v_flex().gap(4)
-        .child(div().text_size(TEXT.label).font_medium().text_color(t.dim).child("Content"))
+        .child(div().text_size(TEXT.label).font_medium().text_color(t.dim).child("内容"))
         .child(div().p(10).rounded(RADIUS.card).bg(t.background).border_1().border_color(t.border).children(lines(body))));
   }
 
@@ -494,7 +500,7 @@ export default class InboxSettings extends View {
           .child(div().min_w(110).max_w(220).truncate().text_size(TEXT.label).text_color(picked ? t.foreground : t.dim).child(picked ? this.fileName(picked) : "Select file"))
           .child(svg("mods/collie-chrome/chevron-down.svg").size(12).text_color(t.dim))))
       .when(open, (el) => el.child(v_flex().w_full().p(4).rounded(RADIUS.card).border_1().border_color(t.border).bg(t.popover)
-        .when(!files.length, (x) => x.child(div().px(8).py(6).text_size(TEXT.label).text_color(t.dim).child("No files loaded.")))
+        .when(!files.length, (x) => x.child(div().px(8).py(6).text_size(TEXT.label).text_color(t.dim).child("没有可显示的文件。")))
         .children(files.map((file) => menuRow(`pick-${key}-${file}`, this.fileName(file), { check: picked === file, onClick: (_e, c) => {
           this.picks[key] = file; this.menu = null; this.readPreview(file, c); c.notify();
         } })))))
@@ -504,8 +510,16 @@ export default class InboxSettings extends View {
   categoryPage(t, category, kind, cx) {
     const files = kind === "roles" ? this.categoryRoleList(category).map((role) => role.file) : this.categoryPlaybookList(category).map((book) => book.file);
     const title = `${category[0].toUpperCase() + category.slice(1)} ${kind}`;
+    const label = kind === "roles" ? "角色" : "工作流程";
+    const help = category === "builtin"
+      ? `这里放着 Collie 自带的${label}，可以直接使用。用户或项目目录里有同名文件时，会以后面的为准。`
+      : category === "user"
+        ? `这里是你自己添加的${label}，对这台电脑上的所有项目生效。它会覆盖同名的基础内容；项目里的同名文件会再覆盖它。`
+        : `这里只对当前项目生效，优先级最高。它会覆盖同名的用户和基础内容。`;
+    const order = "读取顺序：基础 → 用户 → 项目。后面的同名内容会覆盖前面的。";
     return v_flex()
-      .child(this.heading(t, title, "Read-only files loaded from the path below."))
+      .child(this.heading(t, title, help))
+      .child(div().pb(10).text_size(TEXT.label).text_color(t.dim).child(order))
       .child(this.filePicker(t, category, kind, files, cx));
   }
 
@@ -523,8 +537,8 @@ export default class InboxSettings extends View {
   body(t) {
     if (this.section.startsWith("role:")) return this.categoryPage(t, this.section.slice(5), "roles", this._cx);
     if (this.section.startsWith("book:")) return this.categoryPage(t, this.section.slice(5), "playbooks", this._cx);
-    if (this.section === "coordinator") return this.levelBar(t).child(this.coordinator(t));
-    if (this.section === "driver") return this.levelBar(t).child(this.driver(t));
+    if (this.section === "coordinator") return this.coordinator(t);
+    if (this.section === "driver") return this.driver(t);
     if (this.section === "reviewer") return this.levelBar(t).child(this.reviewer(t));
     if (this.section === "helper") return this.helper(t);
     if (this.section.startsWith("playbook:")) return this.playbookDetail(t, this.section.slice("playbook:".length));
