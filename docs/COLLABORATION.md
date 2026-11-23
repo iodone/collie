@@ -199,7 +199,7 @@ type Role = {
 - `driver`：task 所有者，负责局部编排
 - `reviewer`：只读审查
 - `verifier`：独立验证
-- `planner` / `researcher` / `watcher`：按需局部角色
+- 默认只提供 `reviewer` / `verifier`；其他角色由用户按需添加
 
 Role 和 Playbook 解耦：
 
@@ -376,7 +376,7 @@ system fixed roles
   coordinator / driver
 
 built-in defaults
-  reviewer / verifier / planner / researcher / watcher
+  reviewer / verifier
   built-in playbooks
 
 user custom

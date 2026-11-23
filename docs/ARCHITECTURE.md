@@ -549,7 +549,7 @@ system fixed
   ~/.config/herdr-core/templates/roles/driver.md
 
 built-in defaults
-  templates/roles/{reviewer,verifier,planner,researcher,watcher}.md
+  templates/roles/{reviewer,verifier}.md
   templates/playbooks/*.md
 
 user custom

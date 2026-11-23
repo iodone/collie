@@ -2,9 +2,11 @@
 kind: "playbook"
 id: "eval"
 title: "Eval"
-version: 1
+version: 2
 ---
 
-先定义评估问题和判定标准；生成候选，按同一标准比较。
+这个 playbook 属于 Coordinator 级别，不是单个 driver task。
 
-记录证据和 tradeoffs；必要时启动独立 verifier。最后提交 ready，给出建议和未证明项。
+Coordinator 定义评估问题和判定标准，为每个候选创建独立 task；候选之间使用同一 prompt 和隔离环境。评审由一个没有参与候选的 verifier 按同一标准完成。
+
+driver 只负责自己的候选，不冒充 judge，也不看其他候选的标签。Coordinator 汇总证据、比较 tradeoffs，并把人留下最终决定。

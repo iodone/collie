@@ -91,7 +91,7 @@ describe("collie ticket create", () => {
     );
     expect(created.state).toBe("open");
     expect(created.origin).toBe("human");
-    expect(created.playbook).toEqual({ id: "review", version: 1 });
+    expect(created.playbook).toEqual({ id: "review", version: 2 });
     expect(created.run.kind).toBe("review");
     expect(created.actions).toHaveLength(1);
     expect(created.actions[0].spawn).toMatchObject({
@@ -234,7 +234,7 @@ describe("project-aware ticket", () => {
     const add = calls.find((call) => call[0] === "add")!;
     expect(add).toContain("--folder");
     expect(add[add.indexOf("--folder") + 1]).toBe(project);
-    expect(add).toContain("playbook=review@1");
+    expect(add).toContain("playbook=review@2");
     const created = service.ledger.history("decision").filter((item) => item.id === response.body.decision_id).at(-1);
     expect(created.project).toBe("collie");
     expect(created.run.task_ref).toBe("COLLIE-7");
@@ -275,7 +275,7 @@ describe("coordinator chat decision commit", () => {
     expect(response.status).toBe(200);
     const decision = service.ledger.history("decision").at(-1)!;
     expect(decision).toMatchObject({
-      origin: "human", decided_by: "coordinator", playbook: { id: "feature", version: 1 },
+      origin: "human", decided_by: "coordinator", playbook: { id: "feature", version: 2 },
     });
     expect(response.body).toMatchObject({ origin: "human", state: "settled" });
   });
