@@ -14,8 +14,9 @@
 
 ```text
 Roles
-  Coordinator
-  Driver
+  Coordinator  [system]
+  Driver       [system]
+  ─────────
   Builtin
   User
   Project
@@ -79,11 +80,15 @@ coordinator / driver
 
 ### 3.1 Coordinator / Driver
 
-它们是固定系统角色的独立页面：
+它们是固定系统角色的独立页面。侧栏带 `system` chip，并用分割线与 Builtin / User / Project 分开。
 
-- definition 固定，read-only
-- 可以显示 runner 配置
-- 不在 Builtin / User / Project 中重复出现
+详情页先展示：
+
+- purpose
+- duties
+- prohibitions
+
+然后是 runner 配置。definition 固定，read-only；不在 Builtin / User / Project 中重复出现。
 
 ### 3.2 Builtin / User / Project roles
 

@@ -274,10 +274,27 @@ export default class InboxSettings extends View {
         .child(own ? `Inherited unless one of ${own} space(s) sets its own.` : "Every space, unless it sets its own."));
   }
 
+  roleSummary(t, id) {
+    const role = this.roles.find((item) => item.id === id);
+    if (!role) return v_flex();
+    const list = (items) => v_flex().gap(3).children(items.map((item) => h_flex().gap(6).items_start()
+      .child(div().w(8).flex_none().text_size(TEXT.label).text_color(t.dim).child("•"))
+      .child(div().flex_1().text_size(TEXT.label).line_height("17px").text_color(t.muted).child(item))));
+    return v_flex().pb(12).gap(6)
+      .when(Boolean(role.purpose), (el) => el.child(div().text_size(TEXT.label).line_height("17px").text_color(t.muted).child(role.purpose)))
+      .when(Array.isArray(role.duties) && role.duties.length, (el) => el.child(v_flex().gap(3)
+        .child(div().text_size(TEXT.label).font_medium().text_color(t.foreground).child("Duties"))
+        .child(list(role.duties))))
+      .when(Array.isArray(role.prohibitions) && role.prohibitions.length, (el) => el.child(v_flex().gap(3)
+        .child(div().text_size(TEXT.label).font_medium().text_color(t.foreground).child("Does not"))
+        .child(list(role.prohibitions))));
+  }
+
   coordinator(t) {
     const current = this.cfg.everywhere?.coordinator ?? {};
     return v_flex()
       .child(this.heading(t, "Coordinator", "System role · definition read-only. New sessions inherit these runner defaults."))
+      .child(this.roleSummary(t, "coordinator"))
       .child(this.row(t, "Agent", "CLI used for Coordinator chat and ingress decisions.",
         segmented("coordinator-agent", AGENTS, current.cli ?? "claude", (cli, _e, cx) => this.saveCoordinator({ cli }, cx))))
       .child(this.row(t, "Model", "CLI default, or a model id for this role.",
@@ -289,11 +306,12 @@ export default class InboxSettings extends View {
           (perm, _e, cx) => this.saveCoordinator({ perm }, cx))));
   }
 
-  roleEditor(t, role, title, about) {
+  roleEditor(t, role, title, about, summary = false) {
     const current = this.taskCfg[role] ?? {};
     const model = role === "driver" ? this.driverModel : this.reviewerModel;
     return v_flex()
       .child(this.heading(t, title, about))
+      .when(summary, (el) => el.child(this.roleSummary(t, role)))
       .child(this.row(t, "Agent", "CLI used for this role; task-level selection can override it.",
         segmented(`${role}-agent`, AGENTS, current.agent ?? "claude", (agent, _e, cx) => this.saveRole(role, { agent }, cx))))
       .child(this.row(t, "Model", "CLI default, or a model id for this role.",
@@ -304,7 +322,7 @@ export default class InboxSettings extends View {
 
   driver(t) {
     const rounds = this.taskCfg.tasks?.review_rounds;
-    return this.roleEditor(t, "driver", "Driver", "System role · definition read-only. Reads the playbook and starts helper roles.")
+    return this.roleEditor(t, "driver", "Driver", "System role · definition read-only. Reads the playbook and starts helper roles.", true)
       .child(this.row(t, "Review", "Review is enabled per task; this is the default number of rounds.",
         segmented("driver-review-rounds", [["0", "Off"], ["1", "1"], ["2", "2"], ["3", "3"]], String(rounds ?? 0),
           (value, _e, cx) => this.saveTasks({ review_rounds: Number(value) }, cx))));
@@ -395,14 +413,15 @@ export default class InboxSettings extends View {
   }
 
   sidebar(t) {
-    const item = (id, label) => this.navItem(t, id, label);
+    const item = (id, label, badge = null) => this.navItem(t, id, label, null, badge);
     if (this.tab === "connections") return v_flex().flex_none().w(190).h_full().p(10).gap(2).border_r(1).border_color(t.border).children([item("ingress", "Ingress")]);
     if (this.tab === "workspace") return v_flex().flex_none().w(190).h_full().p(10).gap(2).border_r(1).border_color(t.border).children([item("spaces", "Spaces")]);
     if (this.tab === "system") return v_flex().flex_none().w(190).h_full().p(10).gap(2).border_r(1).border_color(t.border).children([item("diagnostics", "Diagnostics")]);
     return v_flex().flex_none().w(190).h_full().p(10).gap(2).border_r(1).border_color(t.border)
       .child(div().px(8).pt(6).pb(4).text_size(TEXT.label).font_medium().text_color(t.dim).child("Roles"))
-      .child(item("coordinator", "Coordinator"))
-      .child(item("driver", "Driver"))
+      .child(item("coordinator", "Coordinator", "system"))
+      .child(item("driver", "Driver", "system"))
+      .child(div().h(1).mx(8).my(6).bg(t.border))
       .child(item("role:builtin", "Builtin"))
       .child(item("role:user", "User"))
       .child(item("role:project", "Project"))
@@ -490,14 +509,15 @@ export default class InboxSettings extends View {
       .child(this.filePicker(t, category, kind, files, cx));
   }
 
-  navItem(t, id, label, icon = null) {
+  navItem(t, id, label, icon = null, badge = null) {
     const on = this.section === id;
     return h_flex().id(`collie-settings-${id}`).h(30).gap(8).px(8).flex_none().items_center().rounded(RADIUS.card)
       .when(on, (el) => el.bg(t.raised))
       .cursor_pointer().hover((s) => s.bg(on ? t.raised : t.hover))
       .on_click((_e, cx) => { this.section = id; cx.notify(); })
       .when(Boolean(icon), (el) => el.child(svg(icon).size(14).text_color(on ? t.accent : t.dim)))
-      .child(div().flex_1().text_size(TEXT.body).text_color(on ? t.foreground : t.muted).child(label));
+      .child(div().flex_1().text_size(TEXT.body).text_color(on ? t.foreground : t.muted).child(label))
+      .when(Boolean(badge), (el) => el.child(div().h(16).px(5).flex().items_center().rounded(4).bg(t.raised).text_size(10).text_color(t.dim).child(badge)));
   }
 
   body(t) {
