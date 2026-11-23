@@ -11,6 +11,7 @@ const AGENTS = [["claude", "Claude"], ["codex", "Codex"]];
 
 export default class InboxSettings extends View {
   init(_props, cx) {
+    this.tab = "collaboration";
     this.section = "coordinator";
     this.cfg = {};
     this.raw = null;
@@ -357,13 +358,12 @@ export default class InboxSettings extends View {
         .child(button("ingress-add-source", "Add source", { kind: "secondary", onClick: (_e, cx) => this.addSource(cx) })));
   }
 
-  playbooksSection(t) {
+  playbookDetail(t, id) {
+    const playbook = this.playbooks.find((item) => item.id === id);
+    if (!playbook) return div().text_size(TEXT.label).text_color(t.dim).child("Playbook not found");
     return v_flex()
-      .child(this.heading(t, "Playbooks", "Task workflow prompts. Edit files under the source shown; built-in playbooks can be overridden by user or project playbooks."))
-      .when(!this.playbooks.length, (el) => el.child(div().py(12).text_size(TEXT.label).text_color(t.dim).child("No playbooks loaded.")))
-      .children(this.playbooks.map((playbook) => this.row(t, playbook.title ?? playbook.id,
-        `${playbook.id}@${playbook.version} · ${playbook.origin ?? playbook.source ?? "builtin"} · ${playbook.file ?? "role registry"}`,
-        div().text_size(TEXT.label).text_color(t.dim).child(playbook.origin === "builtin" ? "Built-in · editable by override" : "Custom"))));
+      .child(this.heading(t, playbook.title ?? playbook.id, `${playbook.id}@${playbook.version}`))
+      .child(div().text_size(TEXT.body).text_color(t.foreground).line_height(1.5).child(playbook.instructions ?? "No prompt body."));
   }
 
   roleDetail(t, role) {
@@ -372,10 +372,45 @@ export default class InboxSettings extends View {
     if (role.id === "reviewer") return this.reviewer(t);
     return v_flex()
       .child(this.heading(t, role.title ?? role.id, role.purpose ?? "Custom role"))
-      .child(this.row(t, "Source", "Loaded from the role registry.", div().text_size(TEXT.label).text_color(t.dim).child(role.origin ?? role.source ?? "custom")))
       .when(Array.isArray(role.duties) && role.duties.length, (el) => el.child(this.row(t, "Duties", role.duties.join(" · "), div())))
       .when(Array.isArray(role.prohibitions) && role.prohibitions.length, (el) => el.child(this.row(t, "Does not", role.prohibitions.join(" · "), div())))
       .child(this.row(t, "Runner", "Runner overrides for custom roles are not editable here yet.", div().text_size(TEXT.label).text_color(t.dim).child("Read-only")));
+  }
+
+  topTab(t, id, label) {
+    const on = this.tab === id;
+    return div().id(`collie-settings-tab-${id}`).h(30).px(12).flex().items_center().rounded(RADIUS.card)
+      .when(on, (el) => el.bg(t.raised))
+      .cursor_pointer().hover((s) => s.bg(on ? t.raised : t.hover))
+      .on_click((_e, cx) => {
+        this.tab = id;
+        this.section = id === "collaboration" ? "coordinator" : id === "connections" ? "ingress" : id === "workspace" ? "spaces" : "diagnostics";
+        cx.notify();
+      })
+      .child(div().text_size(TEXT.body).text_color(on ? t.foreground : t.muted).child(label));
+  }
+
+  sidebar(t) {
+    const system = this.roles.filter((role) => ["coordinator", "driver"].includes(role.id));
+    const builtin = this.roles.filter((role) => role.origin === "builtin" && !["coordinator", "driver"].includes(role.id));
+    const user = this.roles.filter((role) => role.origin === "user");
+    const project = this.roles.filter((role) => role.origin === "project");
+    const group = (title, roles) => roles.length
+      ? [div().px(8).pt(10).pb(4).text_size(TEXT.label).font_medium().text_color(t.dim).child(title), ...roles.map((role) => this.navItem(t, role.id, role.title ?? role.id, role.id === "coordinator" ? sectionIcon : null))]
+      : [];
+    const playbookGroup = (title, origin) => {
+      const rows = this.playbooks.filter((book) => (book.origin ?? "builtin") === origin);
+      return rows.length ? [div().px(8).pt(10).pb(4).text_size(TEXT.label).font_medium().text_color(t.dim).child(title), ...rows.map((book) => this.navItem(t, `playbook:${book.id}`, book.title ?? book.id))] : [];
+    };
+    if (this.tab === "connections") return v_flex().flex_none().w(190).h_full().p(10).gap(2).border_r(1).border_color(t.border).children([this.navItem(t, "ingress", "Ingress", "mods/collie-chrome/network.svg")]);
+    if (this.tab === "workspace") return v_flex().flex_none().w(190).h_full().p(10).gap(2).border_r(1).border_color(t.border).children([this.navItem(t, "spaces", "Spaces")]);
+    if (this.tab === "system") return v_flex().flex_none().w(190).h_full().p(10).gap(2).border_r(1).border_color(t.border).children([this.navItem(t, "diagnostics", "Diagnostics")]);
+    return v_flex().flex_none().w(190).h_full().p(10).gap(2).border_r(1).border_color(t.border)
+      .child(div().px(8).pt(6).pb(4).text_size(TEXT.label).font_medium().text_color(t.dim).child("Roles"))
+      .children([...group("System roles", system), ...group("Builtin roles", builtin), ...group("User roles", user), ...group("Project roles", project)])
+      .child(div().px(8).pt(14).pb(4).text_size(TEXT.label).font_medium().text_color(t.dim).child("Playbooks"))
+      .children([...playbookGroup("Builtin playbooks", "builtin"), ...playbookGroup("User playbooks", "user"), ...playbookGroup("Project playbooks", "project")])
+      .child(div().px(8).pt(14).text_size(10).text_color(t.dim).child("加载优先级：builtin < user < project"));
   }
 
   navItem(t, id, label, icon = null) {
@@ -393,7 +428,7 @@ export default class InboxSettings extends View {
     if (this.section === "driver") return this.levelBar(t).child(this.driver(t));
     if (this.section === "reviewer") return this.levelBar(t).child(this.reviewer(t));
     if (this.section === "helper") return this.helper(t);
-    if (this.section === "playbooks") return this.playbooksSection(t);
+    if (this.section.startsWith("playbook:")) return this.playbookDetail(t, this.section.slice("playbook:".length));
     if (this.section === "ingress") return this.ingress(t);
     const role = this.roles.find((item) => item.id === this.section);
     if (role) return this.levelBar(t).child(this.roleDetail(t, role));
@@ -404,33 +439,25 @@ export default class InboxSettings extends View {
 
   render(_cx) {
     const t = theme();
-    const nav = v_flex().flex_none().w(190).h_full().p(10).gap(2).border_r(1).border_color(t.border)
-      .child(div().px(8).pt(6).pb(10).text_size(TEXT.title).font_semibold().text_color(t.foreground).child("Collie"))
-      .child(div().px(8).pt(6).pb(4).text_size(TEXT.label).font_medium().text_color(t.dim).child("System roles"))
-      .children(this.roles.filter((role) => ["coordinator", "driver"].includes(role.id)).map((role) => this.navItem(t, role.id, role.title ?? role.id, role.id === "coordinator" ? sectionIcon : null)))
-      .child(div().px(8).pt(10).pb(4).text_size(TEXT.label).font_medium().text_color(t.dim).child("Default roles"))
-      .children(this.roles.filter((role) => role.origin === "builtin" && !["coordinator", "driver"].includes(role.id)).map((role) => this.navItem(t, role.id, role.title ?? role.id)))
-      .child(div().px(8).pt(10).pb(4).text_size(TEXT.label).font_medium().text_color(t.dim).child("Custom roles"))
-      .children(this.roles.filter((role) => role.origin && role.origin !== "builtin").map((role) => this.navItem(t, role.id, role.title ?? role.id)))
-      .child(this.navItem(t, "playbooks", "Playbooks"))
-      .child(this.navItem(t, "helper", "Helper"))
-      .child(div().px(8).pt(14).pb(4).text_size(TEXT.label).font_medium().text_color(t.dim).child("Connections"))
-      .child(this.navItem(t, "ingress", "Ingress", "mods/collie-chrome/network.svg"))
-      .child(div().px(8).pt(14).pb(4).text_size(TEXT.label).font_medium().text_color(t.dim).child("Workspace"))
-      .child(this.navItem(t, "spaces", "Spaces"))
-      .child(div().px(8).pt(14).pb(4).text_size(TEXT.label).font_medium().text_color(t.dim).child("System"))
-      .child(this.navItem(t, "diagnostics", "Diagnostics"));
-    const card = h_flex().id("collie-settings").track_focus(this.handle).w_full().h_full().max_h(900).min_h(0).items_start()
+    const nav = this.sidebar(t);
+    const tabs = h_flex().flex_none().h(42).px(12).gap(4).items_center().border_b_1().border_color(t.border)
+      .child(div().px(8).text_size(TEXT.title).font_semibold().text_color(t.foreground).child("Collie"))
+      .child(this.topTab(t, "collaboration", "协作模式"))
+      .child(this.topTab(t, "connections", "连接"))
+      .child(this.topTab(t, "workspace", "工作区"))
+      .child(this.topTab(t, "system", "系统"));
+    const content = div().relative().flex_1().min_w(0).h_full()
+      .child(div().id("collie-settings-body").size_full().overflow_y_scroll()
+        .child(div().px(28).py(22)
+          .child(this.body(t))
+          .when(this.error, (el) => el.child(div().pt(16).text_size(TEXT.label).text_color(t.ansi1).child(this.error)))))
+      .child(Scrollbar.vertical("collie-settings-body").absolute().inset_0());
+    const card = v_flex().id("collie-settings").track_focus(this.handle).w_full().h_full().max_h(900).min_h(0)
       .rounded(12).border_1().border_color(t.border).bg(t.popover).shadow_lg().overflow_hidden()
       .on_click((_e, cx) => cx.stop_propagation())
       .on_key_down((e, cx) => { if (e.key === "escape") this.close(); })
-      .child(nav)
-      .child(div().relative().flex_1().min_w(0).h_full()
-        .child(div().id("collie-settings-body").size_full().overflow_y_scroll()
-          .child(div().px(28).py(22)
-            .child(this.body(t))
-            .when(this.error, (el) => el.child(div().pt(16).text_size(TEXT.label).text_color(t.ansi1).child(this.error)))))
-        .child(Scrollbar.vertical("collie-settings-body").absolute().inset_0()));
+      .child(tabs)
+      .child(h_flex().flex_1().min_h(0).items_start().child(nav).child(content));
     return div().id("collie-settings-root").size_full().flex().items_center().justify_center()
       .on_click(() => this.close()).child(card);
   }

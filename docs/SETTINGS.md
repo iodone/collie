@@ -142,7 +142,13 @@ Task 实际使用哪个 playbook、版本和来源，要从 task facts / Decisio
 
 ## 3. Settings 导航
 
-左侧导航分组：
+顶层 tab：
+
+```text
+协作模式 | 连接 | 工作区 | 系统
+```
+
+`协作模式` 下的左侧导航：
 
 ```text
 System roles
@@ -175,8 +181,9 @@ System
 规则：
 
 - `System roles` 始终置顶。
-- `Custom roles` 为空时隐藏整组，不显示空标题。
-- 同名 role 只显示最终生效项；详情里显示来源和覆盖路径。
+- 空组隐藏，不显示空标题。
+- 分组本身就是来源；列表项不重复显示 origin / path。
+- 加载优先级只用一行文字说明：`builtin < user < project`。
 - Playbook 使用 `playbook:<id>` 作为 section key，避免和 role id 冲突。
 
 ---
@@ -187,22 +194,12 @@ System
 
 ```text
 Title
-System fixed · builtin
-file path
-
 Purpose
 Duties
 Prohibitions
 ```
 
-来源 badge：
-
-| origin | badge | 定义来源 |
-|---|---|---|
-| builtin system | System fixed | 安装物，不可覆盖 |
-| builtin default | Built-in | 可被 user / project 同名文件覆盖 |
-| user | User | 文件系统维护 |
-| project | Project | 文件系统维护 |
+来源由所在分组表达，不在详情里重复显示。
 
 ### 4.2 系统角色
 
@@ -211,7 +208,6 @@ Prohibitions
 ```text
 Definition
   System fixed. Only runner settings are editable.
-  file: .../roles/coordinator.md
 
 Runner
   Agent
@@ -230,24 +226,18 @@ Runner
 例如 `reviewer`：
 
 ```text
-Source: builtin
-file: .../roles/reviewer.md
-
 Definition: built-in
 Runner: editable
 ```
 
 - 可以编辑 runner。
 - 可以通过 user/project 同名 role 覆盖定义。
-- 覆盖后显示 `origin: user/project` 和覆盖文件路径。
+- 覆盖后归入 `User roles` / `Project roles` 分组。
 
 ### 4.4 自定义角色
 
 ```text
 Title
-Source: user / project
-file: ...
-
 Duties / Prohibitions
 Runner: read-only
 ```
@@ -304,8 +294,6 @@ Project
 ```text
 Title
 id@version
-origin
-file
 
 Body
   <prompt preview>
@@ -331,7 +319,7 @@ Settings 不创建或覆盖 playbook。文件位置就是唯一入口：
 <project>/.collie/playbooks/<id>.md
 ```
 
-覆盖内置 playbook 时使用同名 id；下次加载后显示新的 `origin` 和 `file`。
+覆盖内置 playbook 时使用同名 id；下次加载后归入 `User playbooks` / `Project playbooks` 分组。
 
 不在 Settings 内做 Markdown frontmatter / body 编辑器。
 
