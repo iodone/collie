@@ -183,7 +183,7 @@ System
 - `System roles` 始终置顶。
 - 空组隐藏，不显示空标题。
 - 分组本身就是来源；列表项不重复显示 origin / path。
-- 加载优先级只用一行文字说明：`builtin < user < project`。
+- 加载优先级只在文档中说明：`builtin < user < project`；Settings 页面不重复展示。
 - Playbook 使用 `playbook:<id>` 作为 section key，避免和 role id 冲突。
 
 ---

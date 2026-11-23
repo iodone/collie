@@ -53,7 +53,7 @@ export default class InboxSettings extends View {
     this.driverModel.set_value(this.taskCfg.driver?.model ?? "");
     this.reviewerModel.set_value(this.taskCfg.reviewer?.model ?? "");
     try {
-      const result = await exec(`${appHome()}/bin/collie`, ["roles", "list", "--json"]);
+      const result = await exec(`${appHome()}/bin/collie`, ["roles", "list"]);
       const catalog = JSON.parse(result.stdout || "{}");
       this.roles = Array.isArray(catalog.roles) ? catalog.roles : [];
       this.playbooks = Array.isArray(catalog.playbooks) ? catalog.playbooks : [];
@@ -409,8 +409,7 @@ export default class InboxSettings extends View {
       .child(div().px(8).pt(6).pb(4).text_size(TEXT.label).font_medium().text_color(t.dim).child("Roles"))
       .children([...group("System roles", system), ...group("Builtin roles", builtin), ...group("User roles", user), ...group("Project roles", project)])
       .child(div().px(8).pt(14).pb(4).text_size(TEXT.label).font_medium().text_color(t.dim).child("Playbooks"))
-      .children([...playbookGroup("Builtin playbooks", "builtin"), ...playbookGroup("User playbooks", "user"), ...playbookGroup("Project playbooks", "project")])
-      .child(div().px(8).pt(14).text_size(10).text_color(t.dim).child("加载优先级：builtin < user < project"));
+      .children([...playbookGroup("Builtin playbooks", "builtin"), ...playbookGroup("User playbooks", "user"), ...playbookGroup("Project playbooks", "project")]);
   }
 
   navItem(t, id, label, icon = null) {
