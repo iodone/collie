@@ -22,13 +22,13 @@ export default class InboxSettings extends View {
     this.playbooks = [];
     this.savedAt = 0;
     this.model = InputState.new({ placeholder: "CLI default" });
-    this.workerModel = InputState.new({ placeholder: "CLI default" });
+    this.driverModel = InputState.new({ placeholder: "CLI default" });
     this.reviewerModel = InputState.new({ placeholder: "CLI default" });
     this.sourceInputs = {};
     this.clientInputs = {};
     this.newSource = InputState.new({ placeholder: "source name" });
     this.model.on("blur", (_e, cx) => this.saveCoordinator({ model: this.model.content().text.trim() }, cx));
-    this.workerModel.on("blur", (_e, cx) => this.saveRole("worker", { model: this.workerModel.content().text.trim() }, cx));
+    this.driverModel.on("blur", (_e, cx) => this.saveRole("driver", { model: this.driverModel.content().text.trim() }, cx));
     this.reviewerModel.on("blur", (_e, cx) => this.saveRole("reviewer", { model: this.reviewerModel.content().text.trim() }, cx));
     this.handle = cx.focus_handle();
     this.handle.focus();
@@ -49,7 +49,7 @@ export default class InboxSettings extends View {
 
     this.taskRaw = await readTextFile(taskSettingsPath(home())).catch(() => null);
     try { this.taskCfg = JSON.parse(this.taskRaw ?? "{}"); } catch { this.taskCfg = {}; }
-    this.workerModel.set_value(this.taskCfg.worker?.model ?? "");
+    this.driverModel.set_value(this.taskCfg.driver?.model ?? "");
     this.reviewerModel.set_value(this.taskCfg.reviewer?.model ?? "");
     try {
       const result = await exec(`${appHome()}/bin/collie`, ["roles", "list", "--json"]);
@@ -58,9 +58,9 @@ export default class InboxSettings extends View {
       this.playbooks = Array.isArray(catalog.playbooks) ? catalog.playbooks : [];
     } catch {
       this.roles = [
-        { id: "coordinator", title: "Coordinator", purpose: "判断、选择 playbook、分发 Ticket/Task" },
-        { id: "worker", title: "Worker", purpose: "实现与提交" },
-        { id: "reviewer", title: "Reviewer", purpose: "设计审查" },
+        { id: "coordinator", title: "Coordinator", purpose: "判断、选择 playbook、分发 Ticket/Task", origin: "builtin" },
+        { id: "driver", title: "Driver", purpose: "按 playbook 编排 task", origin: "builtin" },
+        { id: "reviewer", title: "Reviewer", purpose: "设计审查", origin: "builtin" },
       ];
     }
   }
@@ -272,7 +272,7 @@ export default class InboxSettings extends View {
   coordinator(t) {
     const current = this.cfg.everywhere?.coordinator ?? {};
     return v_flex()
-      .child(this.heading(t, "Coordinator", "The chat and decision role. New sessions inherit these defaults."))
+      .child(this.heading(t, "Coordinator", "System role · definition read-only. New sessions inherit these runner defaults."))
       .child(this.row(t, "Agent", "CLI used for Coordinator chat and ingress decisions.",
         segmented("coordinator-agent", AGENTS, current.cli ?? "claude", (cli, _e, cx) => this.saveCoordinator({ cli }, cx))))
       .child(this.row(t, "Model", "CLI default, or a model id for this role.",
@@ -286,7 +286,7 @@ export default class InboxSettings extends View {
 
   roleEditor(t, role, title, about) {
     const current = this.taskCfg[role] ?? {};
-    const model = role === "worker" ? this.workerModel : this.reviewerModel;
+    const model = role === "driver" ? this.driverModel : this.reviewerModel;
     return v_flex()
       .child(this.heading(t, title, about))
       .child(this.row(t, "Agent", "CLI used for this role; task-level selection can override it.",
@@ -297,11 +297,11 @@ export default class InboxSettings extends View {
         segmented(`${role}-effort`, EFFORTS, current.effort ?? "high", (effort, _e, cx) => this.saveRole(role, { effort }, cx), { size: "lg" })));
   }
 
-  worker(t) {
+  driver(t) {
     const rounds = this.taskCfg.tasks?.review_rounds;
-    return this.roleEditor(t, "worker", "Worker", "Task execution role. Settings apply to newly started workers.")
+    return this.roleEditor(t, "driver", "Driver", "System role · definition read-only. Reads the playbook and starts helper roles.")
       .child(this.row(t, "Review", "Review is enabled per task; this is the default number of rounds.",
-        segmented("worker-review-rounds", [["0", "Off"], ["1", "1"], ["2", "2"], ["3", "3"]], String(rounds ?? 0),
+        segmented("driver-review-rounds", [["0", "Off"], ["1", "1"], ["2", "2"], ["3", "3"]], String(rounds ?? 0),
           (value, _e, cx) => this.saveTasks({ review_rounds: Number(value) }, cx))));
   }
 
@@ -357,13 +357,22 @@ export default class InboxSettings extends View {
         .child(button("ingress-add-source", "Add source", { kind: "secondary", onClick: (_e, cx) => this.addSource(cx) })));
   }
 
+  playbooksSection(t) {
+    return v_flex()
+      .child(this.heading(t, "Playbooks", "Task workflow prompts. Edit files under the source shown; built-in playbooks can be overridden by user or project playbooks."))
+      .when(!this.playbooks.length, (el) => el.child(div().py(12).text_size(TEXT.label).text_color(t.dim).child("No playbooks loaded.")))
+      .children(this.playbooks.map((playbook) => this.row(t, playbook.title ?? playbook.id,
+        `${playbook.id}@${playbook.version} · ${playbook.origin ?? playbook.source ?? "builtin"} · ${playbook.file ?? "role registry"}`,
+        div().text_size(TEXT.label).text_color(t.dim).child(playbook.origin === "builtin" ? "Built-in · editable by override" : "Custom"))));
+  }
+
   roleDetail(t, role) {
     if (role.id === "coordinator") return this.coordinator(t);
-    if (role.id === "worker") return this.worker(t);
+    if (role.id === "driver") return this.driver(t);
     if (role.id === "reviewer") return this.reviewer(t);
     return v_flex()
       .child(this.heading(t, role.title ?? role.id, role.purpose ?? "Custom role"))
-      .child(this.row(t, "Source", "Loaded from the role registry.", div().text_size(TEXT.label).text_color(t.dim).child(role.source ?? "custom")))
+      .child(this.row(t, "Source", "Loaded from the role registry.", div().text_size(TEXT.label).text_color(t.dim).child(role.origin ?? role.source ?? "custom")))
       .when(Array.isArray(role.duties) && role.duties.length, (el) => el.child(this.row(t, "Duties", role.duties.join(" · "), div())))
       .when(Array.isArray(role.prohibitions) && role.prohibitions.length, (el) => el.child(this.row(t, "Does not", role.prohibitions.join(" · "), div())))
       .child(this.row(t, "Runner", "Runner overrides for custom roles are not editable here yet.", div().text_size(TEXT.label).text_color(t.dim).child("Read-only")));
@@ -381,9 +390,10 @@ export default class InboxSettings extends View {
 
   body(t) {
     if (this.section === "coordinator") return this.levelBar(t).child(this.coordinator(t));
-    if (this.section === "worker") return this.levelBar(t).child(this.worker(t));
+    if (this.section === "driver") return this.levelBar(t).child(this.driver(t));
     if (this.section === "reviewer") return this.levelBar(t).child(this.reviewer(t));
     if (this.section === "helper") return this.helper(t);
+    if (this.section === "playbooks") return this.playbooksSection(t);
     if (this.section === "ingress") return this.ingress(t);
     const role = this.roles.find((item) => item.id === this.section);
     if (role) return this.levelBar(t).child(this.roleDetail(t, role));
@@ -396,8 +406,13 @@ export default class InboxSettings extends View {
     const t = theme();
     const nav = v_flex().flex_none().w(190).h_full().p(10).gap(2).border_r(1).border_color(t.border)
       .child(div().px(8).pt(6).pb(10).text_size(TEXT.title).font_semibold().text_color(t.foreground).child("Collie"))
-      .child(div().px(8).pt(6).pb(4).text_size(TEXT.label).font_medium().text_color(t.dim).child("Roles"))
-      .children(this.roles.map((role) => this.navItem(t, role.id, role.title ?? role.id, role.id === "coordinator" ? sectionIcon : null)))
+      .child(div().px(8).pt(6).pb(4).text_size(TEXT.label).font_medium().text_color(t.dim).child("System roles"))
+      .children(this.roles.filter((role) => ["coordinator", "driver"].includes(role.id)).map((role) => this.navItem(t, role.id, role.title ?? role.id, role.id === "coordinator" ? sectionIcon : null)))
+      .child(div().px(8).pt(10).pb(4).text_size(TEXT.label).font_medium().text_color(t.dim).child("Default roles"))
+      .children(this.roles.filter((role) => role.origin === "builtin" && !["coordinator", "driver"].includes(role.id)).map((role) => this.navItem(t, role.id, role.title ?? role.id)))
+      .child(div().px(8).pt(10).pb(4).text_size(TEXT.label).font_medium().text_color(t.dim).child("Custom roles"))
+      .children(this.roles.filter((role) => role.origin && role.origin !== "builtin").map((role) => this.navItem(t, role.id, role.title ?? role.id)))
+      .child(this.navItem(t, "playbooks", "Playbooks"))
       .child(this.navItem(t, "helper", "Helper"))
       .child(div().px(8).pt(14).pb(4).text_size(TEXT.label).font_medium().text_color(t.dim).child("Connections"))
       .child(this.navItem(t, "ingress", "Ingress", "mods/collie-chrome/network.svg"))

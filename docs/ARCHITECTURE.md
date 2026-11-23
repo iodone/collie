@@ -539,7 +539,33 @@ body
 
 body 是交给 driver 的编排 prompt。
 
-### 9.3 命令边界
+### 9.3 配置层级
+
+```text
+system fixed
+  ~/.config/herdr-core/templates/roles/coordinator.md
+  ~/.config/herdr-core/templates/roles/driver.md
+
+built-in defaults
+  templates/roles/{reviewer,verifier,planner,researcher,watcher}.md
+  templates/playbooks/*.md
+
+user custom
+  ~/.config/collie/roles/*.md
+  ~/.config/collie/playbooks/*.md
+
+project custom
+  <project>/.collie/roles/*.md
+  <project>/.collie/playbooks/*.md
+```
+
+- `coordinator` / `driver` 的系统定义不可覆盖，只允许改 runner 配置。
+- 默认 role 和 built-in playbook 可以被 user / project 覆盖。
+- 每个定义记录 `origin: builtin | user | project` 和实际文件路径。
+- 不再加载 `<project>/.agents/skills/collie`。
+- Task 记录实际使用的 playbook / role 来源。
+
+### 9.4 命令边界
 
 | 动作 | 命令 |
 |---|---|

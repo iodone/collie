@@ -355,20 +355,33 @@ Coordinator chooses playbook
 加载层级：
 
 ```text
-built-in
-  → ~/.config/collie/roles, playbooks
-  → <project>/.collie/roles, playbooks
-  → <project>/.agents/skills/collie/roles, playbooks
-  → task / space override
+system fixed roles
+  coordinator / driver
+
+built-in defaults
+  reviewer / verifier / planner / researcher / watcher
+  built-in playbooks
+
+user custom
+  ~/.config/collie/roles
+  ~/.config/collie/playbooks
+
+project custom
+  <project>/.collie/roles
+  <project>/.collie/playbooks
 ```
 
 规则：
 
-- 后者覆盖前者
-- 未知 role / playbook fail closed
-- repo 不能自动提高 driver/helper 权限
-- Event payload 不能选择 role/playbook
-- Task 锁定 playbook id/version
+- `coordinator` / `driver` 的定义不可覆盖；只允许配置 runner（agent / model / effort / permission）。
+- 默认 role 和 built-in playbook 可以被 user / project 覆盖。
+- user 覆盖 built-in，project 覆盖 user；Task 记录实际 `origin`。
+- 每个 role / playbook 保留 `origin: builtin | user | project` 和实际文件路径。
+- 不再加载 `<project>/.agents/skills/collie`。
+- 未知 role / playbook fail closed。
+- repo 不能自动提高 driver / helper 权限。
+- Event payload 不能选择 role / playbook。
+- Task 锁定 playbook id / version。
 
 ---
 

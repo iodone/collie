@@ -23,7 +23,7 @@ OLD_INSTRUCTIONS = os.path.join(HOME, ".herdr", "instructions")
 ASSISTANT_TEMPLATES = ("assistant", "coordinator", "collie-coordinator")  # "coordinator": Assistants started before the rename
 DEFAULTS = {"tasks": {"merge": "ask", "review_rounds": 0, "must_fix": "major", "max_running": MAX_RUNNING, "worktrees": True,
                       "start_notes": "", "finish_notes": "", "archive_after": 7, "proof": True, "verify": False, "base": "", "branch": ""},
-            "automations": {"enabled": True}, "worker": {}, "reviewer": {}, "coordinator": {}, "backup": {},
+            "automations": {"enabled": True}, "driver": {}, "worker": {}, "reviewer": {}, "coordinator": {}, "backup": {},
             "agents": {"reactions": True, "feedback": True, "feedback_repo": "iodone/collie"}}
 LEVELS = ["blocker", "major", "minor"]
 
@@ -200,7 +200,8 @@ def worker_pick(s, task, space=None, agent=None):
     """What a task's agent runs on, {agent, model, effort, fast, perm}: Settings' worker, then the
     task's own --agent / --model / --effort, then `agent` (start --agent). Another CLI than
     Settings' starts from its own defaults (models and permissions differ per CLI)."""
-    pick = dict(settings_for(s, space)["worker"] or {})
+    cfg = settings_for(s, space)
+    pick = dict((cfg.get("driver") or cfg.get("worker") or {}))
     for key in (task.get("agent"), agent):
         if key and key != pick.get("agent"):
             pick = {"agent": key}
@@ -401,7 +402,7 @@ def task_settings(s, t, space=None, argv=None):
     model, effort = argv_model(argv)
     text = agent + (f", model {model}" if model else "") + (f", effort {effort}" if effort else "")
     a_by = "task" if any(t.get(f) for f in ("agent", "model", "effort")) else \
-        by_layer(s, space, "worker", None, bool(cfg.get("worker")), False)
+        by_layer(s, space, "driver" if cfg.get("driver") else "worker", None, bool(cfg.get("driver") or cfg.get("worker")), False)
     add("Agent", text, {"agent": agent, "model": model, "effort": effort}, a_by)
     return lines
 

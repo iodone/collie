@@ -13,6 +13,7 @@ export type CollaborationRole = {
   modes?: Record<string, { input?: string; output?: string; tools?: string[] }>;
   prompt?: string;
   source?: string;
+  origin?: "builtin" | "user" | "project";
   file?: string;
 };
 
@@ -21,6 +22,7 @@ export type CollaborationPlaybook = {
   title: string;
   version: number;
   source?: string;
+  origin?: "builtin" | "user" | "project";
   file?: string;
   instructions?: string;
 };
@@ -37,6 +39,8 @@ function defaultBuiltinDir(): string {
   ].filter(Boolean);
   return candidates.find((dir) => existsSync(join(dir, "roles")) && existsSync(join(dir, "playbooks"))) ?? candidates[0] ?? "templates";
 }
+
+const SYSTEM_ROLES = new Set(["coordinator", "driver"]);
 
 const PLAYBOOK_ALIASES: Record<string, string> = {
   "dsx-playbook-feature": "feature",
@@ -74,29 +78,45 @@ function readDefinitions<T>(directory: string): Definition<T>[] {
 export class CollaborationRegistry {
   readonly roles = new Map<string, CollaborationRole>();
   readonly playbooks = new Map<string, CollaborationPlaybook>();
+  #baseRoles: Map<string, CollaborationRole> | null = null;
+  #basePlaybooks: Map<string, CollaborationPlaybook> | null = null;
 
   constructor(readonly configDir: string, builtinDir = defaultBuiltinDir()) {
-    this.loadDirectory(builtinDir);
-    this.loadDirectory(configDir);
+    this.loadDirectory(builtinDir, "builtin");
+    this.loadDirectory(configDir, "user");
+    this.#baseRoles = new Map(this.roles);
+    this.#basePlaybooks = new Map(this.playbooks);
   }
 
-  /** User config first; a project may add or override by id under .collie/. */
-  loadDirectory(root: string): void {
+  /** Load a layer; system roles keep their built-in definition. */
+  loadDirectory(root: string, origin: "builtin" | "user" | "project" = "user"): void {
     for (const { value: role, body, file } of readDefinitions<CollaborationRole>(join(root, "roles"))) {
       if (!role.id || !role.title) throw new Error("role requires id and title");
-      this.roles.set(role.id, { ...role, prompt: file, file });
+      if (origin !== "builtin" && SYSTEM_ROLES.has(role.id)) {
+        throw new Error(`${role.id} is a system role and cannot be overridden`);
+      }
+      this.roles.set(role.id, { ...role, origin, prompt: file, file });
     }
     for (const { value: playbook, body, file } of readDefinitions<CollaborationPlaybook>(join(root, "playbooks"))) {
       if (!playbook.id || !playbook.title || !Number.isInteger(playbook.version)) {
         throw new Error("playbook requires id, title and version");
       }
-      this.playbooks.set(playbook.id, { ...playbook, file, instructions: body.trim() });
+      this.playbooks.set(playbook.id, { ...playbook, origin, file, instructions: body.trim() });
+    }
+    if (origin === "user") {
+      this.#baseRoles = new Map(this.roles);
+      this.#basePlaybooks = new Map(this.playbooks);
     }
   }
 
+  /** Project layer is .collie only; each load starts from the built-in + user base. */
   loadProject(folder: string): void {
-    this.loadDirectory(join(folder, ".collie"));
-    this.loadDirectory(join(folder, ".agents", "skills", "collie"));
+    const root = join(folder, ".collie");
+    this.roles.clear();
+    this.playbooks.clear();
+    if (this.#baseRoles) for (const [id, role] of this.#baseRoles) this.roles.set(id, role);
+    if (this.#basePlaybooks) for (const [id, playbook] of this.#basePlaybooks) this.playbooks.set(id, playbook);
+    this.loadDirectory(root, "project");
   }
 
   snapshot() {
