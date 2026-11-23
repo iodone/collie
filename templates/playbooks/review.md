@@ -2,60 +2,74 @@
 kind: "playbook"
 id: "review"
 title: "Review"
-version: 3
+version: 4
 ---
 
-这是一次独立评审：只审别人或别处已经完成的改动，不实现、不验证。
+# Review
 
-## 1. 确定范围
+## 目的
 
-- 审哪个 MR / PR / commit range / worktree。
-- 固定 base 和 head；后续所有判断只对这个 head 有效。
-- 如果本任务也负责实现，不要使用这个 playbook；应在 feature / bug-fix / refactoring 的 review 步骤里调用 reviewer。
+评审一个已经在别处完成的 diff。  
+这个 playbook 只做 review，不做实现，也不做验证。
 
-## 2. 先读已有讨论
+## 输入
 
-- 读 diff 上已有的人类 note、评审记录和 brief。
-- 已经提出且回应过的问题不要重开；真没修好才重开，并说明这次复现为什么不同。
+- review target：MR / PR / commit range / worktree
+- base 和 head
+- 完整 diff
+- brief / 原始需求
+- 已有讨论和评审记录
 
-## 3. 建证据面
+## 流程
 
-- 把 worktree 拉到 head，读完整树，不只读 diff。
-- 有结构索引 / 调用图就先建索引。
-- 没有索引就降级 grep，并在报告中标明「降级取证」。
+### 1. 固定范围
 
-## 4. 三轴审查
+确定要审的 diff 和 base/head。  
+如果本任务也负责实现，不要使用这个 playbook；在实现流程里单独调用 reviewer。
 
-driver 启动 reviewer；reviewer 按自己的 role prompt 做三轴审查：
+### 2. 先读已有讨论
+
+读 diff 上的 note、评审记录和 brief。  
+已经提出且回应过的问题不要重开；真没修好才重开，并说明这次复现为什么不同。
+
+### 3. 建证据面
+
+把 worktree 拉到 head，读完整树。  
+有结构索引就建索引；没有就降级 grep，并在报告中标注「降级取证」。
+
+### 4. 调用 reviewer
+
+reviewer 按自己的三轴判据审查：
 
 ```text
 Spec / Standards / 结构
 ```
 
-playbook 不复制三轴判据；判据只在 reviewer role 中维护。
+playbook 不复制三轴细则；判据由 reviewer role 持有。
 
-## 5. Findings
+### 5. 收 findings
 
-reviewer 按以下级别报告：
+reviewer 按 `Important / Nit / Pre-existing` 报告。  
+每条 finding 给出位置、证据、级别和修复方向；每条都要处理或写明不处理的理由。
 
-```text
-Important / Nit / Pre-existing
-```
+### 6. 分开 review 和 unproven
 
-每条给出文件、行或可复核位置、证据和修复方向。  
-每条 finding 必须被处理：修掉，或写明理由后 resolve。
-
-## 6. 分开写 review 和 unproven
-
-- `review`：该不该这样写，三轴 findings。
-- `unproven`：需要运行、起服务、写测试才能证明的内容；交给 verifier。
+- `review`：diff 该不该这样写的判断
+- `unproven`：必须运行、起服务或写测试才能证明的内容
 
 review 不跑验证：
-- 不写测试、不改测试、不跑全量套件。
-- 只允许为确认一条 finding 使用仓库已有命令；单条 ≤1 条命令。
-- 定向取证总时长 ≤20 分钟；超时即停，交现有证据和 `unproven`。
 
-## 7. 回执
+- 不写测试、不改测试、不跑全量套件
+- 只允许确认单条 finding 的仓库已有命令
+- 单条 finding 最多 1 条命令
+- 定向取证总时长 ≤20 分钟
+
+### 7. 交付
+
+reviewer 把报告交给发起 review 的执行者。  
+执行者负责把报告评论到目标 PR / 评审位置；reviewer 不直接写 PR。
+
+报告包含：
 
 ```text
 文件路径
@@ -64,15 +78,14 @@ review 不跑验证：
 未解决问题
 ```
 
-## 8. 结尾
+## 角色
 
-- 报告交付即结束。
-- 需要返工时，findings 交回 driver / Coordinator。
-- 不启动 verifier；验证是另一个 playbook / 另一个 role 的事。
-- 不给合并建议；是否合并由人决定。
+- **reviewer**：读 diff、按三轴判断、交 findings 和 unproven
+- **执行 review 的 agent**：确定范围、启动 reviewer、把报告贴到 PR
+- **人**：决定是否接受、是否合并
 
-## 与 DSX 的差异
+## 结论
 
-DSX standalone review 允许在「无 Important 且获得人类授权」时 approve。  
-Collie 保持一个固定边界：reviewer 不 approve、不 merge，统一由人决定。  
-除此之外，范围、已有讨论、证据面、三轴、findings、unproven、取证预算和回执流程均保留。
+- reviewer 只给 findings，不宣布通过，不给合并建议。
+- 人决定是否接受和合并。
+- 需要运行才能证明的内容进入 `unproven`，交给独立验证。
