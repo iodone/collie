@@ -1,6 +1,8 @@
 # Collie · Settings 设计
 
-> 目标：把“角色定义”和“角色运行配置”分开，把“系统固定”“默认提供”“用户自定义”“项目自定义”分开，让用户能看清来源与优先级。
+> 目标：把“角色定义”和“角色运行配置”分开，把“系统固定”“默认提供”“用户自定义”“项目自定义”分开。
+>
+> **定义编辑只在文件系统完成。** Settings 只负责展示来源、路径和可编辑的 runner；不提供 role / playbook 定义编辑器。
 
 ---
 
@@ -195,12 +197,12 @@ Prohibitions
 
 来源 badge：
 
-| origin | badge | 可编辑定义 |
+| origin | badge | 定义来源 |
 |---|---|---|
-| builtin system | System fixed | 否 |
-| builtin default | Built-in | 可被覆盖 |
-| user | User | 是 |
-| project | Project | 是 |
+| builtin system | System fixed | 安装物，不可覆盖 |
+| builtin default | Built-in | 可被 user / project 同名文件覆盖 |
+| user | User | 文件系统维护 |
+| project | Project | 文件系统维护 |
 
 ### 4.2 系统角色
 
@@ -247,15 +249,17 @@ Source: user / project
 file: ...
 
 Duties / Prohibitions
-Runner
+Runner: read-only
 ```
 
-- 定义只从 Markdown 文件读取；Settings 不内嵌编辑器作为唯一来源。
-- 可以提供 “Open source file” / “Reveal path”。
-- 可以在 runner 中配置 agent / model / effort / permission。
-- 不建议在 Settings 直接删除文件；删除由文件系统完成，Settings 只反映状态。
+- 定义只从 Markdown 文件读取。
+- Settings 不提供 definition 编辑器、创建或删除。
+- 第一版 custom role 的 runner 也是只读；运行配置先只开放给系统/默认角色。
+- 修改、删除都由文件系统完成；Settings 只反映下一次加载后的状态。
 
 ### 4.5 Runner 表单
+
+适用于系统角色和默认角色；custom role 第一版只读。
 
 | 字段 | 控件 | 规则 |
 |---|---|---|
@@ -305,15 +309,12 @@ file
 
 Body
   <prompt preview>
-
-Actions
-  Open source file
-  Copy id
 ```
 
 - 不显示 stage / seat / gate。
 - 不提供 stage 编辑器。
-- 编辑 playbook 就是编辑 Markdown body。
+- 不提供创建、删除或复制动作。
+- 编辑 playbook 就是编辑文件系统中的 Markdown body。
 - 内置 playbook 可以被 user/project 同名文件覆盖；详情显示最终来源。
 - 覆盖时提示：
 
@@ -321,35 +322,18 @@ Actions
 This playbook is overridden by <project>/.collie/playbooks/feature.md.
 ```
 
-### 5.3 创建/覆盖
+### 5.3 文件管理
 
-建议第一版只提供：
-
-```text
-Open source file
-Copy path
-```
-
-不做内置编辑器，避免 Markdown frontmatter 和正文编辑状态复杂化。
-
-后续可增加：
-
-```text
-New playbook
-Override built-in
-```
-
-创建时写入：
+Settings 不创建或覆盖 playbook。文件位置就是唯一入口：
 
 ```text
 ~/.config/collie/playbooks/<id>.md
-```
-
-项目级创建写入：
-
-```text
 <project>/.collie/playbooks/<id>.md
 ```
+
+覆盖内置 playbook 时使用同名 id；下次加载后显示新的 `origin` 和 `file`。
+
+不在 Settings 内做 Markdown frontmatter / body 编辑器。
 
 ---
 
@@ -409,12 +393,13 @@ Invalid override
 ## 7. 不变式
 
 1. 系统角色定义只读，runner 可改。
-2. 默认角色定义可被 user/project 覆盖。
-3. 内置 playbook 可被 user/project 覆盖。
-4. 自定义目录只有两个层级：user、project。
-5. 不加载 `.agents/skills/collie`。
-6. Role 定义与 runner 分开。
-7. Playbook 是 prompt，不提供 stage 编辑器。
-8. 每个加载项有 `origin` 和 `file`。
-9. Task 记录实际 playbook id / version / origin。
-10. 固定角色冲突 fail closed。
+2. Settings 不编辑任何 role / playbook 定义。
+3. 默认角色定义可被 user/project 覆盖。
+4. 内置 playbook 可被 user/project 覆盖。
+5. 自定义目录只有两个层级：user、project。
+6. 不加载 `.agents/skills/collie`。
+7. Role 定义与 runner 分开。
+8. Playbook 是 prompt，不提供 stage 编辑器。
+9. 每个加载项有 `origin` 和 `file`。
+10. Task 记录实际 playbook id / version / origin。
+11. 固定角色冲突 fail closed。
