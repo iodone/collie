@@ -512,6 +512,8 @@ task 状态和 receipt 记录失败原因。Coordinator 读 receipt / facts 后�
 
 ### 9.1 Role
 
+Role 来源、固定角色、默认角色和自定义配置规则见 [`SETTINGS.md`](SETTINGS.md)。
+
 Role 文件：
 
 ```text

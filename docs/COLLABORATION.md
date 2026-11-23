@@ -166,6 +166,21 @@ Playbook 按 task 需要选择 implement / review / verify 等步骤。
 
 Role 定义职责、禁项、输入输出；playbook 负责编排这些 role 的使用方式。
 
+来源规则：
+
+```text
+system fixed   coordinator / driver      定义只读，runner 可配
+built-in       reviewer / verifier / ...  可被 user / project 覆盖
+user           ~/.config/collie/roles    用户自定义
+project        <project>/.collie/roles   项目自定义
+```
+
+每个 role 记录 `origin: builtin | user | project` 和实际文件路径。
+
+`coordinator` / `driver` 的 role 定义不可覆盖；只允许修改 runner。
+
+详细 Settings 交互与配置规则见 [`SETTINGS.md`](SETTINGS.md)。
+
 ```ts
 type Role = {
   id: string;
@@ -351,6 +366,8 @@ Coordinator chooses playbook
 ---
 
 ## 11. 配置
+
+Role / Playbook 的来源、优先级、系统固定规则和 Settings 细节见 [`SETTINGS.md`](SETTINGS.md)。
 
 加载层级：
 
