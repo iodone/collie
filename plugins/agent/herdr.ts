@@ -57,8 +57,7 @@ function spawnAction(decision: Json): Json {
   if (actions.length !== 1) throw new Error(`M1 requires exactly one spawn_task action, got ${actions.length}`);
   const spawn = actions[0].spawn;
   if (!spawn) throw new Error("spawn_task action has no spawn payload");
-  if (spawn.parallel && spawn.parallel !== 1) throw new Error("M1 dispatches one worker per decision");
-  if (spawn.review !== true) throw new Error("ready receipts require a recorded review");
+  if (spawn.parallel && spawn.parallel !== 1) throw new Error("M1 dispatches one driver per decision");
   if (typeof spawn.title !== "string" || !/^(?![\s-])[^{}\r\n]{1,200}$/.test(spawn.title)) {
     throw new Error("spawn.title is not a safe collie-task title");
   }
@@ -86,7 +85,7 @@ export async function spawnHerdrTask(
   const args = [
     "add", spawn.title, "--folder", folder, "--space", space, "--json",
     "--prompt-file", spawn.brief_ref, "--worktree",
-    "--set", "review=on", "--set", "proof=on",
+    "--set", `review=${spawn.review ? "on" : "off"}`, "--set", "proof=on",
     "--set", `merge=${spawn.merge ? "on its own" : "ask me first"}`,
   ];
   if (rule.to.playbook) args.push("--set", `playbook=${rule.to.playbook.id}@${rule.to.playbook.version}`);
@@ -109,6 +108,7 @@ export async function waitForHerdrReceipt(
   decision: Json,
   options: HerdrAgentOptions = {},
   verify = false,
+  requireReview = true,
 ): Promise<Json> {
   const run = options.run ?? defaultRunner;
   const now = options.now ?? (() => new Date());
@@ -143,8 +143,8 @@ export async function waitForHerdrReceipt(
     const reviews = (view.reviews ?? []).filter((review: Json) =>
       ["report", "pass", "changes"].includes(review.result),
     );
-    if (reviews.length === 0) throw new Error("ready task has no recorded review");
-    const review = reviews.at(-1);
+    if (reviews.length === 0 && requireReview) throw new Error("ready task has no recorded review");
+    const review = reviews.at(-1) ?? null;
     const tags = decision.risk?.tags ?? [];
     const spawn = decision.actions.find((action: Json) => action.kind === "spawn_task").spawn;
     const autoAccept = tags.length === 0 && spawn.merge === true;
@@ -174,11 +174,11 @@ export async function waitForHerdrReceipt(
       summary,
       details,
       proof: { refs, text: text(proof.text ?? proof.title ?? proof.id, "proof text") },
-      review: {
+      review: review ? {
         reviewed: true,
         reviewer_ref: text(review.ref ?? review.reviewer ?? review.by ?? review.head ?? review.commit, "reviewer ref"),
         must_fix: 0,
-      },
+      } : null,
       ...(lastVerification ? {
         verification: {
           verdict: lastVerification.verdict,
@@ -199,6 +199,7 @@ export async function runHerdrTask(
   options: HerdrAgentOptions = {},
 ): Promise<Json> {
   const task = await spawnHerdrTask(decision, rule, options);
+  const spawn = decision.actions.find((action: Json) => action.kind === "spawn_task").spawn;
   await options.onSpawn?.(task);
-  return waitForHerdrReceipt(task, decision, options, rule.to?.verify === true);
+  return waitForHerdrReceipt(task, decision, options, rule.to?.verify === true, spawn.review !== false);
 }

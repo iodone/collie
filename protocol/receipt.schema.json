@@ -134,10 +134,10 @@
       }
     },
     "review": {
-      "type": "object",
+      "type": ["object", "null"],
       "additionalProperties": false,
       "required": ["reviewed", "reviewer_ref", "must_fix"],
-      "description": "DESIGN §4.2 的约定：复核在一轮内完成，ready 前必须已记录 reviewed。",
+      "description": "task 的复核事实；playbook 要求 review 时，ready 前记录 reviewed。",
       "properties": {
         "reviewed": {
           "const": true,

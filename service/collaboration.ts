@@ -16,25 +16,10 @@ export type CollaborationRole = {
   file?: string;
 };
 
-export type PlaybookStage = {
-  id: string;
-  role: string;
-  needs?: string[];
-  parallel_with?: string;
-  outputs?: string[];
-  gate?: string;
-};
-
 export type CollaborationPlaybook = {
   id: string;
   title: string;
   version: number;
-  when?: string[];
-  stages: PlaybookStage[];
-  gates?: Array<{ id: string; predicate: string }>;
-  allowed_next?: string[];
-  requires?: string[];
-  discloses?: string[];
   source?: string;
   file?: string;
   instructions?: string;
@@ -102,14 +87,8 @@ export class CollaborationRegistry {
       this.roles.set(role.id, { ...role, prompt: file, file });
     }
     for (const { value: playbook, body, file } of readDefinitions<CollaborationPlaybook>(join(root, "playbooks"))) {
-      if (!playbook.id || !Array.isArray(playbook.stages) || !Number.isInteger(playbook.version)) {
-        throw new Error("playbook requires id, version and stages");
-      }
-      for (const stage of playbook.stages) {
-        if (!stage.id || !stage.role) throw new Error(`playbook ${playbook.id} has an invalid stage`);
-        if (!this.roles.has(stage.role) && stage.role !== "human") {
-          throw new Error(`playbook ${playbook.id} references unknown role ${stage.role}`);
-        }
+      if (!playbook.id || !playbook.title || !Number.isInteger(playbook.version)) {
+        throw new Error("playbook requires id, title and version");
       }
       this.playbooks.set(playbook.id, { ...playbook, file, instructions: body.trim() });
     }

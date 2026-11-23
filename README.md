@@ -29,7 +29,7 @@ Work 只有四个一级状态，它们是 `Decision + Task + Receipt` 的投影�
 | `settled` | 任意 | **Settled** |
 | `waiting` | 任意 | **Needs you** |
 | `open` | live blocked | **Needs you** |
-| `open` | live worker / reviewer | **Working**（kind 只是行内属性） |
+| `open` | live driver / helper | **Working**（phase 只是行内投影） |
 | `open` | task `queued` / `scheduled` / `todo` | **Todo** |
 | `open` | task `running` / `ready` / `merging` / `done`，或 task_ref 暂不可读 | **Working** |
 
@@ -68,7 +68,7 @@ flowchart TB
     CO <--> L
   end
   subgraph INNER["内循环 · 执行与交付"]
-    T["collie task<br/>worktree + worker + reviewer"]
+    T["collie task<br/>worktree + driver + helpers"]
     R["Receipt<br/>summary / details / proof"]
     T --> R
   end

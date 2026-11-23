@@ -76,18 +76,19 @@ describe("mods/collie-inbox pure queue projection", () => {
     expect(ticketStage({ ...base, state: "open" }, { state: "queued" })).toBe("todo");
     expect(ticketStage({ ...base, state: "open" }, { state: "scheduled" })).toBe("todo");
     expect(ticketStage({ ...base, state: "open" }, { state: "running" })).toBe("working");
-    expect(ticketStage({ ...base, state: "open" }, { state: "running" }, { worker: true })).toBe("working");
-    expect(ticketStage({ ...base, state: "open" }, { state: "running" }, { worker: true, reviewer: true })).toBe("working");
-    expect(ticketStage({ ...base, state: "open" }, { state: "running" }, { worker: true, blocked: true })).toBe("needs");
+    expect(ticketStage({ ...base, state: "open" }, { state: "running" }, { driver: true })).toBe("working");
+    expect(ticketStage({ ...base, state: "open" }, { state: "running" }, { driver: true, reviewer: true })).toBe("working");
+    expect(ticketStage({ ...base, state: "open" }, { state: "running" }, { driver: true, blocked: true })).toBe("needs");
     expect(ticketStage({ ...base, state: "open", run: { task_ref: "HAT-42" } }, null)).toBe("working");
     expect(ticketStage({ ...base, state: "open", run: { task_ref: "HAT-42" } }, { state: "queued" })).toBe("todo");
     expect(ticketStage({ ...base, state: "open", run: { task_ref: "HAT-42" } }, { state: "scheduled" })).toBe("todo");
     expect(ticketStage({ ...base, state: "settled", settled: { at: "2026-11-13T11:00:00Z" } }, null)).toBe("settled");
     expect(Object.keys(STAGE_WORD)).toEqual(["needs", "todo", "working", "settled"]);
     expect(ticketNeed({ ...base, receipt_ref: "rc_stage" })).toBe("ready");
-    expect(workKind({ ...base, state: "open", run: { kind: "review" } }, { state: "running" }, { worker: true })).toBe("review");
-    expect(workKind({ ...base, state: "open", run: { kind: "build" } }, { state: "merging" }, { worker: true })).toBe("merge");
-    expect(workKind({ ...base, state: "open" }, { state: "running" }, { worker: true })).toBe("build");
+    expect(workKind({ ...base, state: "open", run: { kind: "review" } }, { state: "running" }, { driver: true })).toBe("review");
+    expect(workKind({ ...base, state: "open" }, { state: "running" }, { driver: true, verifier: true })).toBe("verify");
+    expect(workKind({ ...base, state: "open", run: { kind: "build" } }, { state: "merging" }, { driver: true })).toBe("merge");
+    expect(workKind({ ...base, state: "open" }, { state: "running" }, { driver: true })).toBe("build");
   });
 
   test("Todo 的原因来自 herdr-task：依赖 / 容量 / 定时 / 未开始", () => {

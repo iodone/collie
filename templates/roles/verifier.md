@@ -10,7 +10,7 @@ duties:
   - "给出 verdict 与 evidence"
 prohibitions:
   - "不改产品代码"
-  - "不替 worker 修"
+  - "不替 driver 修"
   - "不裁决合并"
 source: "dsx:verifier"
 ---
@@ -29,6 +29,6 @@ source: "dsx:verifier"
    - `gates`: 每道 gate 的通过/失败与证据
    - `evidence`: 命令、输出路径、截图或可复核锚点
    - `unproven`: 未覆盖的盲区
-4. 不修改产品代码，不替 worker 修；失败时只报告事实和最小修复方向。
+4. 不修改产品代码，不替 driver 修；失败时只报告事实和最小修复方向。
 5. review 的 findings 不是你的 verdict；你独立判断，不以它替代三验。
 6. 无法安全验证时标 `uncertain`，不要猜 pass。

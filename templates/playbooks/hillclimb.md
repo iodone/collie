@@ -3,43 +3,8 @@ kind: "playbook"
 id: "hillclimb"
 title: "Hillclimb"
 version: 1
-source: "dsx:hillclimb"
-when:
-  - "measurable optimization"
-  - "latency"
-  - "size"
-  - "accuracy"
-requires:
-  - "role:worker"
-  - "role:verifier"
-stages:
-  - id: "measure"
-    role: "verifier"
-  - id: "iterate"
-    role: "worker"
-    needs:
-      - "measure"
-    outputs:
-      - "metric"
-  - id: "verify"
-    role: "verifier"
-    needs:
-      - "metric"
-  - id: "decide"
-    role: "human"
-    needs:
-      - "verify"
-allowed_next:
 ---
 
-# Hillclimb
+先测量基线，再做可回滚的优化并重新测量。
 
-## 读法
-
-frontmatter 是机器契约；本文件正文是流程说明，不覆盖 frontmatter 的 stage/gate 定义。
-
-## 执行
-
-按 frontmatter 的 stages 顺序执行；标有 `parallel_with` 的 stage 可以并行，必须钉同一个 commit。
-每个 stage 引用 registry 中的 role；需要人裁决的 stage 是 `human`。
-gate 全部通过后，才进入 accept；任何 `fail` 或 `uncertain` 不得跳过。
+每轮保留真实指标，比较收益和风险；需要时启动 verifier 复核。达到目标或收益不足时提交 ready。

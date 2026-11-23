@@ -67,6 +67,18 @@ describe("plugins/agent/herdr", () => {
     expect(result.errors).toEqual([]);
   });
 
+  test("playbook 不要求 review 时，ready 可以没有 review round", async () => {
+    const view = readyView();
+    view.reviews = [];
+    const noReview = structuredClone(decision);
+    noReview.actions[0].spawn.review = false;
+    const fake = fakeRunner([view]);
+    const receipt = await runHerdrTask(noReview, rule, { run: fake.run, now: () => fixedNow, sleep: async () => {} });
+    expect(fake.calls[0]).toContain("review=off");
+    expect(receipt.review).toBeNull();
+    expect(validate(receipt, "urn:collie:receipt:v1").errors).toEqual([]);
+  });
+
   test("verify 开启时 receipt 带独立 verifier verdict，且 task add 带 verify=on", async () => {
     const view = readyView();
     view.verifications = [{ verdict: "pass", evidence: "npm test: 55 passed", head: "9f2c1abd1234", by: "t100" }];

@@ -173,7 +173,7 @@ Coordinator 参考 shepherdr 的 Assistant，但尽量只依赖 herdr-core：
 - kept terminal 退回 shell 时，在同一 terminal 恢复原 session。
 - session log 不存在时新建 session，并带 handover，不伪造恢复成功。
 - 恢复由 `collie-task tick` 触发：service 在时由 service 每 15 秒 tick；service 不在时窗口自己 tick。
-- 普通关闭 Coordinator Tab 不能直接 `tab.settle`；有 worker 时问 stop/keep，无 worker 也只会关 tab。
+- 普通关闭 Coordinator Tab 不能直接 `tab.settle`；有 driver 时问 stop/keep，无 driver 也只会关 tab。
 - 停止就是显式关闭 tab，或 `hc rm` 掉终端；没有 `collie coordinator stop`，因为 service 不做 auto-ensure。
 - 没有 `collie coordinator ensure`；终端被删后不自动重建，人重新打开 coordinator tab。
 

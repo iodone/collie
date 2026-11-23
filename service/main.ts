@@ -79,7 +79,7 @@ export class CollieService {
 
   #projectFolder(space: string, project?: string): string {
     const workspace = this.#options.workspaces?.[space];
-    if (!workspace?.folder) throw new Error(`no worker workspace configured for space ${space}`);
+    if (!workspace?.folder) throw new Error(`no driver workspace configured for space ${space}`);
     if (!project) return workspace.folder;
     if (!/^[a-z0-9][a-z0-9_-]{1,63}$/.test(project)) throw new Error("invalid project");
     const configured = workspace.projects?.[project];
@@ -144,8 +144,15 @@ export class CollieService {
     const spawns = decision.actions.filter((action: Json) => action.kind === "spawn_task");
     if (decision.state !== "open" || !spawns.length) return decision;
     if (spawns.length !== 1) throw new Error("M1 executes exactly one spawn_task per decision");
+    const workspace = this.#options.workspaces?.[decision.space];
+    if (!workspace) throw new Error(`no driver workspace configured for space ${decision.space}`);
+    const folder = this.#projectFolder(decision.space, decision.project);
+    this.collaboration.loadProject(folder);
+    const playbook = decision.playbook?.id ? this.collaboration.playbook(decision.playbook.id) : null;
+    const driver = this.collaboration.roles.get("driver");
+    const driverPrompt = driver?.prompt ? readFileSync(driver.prompt, "utf8") : undefined;
     // The kernel renders the trusted brief; the coordinator only points at data.
-    const brief = renderBrief(dispatch, join(this.stateDir, "briefs"));
+    const brief = renderBrief(dispatch, join(this.stateDir, "briefs"), playbook ?? undefined, driverPrompt);
     const executed = {
       ...decision,
       actions: decision.actions.map((action: Json) => action.kind === "spawn_task"
@@ -155,17 +162,11 @@ export class CollieService {
     this.ledger.append("decision", executed);
     this.#projectQueue();
     decision = executed;
-    const workspace = this.#options.workspaces?.[decision.space];
-    if (!workspace) throw new Error(`no worker workspace configured for space ${decision.space}`);
-    const folder = this.#projectFolder(decision.space, decision.project);
-    this.collaboration.loadProject(folder);
-    const playbook = decision.playbook?.id ? this.collaboration.playbook(decision.playbook.id) : null;
     const rule = {
       to: {
         kind: "herdr_task", space: decision.space,
         ...(decision.project ? { project: decision.project } : {}),
         ...(playbook ? { playbook: { id: playbook.id, version: playbook.version } } : {}),
-        ...(playbook?.stages.some((item) => item.role === "verifier") ? { verify: true } : {}),
         cwd: { path: folder, kind: "git" },
       },
       agent: { ...(workspace.cli ? { cli: workspace.cli } : {}) },

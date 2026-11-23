@@ -65,8 +65,11 @@ function liveRoles(target) {
   const terms = label ? terminals().filter((k) => k.state === "live" && k.labels?.["herdr.task"] === label) : [];
   const has = (role) => record.some((a) => a.role === role && a.status !== "done")
     || terms.some((k) => k.labels?.["herdr.role"] === role && k.status !== "done");
+  const helper = (role) => ["reviewer", "verifier", "helper"].includes(role);
+  const driver = record.some((a) => !helper(a.role) && a.status !== "done")
+    || terms.some((k) => !helper(k.labels?.["herdr.role"]) && k.status !== "done");
   const blocked = record.some((a) => a.status === "blocked") || terms.some((k) => k.status === "blocked");
-  return { worker: has("worker"), reviewer: has("reviewer"), blocked };
+  return { driver, reviewer: has("reviewer"), verifier: has("verifier"), blocked };
 }
 
 const stageOf = (decision, target) => ticketStage(decision, target, liveRoles(target));
@@ -247,7 +250,7 @@ function stateColor(t, stage, need = null) {
 
 function stateChip(t, stage, need = null, kind = null, outcome = null) {
   const color = stateColor(t, stage, need);
-  const gerund = kind === "build" ? "building" : kind === "review" ? "reviewing" : kind === "merge" ? "merging" : null;
+  const gerund = kind === "build" ? "building" : kind === "review" ? "reviewing" : kind === "verify" ? "verifying" : kind === "merge" ? "merging" : null;
   const suffix = stage === "working" ? gerund : stage === "settled" ? outcome : null;
   const label = suffix ? `${STAGE_WORD[stage] ?? stage} · ${suffix}` : STAGE_WORD[stage] ?? stage;
   return h().flex_none().h(16).px(5).items_center().rounded(4).bg(color + "1f")
@@ -469,10 +472,8 @@ export default class Inbox extends View {
         .child(h().h(16).min_w(0).gap(6).items_center().text_size(12)
           .child(div().flex_none().font_family(ID_FONT).text_size(11).text_color(t.dim).child(ticketRef(decision, target)))
           .child(stateChip(t, stage, need, kind, decision.settled?.outcome))
-          .when(Boolean(target?.playbook), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(`${target.playbook}${target.stage?.id ? ` / ${target.stage.id}` : ""}`)))
+          .when(Boolean(target?.playbook), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(target.playbook)))
           .when(Boolean(target?.verification), (el) => el.child(div().flex_none().text_size(11).text_color(target.verification.verdict === "pass" ? t.ansi2 : t.ansi1).child(`verify ${target.verification.verdict}`)))
-          .when(Boolean(target?.seats?.length), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(`${target.seats.length} seats`)))
-          .when(Boolean(target?.gateResults?.length), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(`${target.gateResults.filter((g) => g.verdict === "pass").length}/${target.gateResults.length} gates`)))
           .child(div().flex_shrink_1().min_w(0).truncate().text_color(t.muted).child(reason ?? ""))
           .when(!bare, (el) => el.child(div().flex_shrink(1000).min_w(0).truncate().text_color(t.dim).child(`· ${decision.space}`)))))
       .child(action(`collie-reply-${decision.id}`, "回复", true, () => replyToCoordinator(decision, target, receipt), t));
@@ -607,11 +608,10 @@ export default class Inbox extends View {
         .child(h().h(16).min_w(0).gap(6).items_center()
           .child(stateChip(t, stage, need, kind, decision.settled?.outcome))
           .child(div().flex_1().min_w(0).truncate().text_size(TEXT.label).text_color(t.muted).child(report)))
-        .when(Boolean(target?.playbook || target?.stage || target?.seats?.length || target?.gateResults?.length), (el) => el.child(
+        .when(Boolean(target?.playbook || target?.verification), (el) => el.child(
           h().h(16).min_w(0).gap(8).items_center().text_size(11).text_color(t.dim)
-            .child([target?.playbook, target?.stage?.id].filter(Boolean).join(" / "))
-            .child(target?.seats?.length ? `${target.seats.length} seats` : "")
-            .child(target?.gateResults?.length ? `${target.gateResults.filter((g) => g.verdict === "pass").length}/${target.gateResults.length} gates` : ""))));
+            .child(target?.playbook ?? "")
+            .child(target?.verification ? `verify ${target.verification.verdict}` : ""))));
   }
 
   head(t, cx) {
@@ -627,7 +627,7 @@ export default class Inbox extends View {
     if (target?.ref && this.artsKey !== artsKeyOf(target)) cx.timer.after(0, (cx) => { this.pollArts(cx); cx.notify(); });
     const live = isLive(target?.terminal);
     const active = find(layout(), BODY)?.active ?? ARTIFACTS;
-    // The worker ended while its terminal was up: back to its artifacts.
+    // The driver ended while its terminal was up: back to its artifacts.
     if (active === TERM && !live) cx.timer.after(0, () => showArtifacts());
     const shown = active === TERM && live ? "terminal" : "artifacts";
     const segs = [
