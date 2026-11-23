@@ -2,11 +2,29 @@
 kind: "playbook"
 id: "investigation"
 title: "Investigation"
-version: 2
+version: 3
 ---
 
-这是一次只读调查，不修改产品代码。
+# Investigation
 
-driver 自己建立结构和调用关系，追关键路径、历史决策和失败模式，产出有引用的报告，并明确区分事实、推断和未知项。不要启动 reviewer 或 verifier。
+你负责一次只读调查，不修改产品代码。
 
-需要改动代码时，交回 Coordinator，重新选择 feature / bug-fix / refactoring。
+## 流程
+
+1. **建立结构。**  
+   读关键代码、调用关系、配置和历史，建立受影响区域的模型。
+
+2. **追证据。**  
+   追关键路径、历史决策和失败模式；给出文件、符号、命令或提交作为依据。
+
+3. **区分事实和推断。**  
+   明确哪些是事实，哪些是推断，哪些仍未证明。
+
+4. **输出。**  
+   给出有引用的解释、tradeoffs 或建议，并列出未决问题。
+
+## 边界
+
+- 不修改产品代码，不 commit，不开 PR。
+- 不启动 reviewer 或 verifier。
+- 如果调查导向代码改动，把结论交回发起方，重新进入实现流程。

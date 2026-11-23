@@ -10,7 +10,7 @@ describe("collaboration registry", () => {
     try {
       const registry = new CollaborationRegistry(dir);
       expect(registry.roles.get("coordinator")?.inputs).toContain("human message");
-      expect(registry.roles.get("driver")?.duties).toContain("读 task brief 和 playbook");
+      expect(registry.roles.get("driver")?.duties).toContain("读工作说明和 playbook");
       expect(registry.roles.get("verifier")?.prohibitions).toContain("不改产品代码");
       expect(registry.playbook("feature").instructions).toContain("reviewer");
       expect(registry.playbook("dsx-playbook-feature").title).toBe("Feature");
