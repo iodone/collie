@@ -275,7 +275,7 @@ describe("coordinator chat decision commit", () => {
     expect(response.status).toBe(200);
     const decision = service.ledger.history("decision").at(-1)!;
     expect(decision).toMatchObject({
-      origin: "human", decided_by: "coordinator", playbook: { id: "feature", version: 3 },
+      origin: "human", decided_by: "coordinator", playbook: { id: "feature", version: 4 },
     });
     expect(response.body).toMatchObject({ origin: "human", state: "settled" });
   });
