@@ -59,10 +59,10 @@ function showModal(artifact) {
 // a modal when artifact.modal. The area and modal stay in the toolbar's props, so stepping
 // versions reopens it in the same place.
 export function showViewer(artifact) {
-  if (artifact.modal) return showModal(artifact);
+  if (artifact.modal || !artifact.area) return showModal(artifact);
   const a = artifact.area;
-  const at = a ? { x: Math.round(a.x), y: Math.round(a.y) } : { x: 0, y: 0 };
-  const size = a ? { width: Math.round(a.width), height: Math.round(a.height) } : { width: 1, height: 1 };
+  const at = { x: Math.round(a.x), y: Math.round(a.y) };
+  const size = { width: Math.round(a.width), height: Math.round(a.height) };
   openOverlay({ kind: "popup", frame: "none", ...size, at, layout: viewerLayout(artifact) });
 }
 

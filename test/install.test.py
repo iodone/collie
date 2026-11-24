@@ -44,7 +44,7 @@ class InstallTest(unittest.TestCase):
 
     def make_source(self):
         self.source.mkdir()
-        for directory in ("bin", "layouts", "templates", "lib", "core", "mods", "kernel", "plugins", "service", "protocol", "vendor"):
+        for directory in ("bin", "layouts", "templates", "defaults", "lib", "core", "mods", "kernel", "plugins", "service", "protocol", "vendor"):
             if (REPO / directory).exists():
                 shutil.copytree(REPO / directory, self.source / directory)
         shutil.copy2(REPO / "addons.json", self.source / "addons.json")
@@ -103,10 +103,14 @@ class InstallTest(unittest.TestCase):
         self.assertGreater(len(manifest["files"]), 5)
         for relative, expected in manifest["files"].items():
             self.assertEqual(sha256(self.root / relative), expected)
-        for role in ("roles/coordinator.md", "roles/driver.md", "roles/reviewer.md", "roles/verifier.md"):
+        for role in ("coordinator.md", "driver.md"):
             self.assertTrue((self.root / ".config/herdr-core/templates" / role).is_file())
+        for role in ("reviewer.md", "verifier.md"):
+            self.assertTrue((self.root / ".config/collie/roles" / role).is_file())
+        self.assertGreater(len(list((self.root / ".config/collie/playbooks").glob("*.md"))), 0)
         self.assertFalse((self.root / ".config/herdr-core/templates/assistant.md").exists())
         self.assertFalse((self.root / ".config/herdr-core/templates/dev").exists())
+        self.assertTrue((self.root / ".local/bin/collie").is_file())
         helper = self.root / ".local/bin/collie-sync"
         self.assertTrue(helper.is_file())
         self.assertTrue(os.access(helper, os.X_OK))
@@ -116,6 +120,12 @@ class InstallTest(unittest.TestCase):
         self.assertTrue((self.root / ".config/herdr-app/bin/collie-secret").is_file())
         self.assertTrue((self.root / ".local/share/collie/service/main.ts").is_file())
         self.assertTrue((self.root / ".local/share/collie/protocol/invariants.mjs").is_file())
+        task = self.root / ".local/bin/collie-task"
+        self.assertTrue(task.is_file())
+        self.assertTrue(os.access(task, os.X_OK))
+        self.assertTrue((self.root / ".local/share/collie/vendor/herdr-task/herdr_task/store.py").is_file())
+        self.assertFalse((self.root / ".local/share/collie/vendor/herdr-task/herdr_task/github.py").exists())
+        self.assertFalse((self.root / ".local/share/collie/vendor/herdr-task/herdr_task/ghnews.py").exists())
         self.assertEqual(
             (self.root / ".local/state/collie/ruleset.json").read_bytes(),
             (self.source / "protocol/fixtures/ruleset.json").read_bytes(),
@@ -123,6 +133,24 @@ class InstallTest(unittest.TestCase):
         self.assertFalse(self.home.exists())
         result = self.run_cli("doctor", "--root", self.root)
         self.assertIn("doctor: all checks passed", result.stdout)
+
+    def test_installed_task_lifecycle_commands(self):
+        self.install()
+        task = self.root / ".local/bin/collie-task"
+        environment = os.environ.copy()
+        environment.update({"HOME": str(self.root), "PATH": f"{self.fake_bin}:/usr/bin:/bin"})
+        for command in ("add", "list", "show", "start", "status", "ready", "accept", "done"):
+            result = subprocess.run(
+                [sys.executable, str(task), command, "--help"],
+                capture_output=True, text=True, env=environment, timeout=20, check=False,
+            )
+            self.assertEqual(result.returncode, 0, msg=f"{command}:\n{result.stdout}\n{result.stderr}")
+        for command in ("merge", "fix", "review", "review-more", "reviewed", "verified", "reopen", "plan", "resume"):
+            result = subprocess.run(
+                [sys.executable, str(task), command, "--help"],
+                capture_output=True, text=True, env=environment, timeout=20, check=False,
+            )
+            self.assertEqual(result.returncode, 2, msg=f"removed command {command} is still registered")
 
     @unittest.skipUnless(BUN, "bun is required for the runtime smoke test")
     def test_installed_background_service_starts(self):
@@ -239,7 +267,7 @@ class InstallTest(unittest.TestCase):
     def test_uninstall_removes_clean_files_and_preserves_modified(self):
         self.install()
         layout = self.root / ".config/herdr-app/layouts/collie.json"
-        template = self.root / ".config/herdr-core/templates/roles/coordinator.md"
+        template = self.root / ".config/herdr-core/templates/coordinator.md"
         template.write_text("local notes\n")
         self.run_cli("uninstall", "--root", self.root, "--dry-run")
         self.assertTrue(layout.exists())
@@ -247,7 +275,7 @@ class InstallTest(unittest.TestCase):
         self.assertFalse(layout.exists())
         self.assertEqual(template.read_text(), "local notes\n")
         manifest = json.loads((self.root / ".config/herdr-app/installed.collie.json").read_text())
-        self.assertIn(".config/herdr-core/templates/roles/coordinator.md", manifest["files"])
+        self.assertIn(".config/herdr-core/templates/coordinator.md", manifest["files"])
         self.assertTrue((self.root / ".local/state/collie").exists())
 
     def test_install_replaces_old_shep_chat_hooks(self):

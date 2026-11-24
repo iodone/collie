@@ -1,7 +1,6 @@
 ---
-kind: "playbook"
-id: "bug-fix"
-title: "Bug fix"
+name: "bug-fix"
+description: "修复 bug 或回归"
 version: 4
 ---
 

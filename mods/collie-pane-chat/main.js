@@ -19,6 +19,7 @@ import {
   props, run, theme, home, exec, hc, notify, nextCommand, shared, setShared,
   panes as livePanes, terminals as liveTerminals, spaces as liveSpaces,
 } from "herdr";
+import { ensureTerminalTab } from "./lib/terminal-tab.js";
 
 // The chat mod this header switches to.
 const CHAT = "collie-chat";
@@ -109,7 +110,6 @@ const roleIn = (self, role) => {
     || x.labels?.["herdr.job.space"] === space;
   return terminals().find((x) => x.state === "live" && x.labels?.["herdr.role"] === role && inSpace(x)) ?? null;
 };
-const coordinatorFor = (self) => roleIn(self, "coordinator");
 const helperFor = (self) => roleIn(self, "helper");
 async function waitPane(pred, cx, ms = 1500) {
   for (const end = Date.now() + ms; Date.now() < end; await cx.sleep(50)) {
@@ -227,10 +227,7 @@ export default class Pane extends View {
   // Chat → Terminal: the agent's terminal gets a pane beside the chat, then the chat closes, so the terminal is back
   // in the same spot.
   toTerminal(chat, cx) {
-    const pane = panes().find((x) => x.pane === chat);
-    // A Coordinator chat can be attached to the space's coordinator without carrying herdr.chat in
-    // every reload path: fall back to the Coordinator terminal rather than closing the chat with no target.
-    const terminal = agentOf(chat) ?? (this.role === "coordinator" && pane ? coordinatorFor(pane)?.address : null) ?? null;
+    const terminal = agentOf(chat);
     const live = Boolean(terminal);
     // Still in a pane of its own (a chat opened beside it): just close the chat. With no terminal at
     // all, keep the chat: closing it would empty the tab.
@@ -266,35 +263,15 @@ export default class Pane extends View {
   openHelperTab(terminal, cx) {
     const live = terminals().find((x) => x.address === terminal && x.state === "live");
     if (!live) { notify({ title: "Helper isn't running", body: "Start the Coordinator first.", level: "info" }); return; }
-    const tabExists = (id) => Boolean(id) && spaces().some((sp) => sp.tabs.some((t) => t.id === id));
-    const existing = panes().find((p) => p.terminal === terminal);
-    if (existing && tabExists(existing.tab)) {
-      run("tab.rename", { id: existing.tab, name: "Helper" });
-      run("tab.select", { id: existing.tab });
-      notify({ title: "Helper", body: "Focused the Helper tab.", level: "info" });
-      return;
-    }
     cx.spawn(async (cx) => {
       try {
-        const r = await exec("herdr-app", ["do", "terminal.keep", "--terminal", terminal]);
-        let out = {};
-        try { out = JSON.parse(r.stdout || "{}"); } catch {}
-        let tab = out.tab;
-        for (let i = 0; (i < 20) && !tabExists(tab); i++) {
-          const p = panes().find((x) => x.terminal === terminal && tabExists(x.tab));
-          if (p) { tab = p.tab; break; }
-          await cx.sleep(50);
-        }
-        if (!tabExists(tab)) throw new Error(out.error || r.stderr || "Herdr didn't create a Helper tab");
-        run("tab.rename", { id: tab, name: "Helper" });
-        run("tab.select", { id: tab });
+        await ensureTerminalTab({ terminal, name: "Helper", focus: true, cx });
         notify({ title: "Helper", body: "Opened the Helper tab.", level: "info" });
       } catch (e) {
         notify({ title: "Helper didn't open", body: String(e?.message ?? e), level: "error" });
       }
     });
   }
-
   // A chat pane's ✕ does what an agent pane's does: ends the agent, and the pane goes (no dialog in collie).
   closeChat(chat) {
     const terminal = agentOf(chat);

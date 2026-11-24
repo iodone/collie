@@ -4,133 +4,91 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CollaborationRegistry } from "../service/collaboration.ts";
 
-describe("collaboration registry", () => {
-  test("ships coordinator/driver/reviewer/verifier roles and prompt-only playbooks", () => {
-    const dir = mkdtempSync(join(tmpdir(), "collie-registry-"));
-    try {
-      const registry = new CollaborationRegistry(dir);
-      expect(registry.roles.get("coordinator")?.inputs).toContain("human message");
-      expect(registry.roles.get("driver")?.duties).toContain("读工作说明和 playbook");
-      expect(registry.roles.get("verifier")?.prohibitions).toContain("不改产品代码");
-      expect(registry.playbook("feature").instructions).toContain("reviewer");
-      expect(registry.playbook("dsx-playbook-feature").title).toBe("Feature");
-      expect(registry.playbook("review").instructions).toContain("findings");
-      expect(registry.defaultPlaybook("review")).toBe("review");
-      expect(registry.defaultPlaybook("build")).toBe("feature");
-    } finally { rmSync(dir, { recursive: true, force: true }); }
-  });
-
-  test("loads user roles and playbook prompt bodies", () => {
-    const dir = mkdtempSync(join(tmpdir(), "collie-registry-"));
-    try {
-      mkdirSync(join(dir, "roles"), { recursive: true });
-      writeFileSync(join(dir, "roles", "security.md"), `---
-kind: role
-id: security
-title: Security
-purpose: security review
-duties: [review]
-prohibitions: [write code]
----
-
-# Security
-`);
-      mkdirSync(join(dir, "playbooks"), { recursive: true });
-      writeFileSync(join(dir, "playbooks", "secure.md"), `---
-kind: playbook
-id: secure
-title: Secure
+const role = (name: string, description = name) => `---
+name: ${name}
+description: ${description}
 version: 1
 ---
 
-先做威胁建模，再让 security 角色复核。
-`);
-      const registry = new CollaborationRegistry(dir);
-      registry.loadDirectory(dir);
-      expect(registry.roles.get("security")?.title).toBe("Security");
-      expect(registry.playbook("secure").instructions).toContain("威胁建模");
-      writeFileSync(join(dir, "playbooks", "bad.md"), `---
-kind: playbook
-id: bad
-title: Bad
----
-
-missing version
-`);
-      expect(() => registry.loadDirectory(dir)).toThrow(/requires id, title and version/);
-    } finally { rmSync(dir, { recursive: true, force: true }); }
-  });
-});
-
-describe("role and playbook layers", () => {
-  const role = (id: string, title = id) => `---
-kind: role
-id: ${id}
-title: ${title}
-purpose: test
-duties: [work]
-prohibitions: []
----
-
-# ${title}
+# ${description}
 `;
-  const playbook = (id: string, text: string) => `---
-kind: playbook
-id: ${id}
-title: ${id}
+const playbook = (name: string, text: string) => `---
+name: ${name}
+description: ${name}
 version: 1
 ---
 
 ${text}
 `;
 
-  test("user and project cannot override system roles", () => {
+describe("collaboration registry", () => {
+  test("loads system roles and falls back to defaults only when config is empty", () => {
+    const dir = mkdtempSync(join(tmpdir(), "collie-registry-"));
+    try {
+      const registry = new CollaborationRegistry(dir);
+      expect(registry.roles.get("coordinator")?.origin).toBe("system");
+      expect(registry.roles.get("driver")?.origin).toBe("system");
+      expect(registry.roles.get("verifier")?.origin).toBe("defaults");
+      expect(registry.playbook("feature").instructions).toContain("reviewer");
+      expect(registry.catalog().playbooks.some((book) => book.name === "feature")).toBe(true);
+      expect(registry.catalog()).not.toHaveProperty("roles");
+      expect(registry.roleCatalog().roles.some((role) => role.name === "reviewer")).toBe(true);
+      expect(registry.defaultPlaybook("review")).toBe("review");
+      expect(registry.defaultPlaybook("build")).toBe("feature");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("loads config roles and playbooks", () => {
+    const dir = mkdtempSync(join(tmpdir(), "collie-registry-"));
+    try {
+      mkdirSync(join(dir, "roles"), { recursive: true });
+      mkdirSync(join(dir, "playbooks"), { recursive: true });
+      writeFileSync(join(dir, "roles", "security.md"), role("security"));
+      writeFileSync(join(dir, "playbooks", "secure.md"), playbook("secure", "先做威胁建模。"));
+      const registry = new CollaborationRegistry(dir);
+      expect(registry.roles.get("security")?.description).toBe("security");
+      expect(registry.roles.get("security")?.origin).toBe("config");
+      expect(registry.playbook("secure").instructions).toContain("威胁建模");
+      writeFileSync(join(dir, "playbooks", "bad.md"), `---\nname: bad\ndescription: Bad\n---\n\nmissing version\n`);
+      expect(() => new CollaborationRegistry(dir)).toThrow(/needs name, description and version/);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("rejects system role overrides in config", () => {
     const dir = mkdtempSync(join(tmpdir(), "collie-registry-"));
     try {
       mkdirSync(join(dir, "roles"), { recursive: true });
       writeFileSync(join(dir, "roles", "driver.md"), role("driver"));
       expect(() => new CollaborationRegistry(dir)).toThrow(/system role/);
-      writeFileSync(join(dir, "roles", "driver.md"), role("security"));
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+  test("reloads the config layer after an edit", () => {
+    const dir = mkdtempSync(join(tmpdir(), "collie-registry-"));
+    try {
+      mkdirSync(join(dir, "roles"), { recursive: true });
+      writeFileSync(join(dir, "roles", "security.md"), role("security"));
       const registry = new CollaborationRegistry(dir);
-      const project = join(dir, "project");
-      mkdirSync(join(project, ".collie", "roles"), { recursive: true });
-      writeFileSync(join(project, ".collie", "roles", "coordinator.md"), role("coordinator"));
-      expect(() => registry.loadProject(project)).toThrow(/system role/);
+      expect(registry.roles.get("security")?.description).toBe("security");
+      writeFileSync(join(dir, "roles", "security.md"), role("security", "Security"));
+      writeFileSync(join(dir, "roles", "audit.md"), role("audit"));
+      registry.reload();
+      expect(registry.roles.get("security")?.description).toBe("Security");
+      expect(registry.roles.get("audit")?.origin).toBe("config");
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
-
-  test("project overrides defaults and playbooks, and isolates projects", () => {
+  test("rejects legacy id/title/purpose frontmatter and drops unused role metadata", () => {
     const dir = mkdtempSync(join(tmpdir(), "collie-registry-"));
     try {
-      const registry = new CollaborationRegistry(join(dir, "user"));
-      const one = join(dir, "one");
-      mkdirSync(join(one, ".collie", "roles"), { recursive: true });
-      mkdirSync(join(one, ".collie", "playbooks"), { recursive: true });
-      writeFileSync(join(one, ".collie", "roles", "reviewer.md"), role("reviewer", "Project Reviewer"));
-      writeFileSync(join(one, ".collie", "playbooks", "feature.md"), playbook("feature", "project feature prompt"));
-      registry.loadProject(one);
-      expect(registry.roles.get("reviewer")?.title).toBe("Project Reviewer");
-      expect(registry.roles.get("reviewer")?.origin).toBe("project");
-      expect(registry.playbook("feature").instructions).toContain("project feature prompt");
-      expect(registry.playbook("feature").origin).toBe("project");
+      mkdirSync(join(dir, "roles"), { recursive: true });
+      writeFileSync(join(dir, "roles", "legacy.md"), `---\nid: legacy\ntitle: Legacy\npurpose: Old role\n---\nold\n`);
+      expect(() => new CollaborationRegistry(dir)).toThrow(/needs name and description/);
 
-      const two = join(dir, "two");
-      mkdirSync(two, { recursive: true });
-      registry.loadProject(two);
-      expect(registry.roles.get("reviewer")?.title).not.toBe("Project Reviewer");
-      expect(registry.playbook("feature").instructions).not.toContain("project feature prompt");
+      writeFileSync(join(dir, "roles", "legacy.md"), role("current"));
+      const registry = new CollaborationRegistry(dir);
+      expect(registry.roles.get("current")).not.toHaveProperty("version");
+      expect(registry.roles.get("coordinator")?.command).toBe("claude");
+      expect(registry.playbook("feature")).not.toHaveProperty("verify");
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
-  test("does not load .agents/skills/collie", () => {
-    const dir = mkdtempSync(join(tmpdir(), "collie-registry-"));
-    try {
-      const registry = new CollaborationRegistry(join(dir, "user"));
-      const project = join(dir, "project");
-      mkdirSync(join(project, ".agents", "skills", "collie", "roles"), { recursive: true });
-      writeFileSync(join(project, ".agents", "skills", "collie", "roles", "legacy.md"), role("legacy"));
-      registry.loadProject(project);
-      expect(registry.roles.has("legacy")).toBe(false);
-    } finally { rmSync(dir, { recursive: true, force: true }); }
-  });
 });

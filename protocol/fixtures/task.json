@@ -1,0 +1,31 @@
+{
+  "id": 42,
+  "key": "work-system-weaver-projects-collie#42",
+  "ref": "COLL-42",
+  "title": "实现四态 Task 生命周期",
+  "state": "ready",
+  "created_at": 1763664000000,
+  "started_at": 1763664030000,
+  "ready_at": 1763666480000,
+  "done_at": null,
+  "done_by": null,
+  "space": "collie",
+  "project": "collie",
+  "mode": "worktree",
+  "worktree": "/home/user/.local/share/collie/worktrees/collie/task-42",
+  "branch": "task/42-task-lifecycle",
+  "base": "main",
+  "start": "HEAD",
+  "agents": [],
+  "progress": {
+    "text": "实现完成",
+    "at": 1763666470000
+  },
+  "summary": "Task 生命周期已收口为四态",
+  "details": "driver 只交付 ready；accept/drop 终结 task。",
+  "proof": {
+    "id": "art-proof-42",
+    "title": "schema and lifecycle checks passed"
+  },
+  "depends_on": ["COLL-41"]
+}

@@ -176,7 +176,7 @@ export async function openCoordinator(space, show = true, settings = null) {
       space: space.id,
       name: "Coordinator",
       mod: "collie-chat",
-      props: { role: "coordinator", template: "collie-coordinator", space: space.id, folder, slot, settings },
+      props: { role: "coordinator", template: "coordinator", space: space.id, folder, slot, settings },
     });
     const pane = out.pane ?? panes().find((p) => p.tab === out.tab && p.mod === "collie-chat")?.pane ?? null;
     setShared("coordinator.slots", { ...liveSlots(), [slot]: { space: space.id, tab: out.tab, pane, folder } });

@@ -1,7 +1,7 @@
 // Shared core: the source is core/chat-view.js; bin/sync-shared copies it into mods/collie-chat/core/. Edit it here.
 // The chat's rows as the window's chat (mods/collie-chat) draws them and the web app's chat (web/plugins/chat) draws them
-// too: their words, a message's time, who sent a message, a launch brief's label, a task's news line, which
-// artifact a publish made, how images under a message are sized. Plain JS: no herdr, node or DOM.
+// too: their words, a message's time, who sent a message, a launch brief's label, a task's news line, and
+// how images under a message are sized. Plain JS: no herdr, node or DOM.
 
 // Every fixed word the chat shows, once: both sides read them from here (core/chat-view.test.js checks).
 export const WORDS = {
@@ -32,7 +32,6 @@ export const WORDS = {
   late: "Not in the conversation. Check the terminal.",
   // an Assistant asked for on a machine that's offline: its first message waits for it
   offline: (machine) => `${machine} is offline. The Assistant starts when it's back.`,
-  publishing: "Publishing an artifact…",
   stopping: "Stopping…",
   working: "Working",
   asked: "Asked you",
@@ -80,9 +79,6 @@ export const imagesLine = (n) => (n === 1 ? "1 image" : `${n} images`);
 export const questionsBelow = (n) => (n === 1 ? "1 question below" : n ? `${n} questions below` : WORDS.latest);
 // A message that didn't go: why, and that a press sends it again.
 export const notSent = (why) => `Not sent: ${String(why ?? "").replace(/\.$/, "")}. Click to try again.`;
-// An earlier publish of an artifact, as one quiet line; the latest one's card.
-export const published = (title, v) => `Published ${title} v${v}`;
-export const artifactLine = (v) => `Artifact · v${v}`;
 // m:ss, for the working line, a recording and a call.
 export const elapsed = (secs) => `${Math.floor(Math.max(0, secs) / 60)}:${String(Math.floor(Math.max(0, secs)) % 60).padStart(2, "0")}`;
 
@@ -284,51 +280,6 @@ export function newsWords(e, x) {
   return { mark, what, text };
 }
 
-// The lines a space's tasks make in its Assistant's chat, in time order, each { id, at, ref, event, text, made }:
-// Herdr's news in the conversation (items of kind "news") as said, and a start, ready or done it never said here
-// (before this log's first page, or not sent) from the task's own started / ready_at / done_at. tasks: Map ref -> task.
-// Each comes with live (needs you still, red) and accept (the newest ready line of a task still Ready).
-export function newsTimeline(items, tasks, { start = null } = {}) {
-  const all = [], said = new Set();
-  for (const it of items) if (it.kind === "news") { said.add(`${it.ref}:${it.event}`); all.push(it); }
-  const first = items.find((x) => x.at)?.at ?? 0;
-  for (const [ref, x] of tasks) for (const [event, at] of [["started", x.started], ["ready", x.ready_at], ["done", x.done_at]]) {
-    if (!Number.isFinite(at) || said.has(`${ref}:${event}`) || (at < first && start !== 0)) continue;
-    all.push({ id: `tn:${ref}:${event}:${at}`, at, ref, event, text: "", made: true });
-  }
-  all.sort((a, b) => a.at - b.at);
-  const last = new Map(), lastReady = new Map();
-  for (const e of all) { last.set(e.ref, e); if (e.event === "ready") lastReady.set(e.ref, e); }
-  return all.map((e) => {
-    const x = tasks.get(e.ref);
-    return { ...e, ...newsWords(e, x), live: last.get(e.ref) === e && (e.event === "needs-you" || e.event === "failed") && x?.status === "needs",
-      accept: lastReady.get(e.ref) === e && x?.status === "ready" };
-  });
-}
-
-// Which artifact each publish in the conversation made: the first version this agent published from a few seconds
-// before the call to five minutes after, not already taken. items: the conversation's; arts: the registry's
-// artifacts ({ id, title, version, versions: [{ v, at, publisher }] }); me: the agent's terminal (no machine).
-// -> Map item id -> { id, title, version (its latest), v (this publish's), latest (the last publish of it here) }.
-export function resolveArtifacts(items, arts, me) {
-  const out = new Map();
-  const calls = items.filter((x) => x.kind === "artifact");
-  if (!calls.length || !arts?.length) return out;
-  const vs = arts.flatMap((a) => (a.versions ?? []).filter((v) => v.publisher === me).map((v) => ({ a, v }))).sort((p, q) => p.v.at - q.v.at);
-  const used = new Set();
-  for (const x of calls) {
-    const at = x.at ?? 0;
-    const hit = vs.find(({ a, v }) => !used.has(`${a.id}:${v.v}`) && v.at >= at - 5000 && v.at <= at + 300000);
-    if (!hit) continue;
-    used.add(`${hit.a.id}:${hit.v.v}`);
-    out.set(x.id, { id: hit.a.id, title: hit.a.title, version: hit.a.version, v: hit.v.v });
-  }
-  const last = new Map();
-  for (const [k, r] of out) last.set(r.id, k);
-  for (const [k, r] of out) r.latest = last.get(r.id) === k;
-  return out;
-}
-
 // Image thumbnails under a message: each image whole, its shape kept, fitted in THUMB_ONE (one image) or THUMB_MANY
 // (w, h), never above its own size, all shrunk together when the row would pass the column (width). sizes: each
 // image's { w, h }, or null until known (a 4:3 box). -> { boxes: [{ w, h }], h: the row's height }.
@@ -352,7 +303,7 @@ export function fitThumbs(sizes, width = Infinity) {
 // Assistant's children are mostly workers: herdr.task without a helper role) nor an Assistant. Shown over its parent's
 // chat as a subagent row: its role and CLI, working / needs / done, how long, opening to its last messages and its own
 // chat. One that ended stays a while (it reported, its parent ended it).
-export const HELPER_ROLES = ["reviewer", "helper"];
+export const HELPER_ROLES = ["reviewer", "verifier", "helper"];
 export const subagentWord = (status) => (status === "working" ? WORDS.working : status === "needs" ? WORDS.needsYou : WORDS.subDone);
 export const SUBAGENT_KEEP_MS = 60 * 60000;
 

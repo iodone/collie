@@ -555,9 +555,7 @@ def queue(a, reason):
 
 
 def waiting(space, a):
-    """Ready tasks of this space that others wait behind (queued --after them, down the chain), in
-    words: ["TG-2 is Ready, waiting on the person's Accept; TG-3 and TG-4 wait behind it"]. A fact
-    for the wake, so a blocked chain is said, never parked on in silence."""
+    """Ready tasks with todo dependency chains behind them, for the wake's context."""
     out = []
     for p in store_files():
         d = read_list(p) or {}
@@ -569,13 +567,13 @@ def waiting(space, a):
         for t in tasks:
             if t.get("state") != "ready" or not mine(t):
                 continue
-            behind, look = [], [t["id"]]
+            behind, look = [], [ref(t)]
             while look:
-                i = look.pop(0)
+                dependency = look.pop(0)
                 for x in tasks:
-                    if i in (x.get("after") or []) and x.get("state") in ("queued", "todo") and x not in behind:
+                    if dependency in (x.get("depends_on") or []) and x.get("state") == "todo" and x not in behind:
                         behind.append(x)
-                        look.append(x["id"])
+                        look.append(ref(x))
             if behind:
                 names = [ref(x) for x in behind]
                 names = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]

@@ -1,38 +1,22 @@
 // What needs the person, from every space and machine: Collie Inbox's "Needs you"
-// (mods/collie-inbox). Items are derived
-// each time from what is there now and never stored, so they go once handled:
-//   ask      a Claude agent asks (a permission, a plan, questions) through the chat's
-//            PermissionRequest hook (the chat's ask hook, #7 Slice 2): answered on its chat's card
-//   blocked  any other agent waiting for the person (its live status), here or elsewhere
-//   merge    a task in Ready (collie-task's status ready): kept in "inbox.tasks" but not an
-//            item, since it sits in Tasks' Ready, not Needs you (ready(): the green counts)
-//   check    a task with something wrong (failing checks, a conflict, ...: its attention)
-//   stopped  a task whose agent ended before it said ready ("Agent stopped")
-//   waiting  a task whose agent went quiet without saying ready (collie-task's derived status:
-//            Needs you, needs "reply"): why (its own status line, its question or last words)
-//   auto     an automation that failed to fire or to start its task
-//   provider an assistant (coordinator) its model's provider kept cutting off: collie-task tick
-//            told it to carry on after 1, 2, 4 and 8 minutes, and the fifth try was cut off too,
-//            or the error is one waiting can't fix (signed out, out of allowance)
+// (mods/collie-inbox). Items are derived each time and never stored:
+//   ask      a Claude agent asks through the chat's PermissionRequest hook
+//   blocked  a live agent is waiting for the person
+//   provider a coordinator's model provider kept cutting it off
+// Ready Tasks stay in shared "inbox.tasks" for the green counts. Blocked agents come
+// from live terminal state; Task todo, running, and done states produce no tab alert.
 //
-// Each item says why in at most 40 characters (reasonOf: as Shepherdr, a standard reason or the
-// agent's own question cut to fit, never its message pasted): the Tasks row, the red counts'
-// alerts and toasts say the same. A task's reason is collie-task's (its why); an ask's comes from
-// the hook's request; a waiting agent's from its own status report (OSC 7501 kind).
+// Each item says why in at most 40 characters. The engine shares "inbox.asks" and
+// "inbox.tasks"; live agents are read where the items are made.
 //
-// The engine (startInbox) runs in the tab bar, which is always loaded. It shares what takes a
-// program to find out: shared "inbox.asks" (waiting requests), "inbox.tasks", "inbox.autos".
-// Live agents are read where the items are made (items()).
-//
-// The hook (the chat's ask hook, #7 Slice 2) asks the chat every time, whoever reads it (the web app, a
-// phone); the flag the engine touches (data/chat-asks/open/<terminal>) matters only where hc or jq
-// is missing. Claude shows its own prompt in its terminal meanwhile; Codex waits on the hook, so
-// a Codex agent's ask is released once its terminal comes on screen, and Codex asks there.
+// The hook asks the chat every time, whoever reads it. Claude shows its own prompt in
+// its terminal meanwhile; Codex waits on the hook and is released when its terminal
+// comes on screen.
 //
 // This engine lives in the always-loaded tab bar; the Inbox UI is mods/collie-inbox.
 // Pure helpers are shared through core/needs.js and core/spaces.js.
 
-import { LINE_MAX, REASONS, fit, reqReason, reportReason } from "./core/needs.js";
+import { REASONS, reqReason, reportReason } from "./core/needs.js";
 import { notifies } from "./notify.js";
 import { toast, toastWho as whoOf } from "./lib/ui.js";
 import { exec, appHome, home, focused, shared, setShared, watchFolder, readTextFile, writeTextFile, playSound, settings, run, layout } from "herdr";
@@ -40,7 +24,7 @@ import { terminals, panes, spaces } from "./live.js";
 import { chatPane } from "./core/spaces.js";
 
 const CLI = () => (globalThis.process?.env?.COLLIE_TASK_CLI) ?? `${appHome()}/bin/collie-task`;
-const taskStore = () => (globalThis.process?.env?.COLLIE_TASK_STORE) ?? (globalThis.process?.env?.HERDR_TASK_STORE) ?? `${home()}/.local/share/collie/tasks`;
+const taskStore = () => (globalThis.process?.env?.COLLIE_TASK_STORE) ?? `${home()}/.local/share/collie/tasks`;
 export const ASKS = () => `${appHome()}/data/chat-asks`;
 const pre = (machine, id) => (machine && id && !String(id).includes("/") ? `${machine}/${id}` : id ?? null);
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -191,23 +175,15 @@ export function reasonOf(item, req = null) {
   if (item.why) return item.why;
   if (item.kind === "ask") return req ? reqReason(req) : REASONS.question;
   if (item.kind === "blocked") {
-    // A task worker: collie-task's reason (its tool call, question, plan, or its report's kind).
-    const t = (shared("inbox.tasks") ?? []).find((x) => x.kind === "asks" && x.live?.includes(item.terminal));
-    if (t?.why) return t.why;
     const report = terminals().find((k) => k.address === item.terminal)?.report;
     const kind = report?.kind;
     return kind === "auth" ? REASONS.signedOut : kind === "permission" ? reportReason(report?.msg) ?? REASONS.permission : REASONS.question;
   }
-  if (item.kind === "check") return fit(item.attention);
-  // "Agent stopped" only when its process really ended; one alive and waiting (its own words
-  // came as item.why above) waits for the person.
-  if (item.kind === "stopped") return REASONS.stopped;
-  if (item.kind === "waiting") return REASONS.reply;
   return null;
 }
 
-// Tasks and automations, here and on each machine that has tasks. One read at a time: a slow
-// machine mustn't stack them every 20 s.
+// Tasks here and on each machine that has them. One read at a time: a slow
+// machine mustn't stack reads every 20 s.
 let reading = null;
 function readTasks() {
   return reading ??= readTasksNow().finally(() => { reading = null; });
@@ -216,36 +192,27 @@ function readTasks() {
 async function readTasksNow() {
   const r = await exec("sh", ["-c", 'ls "$1/.remote" 2>/dev/null; true', "x", taskStore()]).catch(() => null);
   const where = [null, ...(r?.stdout ?? "").split("\n").filter(Boolean)];
-  const tasks = [], autos = [];
+  const tasks = [];
   for (const machine of where) {
     const on = machine ? ["--on", machine] : [];
     const list = await json(CLI(), [...on, "list", "--all", "--json"]);
     for (const g of Array.isArray(list) ? list : []) for (const x of g.tasks ?? []) {
-      // Ready: collie-task's own status, the same as the Inbox's Ready group and Shepherdr's green
-      // counts (not Merging, nor one whose agent asks: that agent is a "blocked" item).
-      // "asks": its agent waits (a live blocked terminal, an item of its own): kept for its reason.
-      // "provider": cut off by its model's provider, the tries used up (collie-task tick).
-      // A problem its agent is on (collie-task's on_it(): Working, not Needs you) is no item.
-      const kind = x.attention ? (x.needs === "attention" ? "check" : null) : x.state === "ready" ? (x.status === "ready" ? "merge" : null)
-        : x.needs === "stopped" || x.status === "stopped" ? "stopped" : x.needs === "reply" || x.needs === "provider" ? "waiting"
-        : x.needs === "asks" ? "asks" : null;
-      if (!kind) continue;
-      const last = x.agents?.[x.agents.length - 1];
-      tasks.push({ kind, machine, folder: g.folder, name: g.name, ref: x.ref ?? `#${x.id}`, title: x.title, attention: x.attention ?? null, why: x.why ?? null,
-        pr: x.pr ?? null, space: pre(machine, x.space), tab: pre(machine, x.tab), live: (x.live ?? []).map((a) => pre(machine, a.address)),
-        merging: Boolean(x.merge_requested && x.live?.length), at: x.ready_at ?? last?.ended ?? last?.at ?? x.started ?? x.created ?? 0 });
+      // Ready alone contributes a green count. Blocked agents come from live terminals;
+      // todo, running, and done Tasks are not independent tab alerts.
+      if (x.state !== "ready") continue;
+      const last = x.agents?.at(-1);
+      tasks.push({ kind: x.state, machine, folder: g.folder, name: g.name, ref: x.ref ?? `#${x.id}`,
+        title: x.title, space: pre(machine, x.space), tab: pre(machine, x.tab),
+        live: (x.live ?? []).map((a) => pre(machine, a.address)),
+        at: x.ready_at ?? last?.ended ?? last?.at ?? x.started_at ?? x.created_at ?? 0 });
     }
-    const auto = await json(CLI(), [...on, "auto", "list", "--all", "--json"]);
-    for (const a of Array.isArray(auto) ? auto : []) if (a?.last_error)
-      autos.push({ machine, id: a.id, ref: a.ref ?? null, title: a.title, folder: a.folder, error: a.last_error, last_task: a.last_task ?? null });
   }
   put("inbox.tasks", tasks);
-  put("inbox.autos", autos);
   await readRetries();
 }
 
 // Assistants (coordinators) here that their provider kept cutting off (collie-task tick's
-// .retries.json): an item each, and once a toast. Task workers' show on their tasks.
+// .retries.json): an item each, and once a toast.
 const told = new Set();
 async function readRetries() {
   let rows = {};
@@ -262,8 +229,7 @@ async function readRetries() {
   put("inbox.provider", over);
 }
 
-// Output the same as last time isn't parsed again (one entry per command: a few per machine).
-// Not a file mtime check: collie-task derives states (an agent gone quiet) without a file changing.
+// Output the same as last time isn't parsed again (one entry per machine).
 const parsed = new Map();
 async function json(cmd, args) {
   const r = await exec(cmd, args).catch(() => null);
@@ -278,8 +244,8 @@ async function json(cmd, args) {
 
 // ---- the items ----------------------------------------------------------------------------
 
-// Every item now, most urgent first: asks and waiting agents, then problems. These are the Inbox's
-// "Needs you" and the red counts; a task ready to merge isn't one (it's in Ready: ready()).
+// Every item now: asks and blocked live agents, then provider failures. Ready Tasks
+// contribute only to ready(), never to the red count.
 export function items() {
   const asks = shared("inbox.asks") ?? [];
   const asking = new Set(asks.map((a) => a.terminal));
@@ -289,10 +255,7 @@ export function items() {
   for (const k of all)
     if (k.state === "live" && k.status === "blocked" && !asking.has(k.address))
       out.push({ key: `blocked:${k.address}`, kind: "blocked", terminal: k.address, at: blockedSince(k.address) });
-  const tasks = shared("inbox.tasks") ?? [];
-  for (const x of tasks) if (x.kind !== "merge" && x.kind !== "asks") out.push({ key: `${x.kind}:${x.machine ?? ""}:${x.folder}:${x.ref}`, ...x });
   for (const p of shared("inbox.provider") ?? []) if (!asking.has(p.terminal)) out.push({ key: `provider:${p.terminal}`, kind: "provider", ...p });
-  for (const a of shared("inbox.autos") ?? []) out.push({ key: `auto:${a.machine ?? ""}:${a.id}`, kind: "auto", ...a, at: a.error?.at ?? 0 });
   return out;
 }
 
@@ -330,7 +293,11 @@ export function countsByTab() {
 }
 
 // The tasks in the Inbox's Ready, for the green counts (beside the red ones), and per tab.
-export const ready = () => (shared("inbox.tasks") ?? []).filter((x) => x.kind === "merge");
+// A blocked live agent is a red item instead, never a simultaneous green count.
+export function ready() {
+  const blocked = new Set(terminals().filter((k) => k.status === "blocked").map((k) => k.address));
+  return (shared("inbox.tasks") ?? []).filter((x) => x.kind === "ready" && !x.live?.some((a) => blocked.has(a)));
+}
 export const readyCount = () => ready().length;
 export function readyByTab() {
   const m = new Map();
@@ -374,7 +341,7 @@ export function toAgent(address) {
 
 // A terminal with no pane (a task worker or reviewer, which has no tab by design): Herdr's
 // own peek. Collie's ticket page is not a terminal host, so there is no task-view branch.
-export function peekTerminal(terminal, task = null, title = null) {
+export function peekTerminal(terminal) {
   run("terminal.peek", { terminal });
 }
 

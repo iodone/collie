@@ -11,7 +11,6 @@ before it:
   provider     Provider errors: a turn the model's provider cut off, and whether to retry it.
   sessions     Agent sessions: the Claude Code or Codex session a task's agent runs, so it can
                resume.
-  github       GitHub and merging: pull requests, checks, and finishing a merged task.
   launch       Starting agents: their argv, labels, brief, tab and coordinator.
   takeover     The backup agent: a task whose CLI can't go on is taken over, once, by the other
                CLI; and which CLIs each machine has installed and signed in.
@@ -21,12 +20,9 @@ before it:
   archive      The archive: done tasks set aside after a while.
   output       Output: a task as JSON and as one line of text.
   scheduler    Keeps the scheduler (herdr-automations) running on this machine.
-  commands     The task commands: add, start, status, ready, accept, merge and the rest.
+  commands     Task execution commands: add, start, status, ready, accept and done.
   news         News: what changed in a space's tasks, told to its Assistant.
-  ghnews       GitHub news: a Ready task's pull request news to its agent, and its base branch
-               going red after merges, to the Assistant.
-  tick         Tick: one pass over the tasks (start queued ones, finish merged ones, retry cut
-               turns).
+  tick         Tick: start runnable todo tasks and recover live agents.
   backups      Backups of every machine's spaces, and restoring them.
   machines     Other machines: the task tools kept in step there (sync), the reach map hop by
                hop, the Assistants on every reachable machine and messages between them.

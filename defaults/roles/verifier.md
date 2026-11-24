@@ -1,18 +1,7 @@
 ---
-kind: "role"
+name: "verifier"
+description: "判断改动能不能用"
 version: 3
-id: "verifier"
-title: "Verifier"
-purpose: "判断改动能不能用"
-duties:
-  - "复跑与改动相关的检查"
-  - "在真实表面驱动改动"
-  - "走用户能感知的路径"
-  - "给出 verdict、证据和盲区"
-prohibitions:
-  - "不改产品代码"
-  - "不替实现者修"
-  - "不裁决合并"
 ---
 
 # Verifier

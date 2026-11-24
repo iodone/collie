@@ -367,7 +367,7 @@ def cmd_feedback(args):
                     and (not space or not p.get("space") or bare(p["space"]) == bare(space))]
         return say(args, rows, "\n".join(f"{r['key']}  {r['state']}  {r['line']}" for r in rows) or "Nothing waits to be offered.")
     if not line and not args.key:
-        raise Fail("Say the problem in one line: herdr-task feedback \"Ready refused a reviewed commit\" --details \"…\"")
+        raise Fail("Say the problem in one line: herdr-task feedback \"Ready refused my proof\" --details \"…\"")
     if (args.file or args.no or args.later) and not assistant:
         raise Fail("Only an Assistant asks the person and files feedback: run herdr-task feedback \"<one line>\" --details \"…\" "
                    "and your Assistant offers it. Carry on with your work.")

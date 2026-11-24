@@ -62,7 +62,7 @@ flowchart TB
     C --> D["Decision<br/>spawn / ask / noop"]
     D --> V["service<br/>schema · guard · dispatch"]
     V --> W["Card / waiting"]
-    L[("Ledger<br/>Event · Decision · Receipt")]
+    L[("Ledger<br/>Message · Case · Decision · Receipt")]
     C <--> L
   end
 
@@ -97,18 +97,19 @@ flowchart TB
 |---|---|---|
 | **Space** | 协作域：Coordinator、policy、Inbox、用户上下文 | 不是 git repo |
 | **Project** | 执行域：repo、folder、worktree、task store | 不决定谁来判断 |
-| **Event** | 外部发生的事实；按 source + key 去重，正文落 data_ref | 不是指令 |
-| **Human message** | 人在 chat / IM 里说的话 | 不伪造 Event |
-| **Decision** | Coordinator 对一条消息的判断 | 唯一持久状态机 |
-| **Work / Ticket** | 一个 Decision 要交付的工作 | Decision + task facts 的读时投影 |
-| **Task** | Work 的执行事实：worktree、driver、status、receipt | 由 `collie-task` 维护 |
+| **Message** | 进入 Coordinator 的一条消息；正文落 data_ref | 不是指令 |
+| **Event** | `source=event` 的 Message；按 source + key 去重 | 不是指令 |
+| **Human message** | `source=human` 的 Message；人在 chat / IM 里说的话 | 不伪造 Event |
+| **Decision** | Coordinator 的业务判断，以及 service/system 的护栏、失败和 finalization revision | 外循环持久状态机：`open / waiting / settled`；Driver 不写入 |
+| **Work / Ticket** | 一个 Decision 要交付的工作 | Decision + Task + live agent 的只读投影 |
+| **Task** | Work 的执行事实：worktree、driver、status、receipt | 内循环持久状态机：`todo / running / ready / done`，由 `collie-task` 维护 |
 | **Driver** | Task 的执行所有者；读 playbook，自己工作或启动 helper | 不是 Coordinator |
 | **Helper** | 同一 Task 下的局部 role terminal，例如 reviewer / verifier | 不是第二个 Task，也不是 driver |
 | **Playbook** | 交给 driver 的工作编排 prompt | driver 的本地执行说明 |
 | **Role** | 职责、禁项、输入输出 | 不是 agent 名 |
 | **Policy** | 内置规则 + per-space 用户规则 | Coordinator 只能起草，不能自改 |
 | **Inbox** | Decision + task facts 的读时投影 | 不写回 Ledger |
-| **Ledger** | 只追加的事实日志 | 唯一持久记忆 |
+| **Ledger** | 只追加的协调事实日志 | Message / Case / Decision / Receipt 的真源；Task 持久事实在 task store |
 
 关系：
 
@@ -168,8 +169,9 @@ flowchart TB
 
 ### 3.1 输入层
 
+- **Message**：统一信封 `urn:collie:message:v1`，`source` 标明 event 或 human。
 - **Event**：GitLab / GitHub / cron / bot IM；Ingress 负责验签、归一、去重、归并、space 解析。
-- **Human message**：UI / IM 对话；不经过 Event 的 dedupe / merge / hops。
+- **Human message**：Coordinator chat 里的对话；直接进入该 space 的 Coordinator，不经过 ingress、Event 的 dedupe / merge / hops，也不写 Event。
 
 输入层只把消息交给 Coordinator，不判断业务。
 
@@ -179,12 +181,12 @@ Coordinator 读：
 
 - 消息内容
 - queue / running / recent / policy / budget
-- role / playbook catalog
+- playbook catalog（role catalog 单独给 driver）
 
 Coordinator 输出：
 
 - Decision
-- 可选的自然语言 reply
+- 可选的自然语言 reply（同一个 chat 会话里的文字）
 
 Coordinator 不执行 task，也不管理 task 内部的 role 转换。
 
@@ -199,11 +201,13 @@ Coordinator 不执行 task，也不管理 task 内部的 role 转换。
 
 ### 3.4 投影层
 
-- Inbox 只读 Decision + task facts。
-- Ticket 展示 task、helper 活动和收据。
+- Inbox 只读 Decision + Task + live agent。
+- Ticket body 只有 **Terminal** 与 **Artifacts** 两个 tab；Terminal 指向 driver（已结束时可显示其历史 terminal），Artifacts 展示显式绑定产物。
+- Reviewer / verifier / helper 各有独立 Herdr tab；helper-only 不能抢占 driver Terminal。
+- Artifact 只有 `artifact.task` 指向当前 Task，或被 `Task.proof` 引用时才进入 Ticket；proof 排第一。不从 agent / chat 日志、publisher 或时间窗口推断归属。
 - Coordinator chat 是人的对话面。
 
-Work 是四态投影；Task 和 helper 的状态分别记录在 task facts 与 Herdr terminal 中。
+Work 是四态只读投影；Decision 与 Task 是两个持久状态机，helper 的 live 状态记录在 Herdr terminal 中。
 
 ---
 
@@ -211,10 +215,15 @@ Work 是四态投影；Task 和 helper 的状态分别记录在 task facts 与 H
 
 ### 4.1 输入
 
-| 输入 | 入口 | 处理 |
-|---|---|---|
-| **Event** | GitLab / GitHub / cron / bot IM → Ingress | 验签、归一、`source + key` 去重、归并、space/project 解析 |
-| **Human message** | UI / IM chat | 直接进入 Coordinator；不经过 Event dedupe/merge/hops |
+| 输入                | 入口                                                | 处理                                           |
+| ----------------- | ------------------------------------------------- | -------------------------------------------- |
+| **Event**         | `/v1/ingress`（native client）或 `/v1/in/<source>`（vendor webhook → adapter） | 验签、归一、`source + key` 去重、归并、space/project 解析；随后进入 helper job |
+| **Human message** | Coordinator chat（UI） | 直接进入该 space 的 Coordinator；写 human Message，不经过 ingress、Event dedupe/merge/hops |
+
+- `/v1/ingress` 和 `/v1/in/<source>` 是仅有的两个对外 ingress contract；human Message 不走它们。
+- 多 `space_candidates` 时用第一个作为 primary，但 service 生成 waiting Card 让人确认，不静默选边。
+- Chat 的判断通过 `collie` CLI 落库：`collie ticket create` / `collie decision commit` 调用 service 的本地 `/ticket` / `/decision` 路由，不是 ingress。
+- Event 进入 helper；chat 直接进入 Coordinator。两者使用同一套 Message / Case / Decision 契约，但会话和投递目标不同。
 
 Event 正文只通过 `data_ref` 读取；人的消息不需要伪造 Event。
 
@@ -225,7 +234,7 @@ Decision 是唯一正式机器输出：
 ```text
 Decision
 ├── origin: event | human
-├── playbook: { id, version }?
+├── playbook: { name, version }?
 ├── project?
 ├── why
 ├── actions[]
@@ -236,14 +245,47 @@ Decision
 
 - `spawn_task`：创建一个 task
 - `ask`：向人出 Card
-- `priority` / `hold`：调整已有 task
-- `emit_command`：请求对外动作
-- `propose_policy`：起草 policy
+- `priority` / `hold`：投影到 Decision 的排序 / 挂起字段；priority 过频或命中窗口限制时转为 waiting Card
+- `emit_command`：请求对外动作；若被护栏变成 waiting Card，人 accept 后由 service 自动执行，也可用 `collie decision deliver --decision <id>` 重试
+- `propose_policy`：把 `rule.draft_ref/summary` 写进 Decision.proposal，等待人批准
 - `noop`：不行动
 
 一条 Decision 只创建一个 `spawn_task`。需要多个 task 时，产生多个 Decision。
 
-### 4.3 Coordinator 的边界
+### 4.3 Coordinator context
+
+Coordinator 的上下文分两层。
+
+**1. 静态指令：从 prompt 文件加载**
+
+```text
+~/.config/herdr-core/templates/coordinator.md
+```
+
+包含职责、Decision 契约、动作约束、默认 playbook 映射、人的边界。不是动态数据。
+
+**2. 动态上下文：程序注入 Case**
+
+```text
+catalog
+  playbooks: [{ name, description, version }]
+
+event / human input
+slide snapshot
+  queue / running / recent / policy / budget / space_note
+
+instruction.role_prompt_ref
+instruction.output_contract
+```
+
+规则：
+
+- `catalog` 是唯一可选择的 playbook 来源；程序从 CollaborationRegistry 读取，不能由 coordinator 自己猜。
+- playbook / role 的完整 prompt 正文不进入 Coordinator context；选中 playbook 后由 service 渲染进 task brief，role prompt 由 driver 按路径读取。
+- `snapshot` 有 4KB 硬上限；catalog 只含选择元数据，避免把 prompt 正文塞进判断上下文。
+- 事件正文仍在 `data_ref`，只作为资料，不作为指令。
+
+### 4.4 Coordinator 的边界
 
 Coordinator 负责：
 
@@ -277,20 +319,20 @@ Coordinator
 driver 的输入：
 
 - task brief：目标、范围、验收条件、项目路径
-- playbook prompt：这个 task 如何展开
-- role catalog：可用的 helper role 及其 prompt
-- task 命令：状态、review、verify、ready
+- playbook prompt：这个 task 如何展开，包括 review / verify 与 delivery
+- role catalog：可用的 helper role、描述和文件路径
+- 通用 task 命令：`add / list / show / start / status / ready / accept / done`；driver 执行时只用 `status` 记录进度、用 `ready` 交付
 
 ### 5.2 driver 的职责
 
 driver 是 task 的执行所有者。它可以：
 
 - 自己完成工作
-- 启动一个或多个 helper role
+- 按 playbook 启动一个或多个 helper role
 - 等待 helper 结果
 - 根据结果修复或继续
-- 记录 review / verify facts
-- 提交 ready receipt
+- 按 playbook 执行或请求 delivery
+- 提交只含 summary / details / proof 的 ready receipt
 
 driver 不负责：
 
@@ -345,15 +387,13 @@ driver 执行的是 **task-local 编排**，Coordinator 不逐 role 驱动。
 
 ### 5.5 回执
 
-task 结束时，driver 只交 task-level receipt：
+task 结束时，driver 只交 task-level receipt，且只有三个通用交付字段：
 
-- `ready`
-- summary
-- details
-- proof
-- review / verify facts
+- `summary`
+- `details`
+- `proof`
 
-receipt 回到 service，再由 service 投影成 Work / Ticket；需要判断时回到 Coordinator。
+`proof` 是可核验引用；review / verify 等 playbook 过程证据需要保留时，也只能通过 proof 引用，不形成额外 receipt 字段或 Task gate。receipt 回到 service，再交给 Coordinator 判断 accept / rework / drop，同时用于 Work / Ticket 只读投影。
 
 ```text
 driver / helpers
@@ -365,78 +405,150 @@ Coordinator（task-level）
 
 不是每个 helper 都产生 Coordinator turn。
 
+完整状态流转、回执与最终交付见 [`TASK-LIFECYCLE.md`](TASK-LIFECYCLE.md)。
+
 ---
 
 ## 6. 状态同步
 
-### 6.1 三份事实，不要混用
+### 6.1 三层，不是一套状态
 
 ```text
-Work 状态       Todo / Working / Needs you / Settled
-Task 事实       collie-task 的 running / ready / reviewed / verified
-Helper 状态     hc terminal 的 working / blocked / idle
+Decision    open / waiting / settled          外循环判断
+Task        todo / running / ready / done     内循环执行事实
+Work        Todo / Working / Needs you / Settled  Inbox 投影
 ```
 
-Work 是 Decision 与 task facts 的投影；Task 和 helper 的事实分别保存。
+Task state 是持久事实；Work 是读取 Decision + Task + Herdr 后算出的投影。
 
-### 6.2 Work 四态
+### 6.2 Task lifecycle
 
-| Work | 含义 | 来源 |
+```text
+todo → running          task start
+running → ready         task ready + summary / details / proof
+ready → running         task start（rework）
+running → running       task start（terminal 已移除的 stopped-running 恢复）
+ready → done            task accept
+todo / running / ready → done
+                        task done（drop / finalization）
+```
+
+| state | 含义 | 进入方式 |
 |---|---|---|
-| **Todo** | 没有 driver 在跑：待启动、排队、依赖、定时 | task 未 running；Decision open |
-| **Working** | driver 或 helper 在跑 | task running；有活跃 terminal |
-| **Needs you** | 人持有下一步 | Card / 问题 / 待验收 |
-| **Settled** | 结束 | Decision settled；accept / drop / 终结 |
+| `todo` | 已创建，未开始 | `collie task add` |
+| `running` | driver 正在工作 | `collie task start`：`todo → running`、rework 的 `ready → running`，或 stopped-running terminal 移除后的原地重启 |
+| `ready` | driver 已交付，等待 accept / rework / drop | `collie task ready`，必须提供 summary / details / proof |
+| `done` | accept / drop 后终结 | accept 用 `collie task accept`；drop / finalization 用 `collie task done` |
 
-### 6.3 phase 是投影
+调度、排队和外部交付由 metadata 与 Decision/Card 表达，不进入 Task lifecycle。
 
-可以显示：
+### 6.3 标准 Task schema
 
-```text
-Working · building
-Working · reviewing
-Working · verifying
-```
-
-Work 的持久状态保持四态；`working.building` 只是读时显示。
-
-phase 来自：
-
-- driver 当前工作
-- 活跃 helper 的 `herdr.role`
-- helper 是否在等待
-
-推荐规则：
+持久化文件：
 
 ```text
-driver 在工作，没有 helper        → building
-reviewer 活跃                     → reviewing
-verifier 活跃                     → verifying
-helper 提问，driver 无法代答       → Needs you
-driver 等待 helper                 → Working（phase 仍是对应 role）
+~/.local/share/collie/tasks/<slug>.json
 ```
 
-helper 完成不会自动推进 Work；它只把结果交给 driver。
+列表 envelope：
 
-### 6.4 什么时候变成 Needs you
+```json
+{
+  "version": 1,
+  "folder": "/repo/collie",
+  "kind": "repo",
+  "name": "collie",
+  "slug": "repo-collie",
+  "prefix": "COLL",
+  "next": 42,
+  "project_id": null,
+  "tasks": []
+}
+```
 
-- helper 或 driver 向人提问
-- driver 被阻塞，需要人的决定
-- task ready，等待 accept / rework
-- 不可逆动作需要 approval
+Task record：
 
-不是“某个 role 完成了”就变成 Needs you。
+```json
+{
+  "id": 42,
+  "ref": "COLL-42",
+  "title": "Handle materialize!109",
+  "state": "todo | running | ready | done",
 
-### 6.5 什么时候 Settled
+  "created_at": 1795485654000,
+  "started_at": null,
+  "ready_at": null,
+  "done_at": null,
+  "done_by": null,
 
-只有 Decision 进入 settled 才是 Work Settled：
+  "space": "spf57...",
+  "project": "materialize",
 
-- 人 accept
-- 人 drop
-- Coordinator 明确终结
-- 已完成的自动接受
+  "mode": "worktree | here",
+  "worktree": null,
+  "branch": null,
+  "base": null,
+  "start": null,
 
-`ready` 只是交付，不是 done。
+  "agents": [],
+  "progress": null,
+  "summary": null,
+  "details": null,
+  "proof": null,
+  "depends_on": []
+}
+```
+
+字段：
+
+| 字段 | 持久 | 说明 |
+|---|---|---|
+| `state` | 是 | 只有 4 个值 |
+| `done_by` | 是 | `coordinator` / `human` / null |
+| `depends_on` | 是 | 队列依赖 |
+| `progress` | 是 | driver 自报进度 |
+| `agents` | 是 | 历史 agent 记录 |
+| `ref` | 是 | canonical Task ref（如 `COLL-42`）；spawn / adopt / Receipt / Artifact 全链路使用，不做 key / id 回退 |
+| `status` / `needs` / `why` | 否 | Work 投影派生 |
+| `live` / `subagents` | 否 | Herdr labels 派生 |
+| `summary` / `details` / `proof` | 是 | `ready` 的通用 receipt 字段；proof 是可核验引用 |
+
+状态不变量：
+
+```text
+todo:    started_at=null, ready_at=null, done_at=null
+running: started_at!=null, ready_at=null, done_at=null
+ready:   ready_at!=null, summary/details/proof!=null, done_at=null
+done:    done_at!=null, done_by=coordinator|human
+```
+
+### 6.4 `ready` 是通用交付态
+
+`ready` 只表示 driver 已交付，不表示后续动作已经完成。
+
+```text
+running → ready   driver 调用 collie task ready
+ready → running   人/Coordinator 选择 rework，或有新指令/revision
+ready → done      accept / drop 后完成
+```
+
+`ready` 的下一步不在 Task 里定义：人 accept / rework / drop 属于 Decision / Card；后续执行和交付由 Coordinator 与 playbook 决定。
+
+Task 只记录 `todo/running/ready/done`。
+
+### 6.5 Work 四态
+
+唯一规范判定表见 [`TASK-LIFECYCLE.md`](TASK-LIFECYCLE.md) §2.5。投影按顺序取第一个命中：Decision settled / waiting，live blocked / live roles，然后才是 Task ready / done / running，最后才是 Todo。Task running 没有 live agent 仍为 Working；没有更高优先级条件时 Task done 为 Settled，包括 orphan 或 Decision 仍为 open 的情况。
+
+### 6.6 phase 是 Work 的读时显示
+
+phase 来自 live helper 的 `herdr.role`，只用于 Work 显示，不进入 Task state。
+
+### 6.7 Needs you / Settled
+
+Decision waiting、live blocked，或没有更高优先级 live role 的 Task ready 都是 Needs you。Decision settled 是 Settled；没有 Decision settled 时，Task done 仍可按上述优先级投影为 Settled。
+
+`ready` 不是 done；`ack` 不是 settled。
 
 ---
 
@@ -482,13 +594,13 @@ driver 负责发现和处理：
 
 - reviewer findings → driver 修复
 - verifier fail → driver 修复
-- helper 崩溃 / 超时 → driver 重试或升级为 task blocked
+- helper 崩溃 / 超时 → driver 重试；无法继续时由 service 写 Decision waiting / Card
 
-如果 driver 无法处理，交 task-level blocked / Card；Coordinator 不需要知道每个 helper 细节。
+如果 driver 无法处理，service 把问题交回 Coordinator / 人；Task 不增加 blocked 状态，Coordinator 也不需要知道每个 helper 细节。
 
 ### 8.2 task 失败
 
-task 状态和 receipt 记录失败原因。Coordinator 读 receipt / facts 后决定：
+task 未 ready 就结束（例如 driver 进程退出或超时）时，`#executeSpawn()` 捕获并写 waiting alert Card，不把异常抛回 ingress，也不把 Task 标成 `done`。Coordinator 读 receipt / facts 后决定：
 
 - continue same Work
 - rework
@@ -512,12 +624,12 @@ task 状态和 receipt 记录失败原因。Coordinator 读 receipt / facts 后�
 
 ### 9.1 Role
 
-Role 来源、固定角色、默认角色和自定义配置规则见 [`SETTINGS.md`](SETTINGS.md)。
+Role 来源、固定角色和用户配置规则见 [`SETTINGS.md`](SETTINGS.md)。
 
 Role 文件：
 
 ```text
-templates/roles/*.md
+~/.config/collie/roles/*.md
 ```
 
 Role 定义职责、禁项、输入输出；playbook 负责编排这些 role 的使用方式。
@@ -527,58 +639,210 @@ Role 定义职责、禁项、输入输出；playbook 负责编排这些 role 的
 Playbook 文件：
 
 ```text
-templates/playbooks/*.md
+~/.config/collie/playbooks/*.md
 ```
 
 Playbook 只有：
 
 ```text
-id
+name
+description
 version
-title
 body
 ```
 
-body 是交给 driver 的编排 prompt。
+body 是交给 driver 的编排 prompt。review / verify 的顺序、helper 使用和 merge / comment / close 等 delivery 都由 body 决定；Decision 的 spawn 只选择 playbook 与执行目标，不含 `spawn.review` / `spawn.merge`。这些活动不形成 Task 字段、状态或 accept gate。
 
 ### 9.3 配置层级
 
 ```text
 system fixed
-  ~/.config/herdr-core/templates/roles/coordinator.md
-  ~/.config/herdr-core/templates/roles/driver.md
+  ~/.config/herdr-core/templates/coordinator.md
+  ~/.config/herdr-core/templates/driver.md
 
-built-in defaults
-  templates/roles/{reviewer,verifier}.md
-  templates/playbooks/*.md
-
-user custom
+user config
   ~/.config/collie/roles/*.md
   ~/.config/collie/playbooks/*.md
-
-project custom
-  <project>/.collie/roles/*.md
-  <project>/.collie/playbooks/*.md
+  ~/.config/collie/skills/cli/SKILL.md
+  ~/.config/collie/coordinator.json
+  ~/.config/collie/settings.json
+  ~/.config/collie/sources.json
+  ~/.config/collie/workspaces.json
 ```
 
 - `coordinator` / `driver` 的系统定义不可覆盖，只允许改 runner 配置。
-- 默认 role 和 built-in playbook 可以被 user / project 覆盖。
-- 每个定义记录 `origin: builtin | user | project` 和实际文件路径。
-- 不再加载 `<project>/.agents/skills/collie`。
+- 所有用户级 role / playbook 都存放在 `~/.config/collie/`。
+- 每个定义记录 `origin: system | config` 和实际文件路径。
+- 旧路径 `~/.config/herdr-core/templates/roles/`、`~/.config/herdr-core/templates/playbooks/`、`<project>/.collie/`、`<project>/.agents/skills/collie/` 不再读取。
 - Task 记录实际使用的 playbook / role 来源。
 
 ### 9.4 命令边界
 
-| 动作 | 命令 |
-|---|---|
-| 人明确建 Ticket | `collie ticket create` |
-| Coordinator 提交 Decision | `collie decision commit` |
-| 读 Ticket / Decision | `collie ticket show` |
-| 读 task facts | `collie task show/status` |
-| 执行 task 操作 | `collie task ...` |
-| 查看 registry | `collie roles list` |
+完整命令、参数和状态迁移以 [`CLI.md`](CLI.md) 为准；注入 Coordinator / Driver 的 `skills/cli/SKILL.md` 保持自包含，不依赖本文表格。
 
-`collie-task` 是内部 task CLI；`collie task` 是公开原子命令面。
+人通过 `collie ticket create` 明确建 Ticket，Coordinator 用 `collie decision commit` 提交判断，Driver 只用 `collie task status/ready` 记录进度和交付。accept / drop 后由 service 终结 Task，rework 对同一 Task 调 `start`。公开 `collie task` 子命令只有 `add / list / show / start / status / ready / accept / done`；`drop` 是 Card 选项，不是 task 子命令。
+
+`collie-task` 是内部 task CLI，tick / revive / scheduler 等内部能力不进入公开契约。Chat 只使用 `collie` CLI，不直接调用 service 的本地 HTTP 路由（`/ticket`、`/decision`、`/deliver`）；这些路由是 CLI 的实现细节。对外 ingress 只有 `/v1/ingress` 和 `/v1/in/<source>`。
+
+### 9.5 Coordinator 的 CLI 能力面
+
+Coordinator / Driver 的 role prompt 不复制 CLI 命令表。启动器在启动时读取并注入：
+
+```text
+~/.config/collie/skills/cli/SKILL.md
+```
+
+- Coordinator：启动 chat agent 时把 skill 追加到系统提示词。
+- Driver：`renderBrief()` 把 skill 追加到 task brief。
+
+skill 只描述 `collie` 命令面，不描述 service socket、内部路由或传输细节。
+
+| 能力 | CLI | service 内部路由 | 说明 |
+|---|---|---|---|
+| 读 registry | `collie roles list` | `GET /v1/collaboration` | 选择 playbook / role 前读取 |
+| 新建 Ticket | `collie ticket create` | `POST /ticket` | 由 service 构造确定性 `spawn_task` |
+| 提交 Decision | `collie decision commit` | `POST /decision` | Coordinator 已在 chat 中判断完 |
+| 重试 delivery | `collie decision deliver` | `POST /deliver` | accept 后 delivery 失败时使用 |
+| 读 Ticket | `collie ticket show` | 读 `queue.json` 投影 | 不根据聊天记忆猜状态 |
+| 读 task | `collie task list/show` | `collie-task` | task facts 的唯一公开入口 |
+| 接入 orphan task | `collie ticket adopt` | `POST /ticket/adopt` | 不重复 spawn |
+
+`collie ticket create` / `collie decision commit` 不是 ingress；它们只从本地 Unix socket 调用 service。TCP ingress 只暴露 `/v1/ingress` 和 `/v1/in/<source>`。
+
+### 9.6 Event 投递序列
+
+```mermaid
+sequenceDiagram
+  participant C as Native client / vendor / collie intake event
+  participant A as Source adapter
+  participant S as CollieService
+  participant I as Ingress
+  participant K as coordinate
+  participant H as helper terminal
+  participant L as Ledger
+  participant T as task / Inbox
+  alt native Event
+    C->>S: POST /v1/ingress
+    S->>S: intakeEvent(event)
+  else vendor webhook
+    C->>S: POST /v1/in/{source}
+    S->>A: sourceEvent(source, payload)
+    A-->>S: Event
+  end
+  S->>I: ingest(event)
+  I-->>S: dispatch(space)
+  S->>K: coordinate(Case, origin=event)
+  K->>H: job file + send
+  H-->>K: Decision JSON
+  K->>L: append Case / Decision
+  S->>T: spawn_task / project Card
+  S-->>C: status + decisions
+```
+
+### 9.7 Chat 投递序列
+
+```mermaid
+sequenceDiagram
+  participant P as Person
+  participant C as Coordinator chat
+  participant CLI as collie CLI
+  participant S as CollieService
+  participant K as coordinate
+  participant T as collie-task
+  participant I as Inbox
+  P->>C: 对话消息
+  C->>CLI: collie roles list
+  CLI->>S: GET /v1/collaboration
+  S-->>CLI: roles / playbooks
+  C->>CLI: collie ticket create / decision commit
+  CLI->>S: POST /ticket 或 /decision
+  S->>S: humanMessage()
+  S->>K: coordinate(Case, origin=human)
+  K-->>S: Decision
+  S->>T: 执行 spawn_task（若有）
+  T-->>S: ready receipt
+  S->>I: 投影 Card / Settled / Working
+  S-->>CLI: JSON
+  CLI-->>C: JSON
+  C-->>P: 自然语言回复
+```
+
+Chat 不经过 helper，也不经过 `/v1/ingress`。它只通过 CLI 落 Decision；事件才由 ingress 进入 helper。两条路径共用 `coordinate()` / Decision / Ledger / Inbox。
+
+### 9.8 持久化存储
+
+Collie 的状态分三类，不混在同一个文件里：
+
+1. **协调记忆**：Message / Case / Decision / Receipt
+2. **执行事实**：task store、worktree、artifact
+3. **投影与 IPC**：queue、ingress snapshot、brief、job、receipt 文件
+
+#### 状态目录 `~/.local/state/collie/`
+
+| 路径 | 写入者 | 作用 | 可否重建 |
+|---|---|---|---|
+| `ledger.json` | service / `Ledger` | Message、Case、Decision、Receipt 的 append-only 历史 | 否，是协调记忆的唯一真源 |
+| `queue.json` | service | `Decision.state` 的 Inbox 投影 | 是，service 启动时从 Ledger 重写 |
+| `ingress.json` | service / `Ingress` | 去重、归并 lane、事件代表快照 | 运行态；用于重启后继续去重 |
+| `intake/ev_*.json` | `service/intake.ts` | generic intake 的 Event 正文 | 外部数据，不重建 |
+| `event-bodies/ev_*.md` | source adapter | vendor webhook 归一后的 Event 正文 | 外部数据，不重建 |
+| `tickets/msg_*.md` | `createTicket` | human ticket 的 brief 正文 | 人提供的输入 |
+| `turns/msg_*.json` | `commitDecision` | Coordinator chat 提交的 Decision 输入 | 人/agent 提供的输入 |
+| `briefs/*.md` | `renderBrief` | 渲染后的可信 task brief | 可由 Decision、playbook、role 重建 |
+| `receipts/rc_*.json` | `acceptReceipt` | task ready 的三件套（summary/details/proof） | 与 Ledger Receipt 对应 |
+| `helper/<space>/jobs/hj_*.json` | `runHelperJob` | 递给 Coordinator helper 的 Case | 可由 Case 重建；启动时未完成 job 转 waiting Card |
+| `helper/<space>/decisions/hj_*.json` | Coordinator helper | helper 写回的 Decision proposal | service 校验后才进 Ledger |
+| `policy/<space>.md`、`policy.md` | 人 | per-space / 全局 policy | 用户配置 |
+| `ruleset.json` | installer / 人 | 护栏、预算、hops 配置 | 配置，不是运行历史 |
+| `service.sock`、`service.log`、`coordinator-runtime.json` | service / 运维 | socket、日志、Coordinator 运行时指针 | 运行态，不是业务事实 |
+
+写文件的方式：
+
+- `ledger.json`：进程内追加后写临时文件，再 `rename` 成正式文件；不直接原地改历史。
+- `queue.json` / `ingress.json`：同样临时文件 + `rename`，避免读到半截 JSON。
+- 正文文件使用 `0600`；Event 正文用 `sha256` 校验，读取后先核对。
+
+#### 执行事实 `~/.local/share/collie/`
+
+| 路径 | 写入者 | 作用 |
+|---|---|---|
+| `tasks/<slug>.json` | `collie-task` | 每个 folder/repo 的 task 列表、生命周期、agents、worktree 指针 |
+| `tasks/.*.json`、`tasks/.*.lock` | `collie-task` | scheduler、settings、锁和队列 metadata |
+| `worktrees/<repo>/<task>` | `collie-task` / git | task 的隔离 worktree；可能含未提交改动 |
+| `artifacts/` | `collie-artifact` | proof 和产物文件；Task/Receipt 只保存引用 |
+
+`tasks/<slug>.json` 是 **collie-task 的执行事实**，不是 Ledger 的副本；Inbox 读它来做投影。
+
+#### 配置目录 `~/.config/collie/`
+
+配置不是运行历史：
+
+```text
+roles/*.md
+playbooks/*.md
+skills/cli/SKILL.md
+coordinator.json
+settings.json
+sources.json
+workspaces.json
+```
+
+system role prompt 在 `~/.config/herdr-core/templates/`；布局和 Herdr 自身状态在 `~/.config/herdr-app/`。
+
+#### Work 状态不落盘
+
+`Todo / Working / Needs you / Settled` 以及 `Working · reviewing`、`Working · verifying` 都是读时投影：
+
+```text
+Work = f(Decision.state, task.state, task.live, Herdr terminals)
+```
+
+- `Decision.state` 来自 Ledger。
+- `task.state` / `task.live` 来自 `~/.local/share/collie/tasks/<slug>.json`。
+- terminal / pane / agent 的实时状态来自 Herdr core（`hc ls` / `hc get` / labels）。
+- `ticketStage()` / `workKind()` 在 `lib/inbox-queue.js` 计算，不写第二个状态机。
+
+因此删除 `queue.json` 只会让 Inbox 暂时失去投影；删除 `ledger.json` 会丢失协调历史；删除 task JSON 会丢失执行事实；删除 worktree 会丢失未提交代码。三者不能用同一个清理动作处理。
 
 ---
 

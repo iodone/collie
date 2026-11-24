@@ -3,11 +3,14 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { request } from "node:http";
+import { once } from "node:events";
 import { CollieService } from "../service/main.ts";
-import { startAnswerServer } from "../service/answer-server.ts";
+import { startAnswerServer, startIngressServer } from "../service/answer-server.ts";
+import { answerCard as authorizeCard } from "../protocol/invariants.mjs";
 
 const event = await Bun.file(new URL("../protocol/fixtures/event.json", import.meta.url)).json();
 const ruleset = await Bun.file(new URL("../protocol/fixtures/ruleset.json", import.meta.url)).json();
+const emptyTaskStore = async () => ({ tasks: [] });
 const paths: string[] = [];
 const servers: any[] = [];
 afterEach(() => {
@@ -31,11 +34,12 @@ describe("Inbox detail answer socket", () => {
   test("drop 只通过 Card.answer 关闭 Decision，不经过 herdr-task", async () => {
     const dir = mkdtempSync(join(tmpdir(), "collie-answer-"));
     paths.push(dir);
-    const service = new CollieService({ stateDir: dir, ruleset });
+    const service = new CollieService({ stateDir: dir, ruleset, agent: { run: emptyTaskStore } });
     const decisions = await service.process(event);
     const socket = join(dir, "service.sock");
-    servers.push(startAnswerServer(service, socket));
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    const server = startAnswerServer(service, socket);
+    servers.push(server);
+    if (!server.listening) await once(server, "listening");
 
     const response = await post(socket, {
       decisionId: decisions[0].id,
@@ -63,20 +67,112 @@ function get(socketPath: string, path: string): Promise<any> {
   });
 }
 
+describe("TCP ingress surface", () => {
+  test("TCP listener exposes only /v1/ingress and /v1/in/<source>", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "collie-ingress-surface-"));
+    paths.push(dir);
+    const service = new CollieService({ stateDir: dir, ruleset, agent: { run: emptyTaskStore } });
+    const server = startIngressServer(service, 0, "127.0.0.1");
+    servers.push(server);
+    await new Promise<void>((resolve) => server.once("listening", () => resolve()));
+    const port = (server.address() as any).port;
+    const post = (path: string) => fetch(`http://127.0.0.1:${port}${path}`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+    });
+    expect((await post("/ticket")).status).toBe(404);
+    expect((await post("/decision")).status).toBe(404);
+    expect((await fetch(`http://127.0.0.1:${port}/health`)).status).toBe(200);
+    expect((await post("/v1/ingress")).status).toBe(401);
+  });
+});
+
 describe("Native event ingress", () => {
+  test("only /v1/ingress and /v1/in/<source> are public ingress contracts", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "collie-ingress-surface-"));
+    paths.push(dir);
+    const service = new CollieService({ stateDir: dir, ruleset, agent: { run: emptyTaskStore } });
+    const socket = join(dir, "service.sock");
+    const server = startAnswerServer(service, socket);
+    servers.push(server);
+    if (!server.listening) await once(server, "listening");
+    for (const path of ["/message", "/request"]) {
+      const response = await post(socket, { space: "collie", goal: "status?" }, path);
+      expect(response.status).toBe(404);
+    }
+  });
+
   test("POST /v1/ingress accepts and dispatches a Collie Event", async () => {
     const dir = mkdtempSync(join(tmpdir(), "collie-ingress-"));
     paths.push(dir);
-    const service = new CollieService({ stateDir: dir, ruleset });
+    const service = new CollieService({ stateDir: dir, ruleset, agent: { run: emptyTaskStore } });
     const socket = join(dir, "service.sock");
-    servers.push(startAnswerServer(service, socket));
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    const server = startAnswerServer(service, socket);
+    servers.push(server);
+    if (!server.listening) await once(server, "listening");
 
     const response = await post(socket, event, "/v1/ingress");
     expect(response.status).toBe(200);
     expect(["accepted", "merged", "duplicate", "recorded"]).toContain(response.body.status);
     expect(response.body.event.source).toBe(event.source);
     expect(Array.isArray(response.body.decisions)).toBe(true);
+  });
+});
+
+describe("HTTP delivery and authenticated client space", () => {
+  test("POST /deliver calls service delivery once after authorization and retries without duplicate egress", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "collie-deliver-http-"));
+    paths.push(dir);
+    const payload = join(dir, "payload.json");
+    writeFileSync(payload, JSON.stringify({ repo: "example/collie", id: 93, body: "LGTM" }));
+    const external: string[][] = [];
+    const service = new CollieService({
+      stateDir: dir, ruleset, agent: { run: emptyTaskStore },
+      delivery: { gitlab: async (args) => { external.push(args); return {}; } },
+      decide: () => ({ state: "open", why: "authorized comment", actions: [{
+        kind: "emit_command", risk_tags: ["outbound_message"],
+        egress: { target: "gitlab", op: "comment", payload_ref: payload },
+      }] }),
+    });
+    const waiting = (await service.process(event))[0];
+    service.ledger.append("decision", authorizeCard(waiting, {
+      option: "accept", at: "2026-11-13T11:00:00Z", by: "human",
+    }));
+    const socket = join(dir, "service.sock");
+    const server = startAnswerServer(service, socket);
+    servers.push(server);
+    if (!server.listening) await once(server, "listening");
+
+    const first = await post(socket, { decisionId: waiting.id }, "/deliver");
+    expect(first.status).toBe(200);
+    expect(first.body).toMatchObject({ state: "settled", settled: { outcome: "commented" } });
+    expect(external).toHaveLength(1);
+    const second = await post(socket, { decisionId: waiting.id }, "/deliver");
+    expect(second.status).toBe(200);
+    expect(second.body.id).toBe(waiting.id);
+    expect(external).toHaveLength(1);
+  });
+
+  test("authenticated client space defaults only Events without an explicit space", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "collie-client-space-"));
+    paths.push(dir);
+    writeFileSync(join(dir, "sources.json"), JSON.stringify({
+      clients: { automation: { token: "secret", space: "configured" } },
+    }));
+    const service = new CollieService({ stateDir: dir, configDir: dir, ruleset, agent: { run: emptyTaskStore } });
+    const socket = join(dir, "service.sock");
+    const server = startAnswerServer(service, socket);
+    servers.push(server);
+    if (!server.listening) await once(server, "listening");
+    const withoutSpace = structuredClone(event);
+    delete withoutSpace.space_candidates;
+    const response = await post(socket, withoutSpace, "/v1/ingress", { authorization: "Bearer secret" });
+    expect(response.status).toBe(200);
+    expect(response.body.event.space_candidates).toEqual(["configured"]);
+
+    const explicit = { ...structuredClone(event), id: "ev_explicits01", key: "explicit-space", space_candidates: ["explicit"] };
+    const preserved = await post(socket, explicit, "/v1/ingress", { authorization: "Bearer secret" });
+    expect(preserved.status).toBe(200);
+    expect(preserved.body.event.space_candidates).toEqual(["explicit"]);
   });
 });
 
@@ -87,10 +183,11 @@ describe("Source adapter ingress", () => {
     writeFileSync(join(dir, "sources.json"), JSON.stringify({
       sources: { gitlab: { adapter: "gitlab", secret: "secret", space_map: { "olap/miergo": "spf57" } } },
     }));
-    const service = new CollieService({ stateDir: dir, configDir: dir, ruleset });
+    const service = new CollieService({ stateDir: dir, configDir: dir, ruleset, agent: { run: emptyTaskStore } });
     const socket = join(dir, "service.sock");
-    servers.push(startAnswerServer(service, socket));
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    const server = startAnswerServer(service, socket);
+    servers.push(server);
+    if (!server.listening) await once(server, "listening");
     const payload = {
       object_kind: "merge_request",
       project: { path_with_namespace: "olap/miergo", web_url: "https://git.n.xiaomi.com/olap/miergo" },
@@ -105,10 +202,11 @@ describe("Source adapter ingress", () => {
   test("GET /v1/events/:id returns event and decisions", async () => {
     const dir = mkdtempSync(join(tmpdir(), "collie-event-status-"));
     paths.push(dir);
-    const service = new CollieService({ stateDir: dir, ruleset });
+    const service = new CollieService({ stateDir: dir, ruleset, agent: { run: emptyTaskStore } });
     const socket = join(dir, "service.sock");
-    servers.push(startAnswerServer(service, socket));
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    const server = startAnswerServer(service, socket);
+    servers.push(server);
+    if (!server.listening) await once(server, "listening");
     const accepted = await post(socket, event, "/v1/ingress");
     const response = await get(socket, `/v1/events/${accepted.body.event.id}`);
     expect(response.status).toBe(200);
@@ -121,10 +219,11 @@ describe("Collie service health", () => {
   test("GET /health reports the running service", async () => {
     const dir = mkdtempSync(join(tmpdir(), "collie-health-"));
     paths.push(dir);
-    const service = new CollieService({ stateDir: dir, ruleset });
+    const service = new CollieService({ stateDir: dir, ruleset, agent: { run: emptyTaskStore } });
     const socket = join(dir, "service.sock");
-    servers.push(startAnswerServer(service, socket));
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    const server = startAnswerServer(service, socket);
+    servers.push(server);
+    if (!server.listening) await once(server, "listening");
 
     const response = await get(socket, "/health");
     expect(response.status).toBe(200);

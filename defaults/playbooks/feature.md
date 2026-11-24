@@ -1,7 +1,6 @@
 ---
-kind: "playbook"
-id: "feature"
-title: "Feature"
+name: "feature"
+description: "交付新功能或行为变化"
 version: 4
 ---
 

@@ -7,8 +7,9 @@
 | 内容 | root 下的位置 |
 | :-- | :-- |
 | layout、mods、lib、CLI | `.config/herdr-app/` |
-| helper（`collie-sync` / `collie-task` / `collie-secret`，外加 `collie-artifact`） | `.local/bin/`（herdr-app 的 `bin/` 也保留一份） |
-| 提示词 | `.config/herdr-core/templates/` |
+| 用户配置 | `.config/collie/` |
+| helper（`collie` / `collie-sync` / `collie-task` / `collie-secret`，外加 `collie-artifact`） | `.local/bin/`（herdr-app 的 `bin/` 也保留一份） |
+| 系统提示词 | `.config/herdr-core/templates/` |
 | 后台 runtime（service / kernel / plugins / protocol） | `.local/share/collie/` |
 | 运行状态与初始 `ruleset.json` | `.local/state/collie/` |
 | manifest | `.config/herdr-app/installed.collie.json` |
@@ -40,7 +41,7 @@ bin/collie doctor
 
 ```sh
 ROOT=$(mktemp -d)
-# 在 $ROOT 内准备 shepherdr 依赖，并将依赖命令放入 PATH。
+# 在 $ROOT 内准备 herdr-app / herdr-core 依赖，并将依赖命令放入 PATH。
 ./install.sh --root "$ROOT" --yes
 bin/collie doctor --root "$ROOT"
 ```
@@ -106,14 +107,17 @@ bun "$ROOT/.local/share/collie/service/main.ts"
 
 space 配置覆盖 Everywhere；未配置有效 `cli` 时不会静默选择另一款 agent。CLI 只返回 Decision JSON，spawn、护栏和 delivery 仍由 service 执行。
 
-人的 New / Build、steering、回答 Card 都直接在 coordinator chat 里说；Inbox 只显示 `回复` 按钮，点击后把该 Work 的上下文发给 coordinator chat 并聚焦，由 LLM 先解释和建议。`collie-request` 仍保留为 API/channel 入口，不占 Coordinator helper 的 job 队列。`Decision.run.coordinator_ref` 保存会话引用，供 Card answer 恢复。没有配置 coordinator 时，New / Build 会明确报错，不会降级到 shepherdr Assistant。
+人的 New / Build、steering、回答 Card 都在 coordinator chat 里说；Coordinator chat 通过公开命令落地 Decision：`collie ticket create` 或 `collie decision commit`，并先通过 `collie roles list` 读取当前 catalog。`collie` 安装在 `.local/bin/collie`。对外 ingress 只有 `/v1/ingress`（native Event）和 `/v1/in/<source>`（vendor webhook）；`/request`、`/message` 与 `collie-request` 已删除。chat 不经过 ingress。`Decision.run.coordinator_ref` 保存会话引用，供 Card answer 恢复。没有配置 coordinator 时，New / Build 会明确报错，不会降级到 shepherdr Assistant。
 
 ## 状态与队列
 
-- Decision 是唯一的持久状态机（`open / waiting / settled`）；Work 的 Needs you / Todo / Working / Settled 是投影，不写回 Ledger。
+- Decision 和 Task 是两个持久状态机：Decision 为 `open / waiting / settled`，Task 为 `todo / running / ready / done`。
+- Driver 只能把 Task 推进到 `ready`，并提交 summary / details / proof；service 在 accept 时执行 `collie-task accept`，在 drop 时执行 `collie-task done`，rework 则对同一 Task 执行 `collie-task start`。
+- Work 的 Needs you / Todo / Working / Settled 是 Decision + Task + live agent 的只读投影，不写回 Ledger 或 task store。精确优先级见 [`TASK-LIFECYCLE.md`](TASK-LIFECYCLE.md) §2.5：Decision settled / waiting 优先，其次是 live blocked / live roles，最后才是 Task ready / done / running；running 没有 live agent 仍是 Working。
 - 队列只有 `waiting` 的 Decision；Todo / Working 不是队列。
 - `~/.local/state/collie/queue.json` 是 Ledger 投影，含全部 Decision，**不是**队列本身。
-- `Settled` 只认 `Decision.settled { at, by, outcome }`；`failed` 带卡，属于 Needs you；`ack` 不等于 settled。
+- Decision `settled { at, by, outcome }` 是 Settled；没有更高优先级条件时 Task `done` 也投影 Settled，包括 orphan 或 Decision 仍为 open 的情况。`failed` 带卡属于 Needs you；`ack` 不等于 settled。
+- Ticket body 只有 Terminal 与 Artifacts。Terminal 指向 driver（已结束时可显示其历史 terminal），reviewer / verifier / helper 使用独立 Herdr tab；helper-only 不能抢占 driver Terminal。Artifact 仅通过 `artifact.task` 或 `Task.proof` 显式绑定，不从日志或时间窗口推断。
 - review 工作必须由 coordinator 写 `Decision.run.kind="review"`；没有这个字段时，它按 build 显示。
 - 用户 policy 放在 `~/.local/state/collie/policy/<space>.md`（没有时读 `policy.md`），coordinator 只读。
 
@@ -129,8 +133,9 @@ space 配置覆盖 Everywhere；未配置有效 `cli` 时不会静默选择另�
 ```
 
 - `accept / rework` 需要该 space 有且只有一个可用的 coordinator；`drop / later` 不需要。
-- `accept` 把 Decision 推进到 `open`，恢复原 coordinator 会话；合并/评论由 coordinator 的 delivery 决定，完成后才 `settled`。
-- `drop` 直接 `settled{dropped}`；`later` 保持 `waiting`。
+- 对 `ready` Task 选择 `accept` 时，service 调 `collie-task accept`，只执行 `ready → done`，再把 Decision settle；accept 不创建 PR，也不以 merge / comment / close 或其他 delivery 为前提。
+- 选择 `rework` 时，service 对同一 Task 调 `collie-task start`，形成 `ready → running`；terminal 已移除的 stopped-running Task 也通过 `start` 原地恢复，不换 Task ref。选择 `drop` 时先调 `collie-task done`，成功后再写 `settled{dropped}`；`later` 保持 `waiting`。
+- 对含 `emit_command` 的授权 Card 选择 `accept` 时，service 执行对应 Decision delivery；失败可用 `collie decision deliver --decision <id>` 重试。这条授权路径与 Task accept 分离，delivery 不改变 Task state。
 - 打开/展开只是 `ack`，不会结案；只有 Card answer 的 outcome 才结案。
 
 ## Secrets
@@ -149,7 +154,7 @@ collie-secret names --json                               # 只有名字、why、
 collie-secret rm GITHUB_TOKEN
 ```
 
-- Coordinator pane 只有 `Chat | Terminal`。Coordinator chat 的 Helper 行显示 ingress helper 状态；`Open Helper` 打开独立 tab。关闭该 tab 先 `terminal.park`，session 与 ingress 队列继续运行。Settings 不再提供 Helper 配置。
+- Coordinator pane 只有 `Chat | Terminal`。Coordinator chat 的 Helper 行显示 ingress helper 状态；helper 有活终端但没有 pane 时，chat 会自动 `terminal.keep` 给它一个独立 Helper tab，`Open Helper` 仍可手动聚焦。关闭该 tab 先 `terminal.park`，session 与 ingress 队列继续运行。Settings 不再提供 Helper 配置。
 - helper 的 job / Decision 在 `$HOME/.local/state/collie/helper/<space>/{jobs,decisions}/`；这是交互式 agent 没有 stdout 时的文件 IPC。service 校验 Decision 后写 Ledger，helper 自己不能写 Ledger/policy，也不能直接 spawn。
 - 找不到 Coordinator terminal、helper 启动失败或 120 秒内没有 Decision 时，事件变成 waiting Card；不会退回每个事件起一次 CLI。
 - `ask` 只把 `collie.secret.ask.NAME=<why>` 留在该终端上；chat 的卡片（`mods/collie-chat/secret-card.js`）保存后回报 agent「Kept: NAME」，agent 再按名字用。
@@ -172,10 +177,12 @@ Coordinator 参考 shepherdr 的 Assistant，但尽量只依赖 herdr-core：
 - 持续记录原 argv、cwd、session 和 log。
 - kept terminal 退回 shell 时，在同一 terminal 恢复原 session。
 - session log 不存在时新建 session，并带 handover，不伪造恢复成功。
-- 恢复由 `collie-task tick` 触发：service 在时由 service 每 15 秒 tick；service 不在时窗口自己 tick。
+- 恢复由内部 `collie-task tick` 触发：service 在时由 service 每 15 秒 tick；service 不在时窗口自己 tick。tick 是必需的调度与恢复路径，不属于公开 `collie task` 命令面，公开命令收口不删除它。
 - 普通关闭 Coordinator Tab 不能直接 `tab.settle`；有 driver 时问 stop/keep，无 driver 也只会关 tab。
 - 停止就是显式关闭 tab，或 `hc rm` 掉终端；没有 `collie coordinator stop`，因为 service 不做 auto-ensure。
 - 没有 `collie coordinator ensure`；终端被删后不自动重建，人重新打开 coordinator tab。
+
+Coordinator 的 CLI 用法见 [`CLI.md`](CLI.md)。安装器把 agent 版契约写到 `~/.config/collie/skills/cli/SKILL.md`；Coordinator 启动和 Driver brief 渲染时自动注入，不依赖 prompt 自行读取。
 
 运行时观察：
 
@@ -260,12 +267,12 @@ bin/collie-sync --check
 
 | 症状 | 检查 |
 | :-- | :-- |
-| 安装前报缺依赖 | `PATH`、shepherdr 版本、`chat` mod 是否存在 |
+| 安装前报缺依赖 | `PATH`、herdr-app / herdr-core、Collie bundled mods 与 helpers 是否完整；不需要 Shepherdr `chat` add-on |
 | 报 unmanaged file differs | 确认文件归属；需要接管时显式加 `--adopt` |
 | doctor 报 modified | 文件已偏离 manifest；保留修改或人工恢复，不直接重跑覆盖 |
 | doctor 报 pending update | 处理对应 `.new`，不要删除原文件 |
 | update 报 source unavailable | 恢复 manifest 中的源码 checkout；不要另换来源静默更新 |
 | layout mod 缺失 | 重装 collie（layout 的 mod 都在 `addons.json` 的 `mods` 里），或先修复本包 layout 与 mod 的交付完整性 |
 | review 工作被当成 build 显示 | coordinator 没写 `Decision.run.kind="review"`；补上后 Work 显示 `kind=review` |
-| Accept 后停在 Working | coordinator 未恢复或没有可用的 coordinator；检查 `collie-answer` 的 assistant 解析与 coordinator 会话 |
-| `Settled` 数量不对 | 检查 Decision 是否真的带 `settled`；`failed` 与 `ack` 都不算 |
+| Accept 后未 Settled | 确认 Task 为 `ready`，并检查 service 是否成功执行 `collie-task accept`；accept 不等待 merge 或其他 delivery |
+| `Settled` 数量不对 | 按 [`TASK-LIFECYCLE.md`](TASK-LIFECYCLE.md) §2.5 检查 Decision settled 与 Task done 的投影；`failed` 与 `ack` 都不算 |

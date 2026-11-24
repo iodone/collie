@@ -6,7 +6,10 @@ export interface Dispatch {
   kind: "coordinator" | "record_only";
   laneKey: string;
   space: string | null;
-  event: Json;
+  /** The Message being judged. External Event is one source; human input is another. */
+  message: Json;
+  /** Kept for external Event callers; human Messages need not carry it. */
+  event?: Json;
   cardRequired?: boolean;
 }
 
@@ -26,9 +29,9 @@ const objectKey = (event: Json): string => {
 
 function spaceFor(event: Json): string {
   const candidates = event.space_candidates ?? [];
-  if (candidates.length !== 1) {
-    throw new Error(`event ${event.id} has unresolved spaces: ${candidates.join(", ") || "none"}`);
-  }
+  if (!candidates.length) throw new Error(`event ${event.id} has no space candidates`);
+  // Multiple candidates are resolved to the first deterministically; the full candidate
+  // list stays on the Message and the service turns it into a Card before any side effect.
   return candidates[0];
 }
 
@@ -69,7 +72,7 @@ export class Ingress {
 
     if (acceptable.record_only) {
       const dispatch: Dispatch = {
-        kind: "record_only", laneKey, space: spaceFor(input), event, cardRequired: true,
+        kind: "record_only", laneKey, space: spaceFor(input), message: event, event, cardRequired: true,
       };
       this.#lanes.set(laneKey, { event, open: old?.open ?? false, dispatch });
       return { status: "recorded", event, dispatches: [dispatch] };
@@ -80,7 +83,7 @@ export class Ingress {
       return { status: "merged", event, dispatches: [] };
     }
 
-    const dispatch: Dispatch = { kind: "coordinator", laneKey, space: spaceFor(input), event };
+    const dispatch: Dispatch = { kind: "coordinator", laneKey, space: spaceFor(input), message: event, event };
     this.#lanes.set(laneKey, { event, open: true, dispatch });
     return { status: "accepted", event, dispatches: [dispatch] };
   }

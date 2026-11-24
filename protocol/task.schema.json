@@ -1,0 +1,203 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:collie:task:v1",
+  "title": "Task",
+  "description": "内循环执行事实。Task 只有 todo/running/ready/done 四态；driver 最多推进到 ready，accept/drop 才进入 done。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "key",
+    "ref",
+    "title",
+    "state",
+    "created_at",
+    "started_at",
+    "ready_at",
+    "done_at",
+    "done_by",
+    "space",
+    "project",
+    "mode",
+    "worktree",
+    "branch",
+    "base",
+    "start",
+    "agents",
+    "progress",
+    "summary",
+    "details",
+    "proof",
+    "depends_on"
+  ],
+  "properties": {
+    "id": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "task store 内的稳定数值 id。"
+    },
+    "key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240,
+      "description": "store 派生的内部 task key。"
+    },
+    "ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240,
+      "description": "跨 Decision、Receipt 与 CLI 使用的 canonical task ref。"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "description": "任务标题。"
+    },
+    "state": {
+      "enum": ["todo", "running", "ready", "done"],
+      "description": "持久执行状态；queued/scheduled/merging 等不是 Task 状态。"
+    },
+    "created_at": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "创建时刻，epoch 毫秒。"
+    },
+    "started_at": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "首次启动时刻，epoch 毫秒；尚未启动为 null。"
+    },
+    "ready_at": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "最近一次交付 ready 的时刻，epoch 毫秒；未交付为 null。"
+    },
+    "done_at": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "accept/drop 终结时刻，epoch 毫秒；未终结为 null。"
+    },
+    "done_by": {
+      "enum": ["coordinator", "human", null],
+      "description": "终结 actor；运行中只有 null，done 时必须是 coordinator 或 human。"
+    },
+    "space": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$",
+      "description": "任务所属协作 space。"
+    },
+    "project": {
+      "type": ["string", "null"],
+      "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$",
+      "description": "可选项目分组；space 默认项目为 null。"
+    },
+    "mode": {
+      "enum": ["here", "worktree"],
+      "description": "在原目录执行或独立 worktree 执行。"
+    },
+    "worktree": {
+      "type": ["string", "null"],
+      "description": "worktree 绝对路径；here 模式为 null。"
+    },
+    "branch": {
+      "type": ["string", "null"],
+      "description": "任务分支；没有独立分支时为 null。"
+    },
+    "base": {
+      "type": ["string", "null"],
+      "description": "任务起点 base 分支或 ref；未固定时为 null。"
+    },
+    "start": {
+      "type": ["string", "null"],
+      "description": "任务创建时的起始 Git ref；未记录时为 null。"
+    },
+    "agents": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "task store 保存的 agent/session 记录；live 状态由 Work 读取时投影。"
+      },
+      "description": "属于这个 task 的 agent/session 记录，不是 helper Task。"
+    },
+    "progress": {
+      "type": ["object", "null"],
+      "additionalProperties": true,
+      "description": "driver 最近一次 status 进度事实；尚未报告为 null。"
+    },
+    "summary": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "maxLength": 4000,
+      "description": "ready 交付摘要；未 ready 为 null。"
+    },
+    "details": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "maxLength": 20000,
+      "description": "ready 交付详情；未 ready 为 null。"
+    },
+    "proof": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["id", "title"],
+      "description": "可核验交付凭据；ready 时必须绑定一个显式 artifact。",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300,
+          "description": "Artifact 的显式绑定 id；Artifacts 只按这个 id 关联 Task。"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300,
+          "description": "凭据标题，供人验收时识别。"
+        }
+      }
+    },
+    "depends_on": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 240,
+        "description": "阻塞启动的 canonical task ref。"
+      },
+      "uniqueItems": true,
+      "description": "唯一队列依赖字段；只有依赖 task done 后才可启动。"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["state"],
+        "properties": { "state": { "const": "ready" } }
+      },
+      "then": {
+        "required": ["ready_at", "summary", "details", "proof"],
+        "properties": {
+          "ready_at": { "type": "integer" },
+          "summary": { "type": "string" },
+          "details": { "type": "string" },
+          "proof": { "type": "object" }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["state"],
+        "properties": { "state": { "const": "done" } }
+      },
+      "then": {
+        "required": ["done_at", "done_by"],
+        "properties": {
+          "done_at": { "type": "integer" },
+          "done_by": { "enum": ["coordinator", "human"] }
+        }
+      }
+    }
+  ]
+}

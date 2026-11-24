@@ -1,7 +1,6 @@
 ---
-kind: "playbook"
-id: "ratchet"
-title: "Ratchet"
+name: "ratchet"
+description: "把已有约束推进成不可退化的结构"
 version: 4
 ---
 

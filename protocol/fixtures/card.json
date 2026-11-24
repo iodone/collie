@@ -52,8 +52,6 @@
   "ack": null,
   "settled": null,
   "run": {
-    "claimed_until": null,
-    "unknown_policy": "normal",
     "task_ref": null,
     "coordinator_ref": null
   },

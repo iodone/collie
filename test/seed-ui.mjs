@@ -25,25 +25,22 @@ const reviewReceipt = {
   summary: "【UI 测试】双循环 Ticket 详情已准备好",
   details: "- 统一 Decision 与 Task 视图\n- 展示变更、检查和 Proof\n- 在 Inbox 内完成 Review",
   proof: {
-    refs: ["commit:ef57b5e", "cmd:npm test (131 passed)", "mods/collie-inbox/main.js:250"],
-    text: "131 tests passed\nTicket detail evidence rendered",
+    id: "seed-proof-0001",
+    title: "【UI测试】交付凭据 · Proof",
+    refs: ["commit:ef57b5e", "cmd:npm test", "mods/collie-inbox/main.js"],
+    text: "Ticket detail proof rendered",
   },
 };
 const review = ticket("dc_uitest003", "waiting", "COLLIE-999", waitingCard("accept", "【UI 测试】接受这次交付吗？"));
 reviewReceipt.task = { ...reviewReceipt.task, id: "COLLIE-999" };
 review.receipt_ref = reviewReceipt.id;
-review.ui_evidence = {
-  commits: { count: 1, list: [["ef57b5e", "feat: unify ticket flow"]] },
-  diff: { list: [{ path: "mods/collie-inbox/main.js", added: 86, removed: 24 }, { path: "service/main.ts", added: 31, removed: 8 }] },
-  checks: { state: "passed", text: "All 131 tests passed" },
-};
 review.human_boundary = { form: "card", chat_injection: false };
 const artifactReceipt = {
   ...reviewReceipt,
   id: "rc_uitest02",
   decision_ref: "dc_uitest009",
   summary: "【UI测试】产物页已准备好",
-  details: "- Artifacts tab 显示本 folder 的 seed artifact\n- 列表来自 herdr-artifact 的真实记录",
+  details: "- Artifacts tab 显示本 folder 的 seed artifact\n- 列表来自 collie-artifact 的真实记录",
 };
 artifactReceipt.task = { ...artifactReceipt.task, id: "COLLIE-999" };
 const artifacts = ticket("dc_uitest009", "waiting", "COLLIE-999", waitingCard("question", "【UI测试】查看这次交付的产物吗？"));
@@ -65,24 +62,25 @@ const fixtures = [
   { ...ticket("dc_uitest008", "settled", "TEST-DROPPED"), settled: { at: "2026-11-16T12:00:00Z", by: "human", outcome: "dropped" } },
 ];
 // A real task list entry, so the ticket can navigate to its worktree and the Artifacts tab can
-// list a seeded artifact. It lives beside the person's other task lists under ~/.herdr/tasks.
+// list a seeded artifact. It lives beside the person's other task lists under ~/.local/share/collie/tasks.
 const project = resolve(new URL("..", import.meta.url).pathname);
-const taskPath = join(homedir(), ".herdr", "tasks", "work-system-weaver-projects-collie.json");
+const taskPath = join(homedir(), ".local", "share", "collie", "tasks", "work-system-weaver-projects-collie.json");
 let taskList = { version: 1, folder: project, kind: "repo", name: "collie",
   slug: "work-system-weaver-projects-collie", next: 1000, prefix: "COLLIE", tasks: [] };
 try { taskList = { ...taskList, ...JSON.parse(readFileSync(taskPath, "utf8")) }; } catch {}
+const seedRef = `${taskList.prefix ?? "COLLIE"}-999`;
+for (const item of [review, artifacts]) item.run.task_ref = seedRef;
+for (const item of [reviewReceipt, artifactReceipt]) item.task.id = seedRef;
 taskList.tasks = (taskList.tasks ?? []).filter((task) => task.id !== 999 && !String(task.title ?? "").includes("【UI测试】"));
-taskList.tasks.push({
-  id: 999, title: "【UI测试】交付凭据", prompt: "Seed ticket for the Artifacts tab.",
-  state: "ready", created: Date.now(), agents: [],
-  set: { review: "off", review_rounds: 0, merge: "ask", proof: "on" },
-  base: "main", base_set: false, started: Date.now(),
+const seedTask = {
+  id: 999, key: `${taskList.slug}#999`, ref: seedRef, title: "【UI测试】交付凭据", prompt: "Seed ticket for the Artifacts tab.",
+  state: "ready", created_at: Date.now(), agents: [], depends_on: [], done_by: null,
+  base: "main", base_set: false, started_at: Date.now(),
   worktree: project, branch: "main", start: "HEAD",
   summary: "Seed artifact ready", details: "Seeded for the Artifacts tab.",
-  ready_at: Date.now(), proof: { id: "seed-proof-0001", title: "Seed proof" },
-});
-mkdirSync(join(homedir(), ".herdr", "tasks"), { recursive: true });
-writeFileSync(taskPath, JSON.stringify(taskList, null, 2), { mode: 0o600 });
+  ready_at: Date.now(), proof: { id: "seed-proof-0001", title: "【UI测试】交付凭据 · Proof" },
+};
+taskList.tasks.push(seedTask);
 
 // One artifact, published to this folder and attached to the seed task. Old UI seeds are removed
 // first so repeating the script doesn't pile up versions.
@@ -92,19 +90,26 @@ for (const item of listed.artifacts ?? []) {
   if (String(item.title).includes("【UI测试】")) execFileSync(artifact, ["rm", item.id, "--json"], { stdio: "ignore" });
 }
 const recipeDir = mkdtempSync(join(homedir(), ".config", "alma", "scratch", "collie-art-"));
+let published;
 try {
   mkdirSync(recipeDir, { recursive: true });
   writeFileSync(join(recipeDir, "recipe.json"), JSON.stringify({
     recipe: 1,
     blocks: [
       { type: "text", md: "Seed artifact for the Artifacts tab. It renders beside the real task artifacts." },
-      { type: "table", columns: ["What", { label: "Value", align: "right" }], rows: [["Tests", "131 passed"], ["Files", "2"]] },
+      { type: "table", columns: ["What", { label: "Value", align: "right" }], rows: [["Tests", "Passed"], ["Files", "2"]] },
     ],
   }, null, 2));
-  execFileSync(artifact, ["publish", recipeDir, "--title", "【UI测试】交付凭据", "--folder", project, "--task", "COLLIE-999", "--json"], { stdio: "ignore" });
+  published = JSON.parse(execFileSync(artifact, ["publish", recipeDir, "--title", "【UI测试】交付凭据 · Proof", "--folder", project, "--task", seedRef, "--json"], { encoding: "utf8" }));
 } finally {
   rmSync(recipeDir, { recursive: true, force: true });
 }
+const proof = { id: published.id, title: published.title };
+seedTask.proof = proof;
+reviewReceipt.proof = { ...reviewReceipt.proof, ...proof, refs: [`artifact:${published.id}`, "cmd:npm test", "mods/collie-inbox/main.js"] };
+artifactReceipt.proof = { ...reviewReceipt.proof };
+mkdirSync(join(homedir(), ".local", "share", "collie", "tasks"), { recursive: true });
+writeFileSync(taskPath, JSON.stringify(taskList, null, 2), { mode: 0o600 });
 
 const withoutFixtures = decisions.filter((item) => !item.id.startsWith("dc_uitest"));
 writeFileSync(queuePath, JSON.stringify({ decisions: [...withoutFixtures, ...fixtures] }, null, 2), { mode: 0o600 });

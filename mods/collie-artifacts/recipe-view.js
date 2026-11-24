@@ -97,7 +97,7 @@ export default class RecipeView extends View {
         .child(image(asset(x.src)).w_full().rounded(6).border_1().border_color(t.border))
         .child(div().text_size(12).text_color(t.muted).child(x.caption ?? w))));
       case "code": return div().w_full().p(10).rounded(8).bg(t.surface).font_family("JetBrains Mono").text_size(12).whitespace_normal().child(b.text);
-      case "callout": return v_flex().gap(4).p(12).rounded(8).bg(t[TONE[b.tone ?? "info"]] ? t.surface : t.surface).border_l(3).border_color(t[TONE[b.tone ?? "info"]] ?? t.border)
+      case "callout": return v_flex().gap(4).p(12).rounded(8).bg(t.surface).border_l(3).border_color(t[TONE[b.tone ?? "info"]] ?? t.border)
         .when(!!b.title, (e) => e.child(div().text_size(13).font_semibold().child(b.title)))
         .when(!!b.md, (e) => e.child(this.md(b.id, b.md, t)));
       case "columns": return h_flex().flex_wrap().gap(16).items_start().children(b.columns.map((c) => v_flex().flex_1().min_w(240).gap(14).children(c.map((x) => this.block(x, t, cx)))));

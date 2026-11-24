@@ -182,7 +182,7 @@ def work_so_far(s, t):
         since = t.get("start") or t.get("base")
         ok, commits, _ = git(folder, "log", "--oneline", "-20", f"{since}..HEAD") if since else (False, "", "")
     else:
-        ok, commits, _ = git(folder, "log", "--oneline", "-20", f"--since=@{int((t.get('started') or now()) / 1000)}")
+        ok, commits, _ = git(folder, "log", "--oneline", "-20", f"--since=@{int((t.get('started_at') or now()) / 1000)}")
     changes = git(folder, "status", "--short")[1]
     return (commits if ok else "") or "none", changes[-8000:] or "none"
 

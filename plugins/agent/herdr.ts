@@ -18,9 +18,7 @@ export interface HerdrAgentOptions {
 }
 
 export interface SpawnedTask {
-  id: string;
-  key?: string;
-  ref?: string;
+  ref: string;
   folder: string;
   space: string;
   project?: string;
@@ -31,6 +29,24 @@ export const defaultHerdrRunner: TaskRunner = async (args) => {
   const { stdout } = await execFileAsync(process.env.COLLIE_TASK_CLI ?? "collie-task", args, { maxBuffer: 4 * 1024 * 1024 });
   return JSON.parse(stdout);
 };
+
+export async function runningHerdrTasks(space: string, options: HerdrAgentOptions = {}): Promise<Json[]> {
+  const groups = await (options.run ?? defaultHerdrRunner)(["list", "--all", "--slim", "--json"]);
+  const now = (options.now ?? (() => new Date()))();
+  const tasks = (Array.isArray(groups) ? groups : [groups]).flatMap((group) => Array.isArray(group?.tasks) ? group.tasks : []);
+  return tasks.filter((task) => task?.state === "running" && task?.space === space).slice(0, 16).map((task) => {
+    if (task.started_at === null || task.started_at === undefined) throw new Error(`running task ${String(task.ref)} has no started_at`);
+    const changed = new Date(task.started_at);
+    if (Number.isNaN(changed.getTime())) throw new Error(`running task ${String(task.ref)} has no valid started_at`);
+    return {
+      task_id: text(task.ref, "running task ref"),
+      state: "running",
+      state_changed_at: changed.toISOString(),
+      elapsed_seconds: Math.max(0, Math.floor((now.getTime() - changed.getTime()) / 1000)),
+    };
+  });
+}
+
 const defaultRunner = defaultHerdrRunner;
 const iso = (value: unknown, fallback: Date): string => {
   if (typeof value === "number") return new Date(value).toISOString();
@@ -42,12 +58,12 @@ const text = (value: unknown, field: string): string => {
   return value;
 };
 const receiptId = () => `rc_${randomUUID().replaceAll("-", "").slice(0, 16)}`;
-const taskId = (result: Json): string => {
-  const id = result.id ?? result.task?.id;
-  if ((typeof id !== "string" && typeof id !== "number") || String(id).length === 0) {
-    throw new Error("collie-task add --json returned no task id");
+const taskRef = (result: Json): string => {
+  const ref = result.ref;
+  if (typeof ref !== "string" || !ref.trim() || ref.length > 240) {
+    throw new Error("collie-task add --json returned no canonical task ref");
   }
-  return String(id);
+  return ref;
 };
 
 function spawnAction(decision: Json): Json {
@@ -57,7 +73,6 @@ function spawnAction(decision: Json): Json {
   if (actions.length !== 1) throw new Error(`M1 requires exactly one spawn_task action, got ${actions.length}`);
   const spawn = actions[0].spawn;
   if (!spawn) throw new Error("spawn_task action has no spawn payload");
-  if (spawn.parallel && spawn.parallel !== 1) throw new Error("M1 dispatches one driver per decision");
   if (typeof spawn.title !== "string" || !/^(?![\s-])[^{}\r\n]{1,200}$/.test(spawn.title)) {
     throw new Error("spawn.title is not a safe collie-task title");
   }
@@ -85,20 +100,19 @@ export async function spawnHerdrTask(
   const args = [
     "add", spawn.title, "--folder", folder, "--space", space, "--json",
     "--prompt-file", spawn.brief_ref, "--worktree",
-    "--set", `review=${spawn.review ? "on" : "off"}`, "--set", "proof=on",
-    "--set", `merge=${spawn.merge ? "on its own" : "ask me first"}`,
   ];
-  if (rule.to.playbook) args.push("--set", `playbook=${rule.to.playbook.id}@${rule.to.playbook.version}`);
-  if (rule.to.verify) args.push("--set", "verify=on");
+  if (rule.to.playbook) args.push("--set", `playbook=${rule.to.playbook.name}@${rule.to.playbook.version}`);
   if (spawn.base === "branch") args.push("--base", text(spawn.branch, "spawn.branch"));
   else if (spawn.base === "main") args.push("--base", "main");
   if (rule.agent?.cli) args.push("--agent", rule.agent.cli);
+  if (rule.agent?.model) args.push("--model", rule.agent.model);
+  if (rule.agent?.effort) args.push("--effort", rule.agent.effort);
 
   const added = await run(args);
-  const id = taskId(added);
-  await run(["start", id, "--folder", folder, "--space", space, "--json"]);
+  const ref = taskRef(added);
+  await run(["start", ref, "--folder", folder, "--space", space, "--json"]);
   return {
-    id, key: added.key, ref: added.ref ?? added.key, folder, space,
+    ref, folder, space,
     ...(rule.to.project ? { project: rule.to.project } : {}), previousState: "todo",
   };
 }
@@ -107,8 +121,6 @@ export async function waitForHerdrReceipt(
   task: SpawnedTask,
   decision: Json,
   options: HerdrAgentOptions = {},
-  verify = false,
-  requireReview = true,
 ): Promise<Json> {
   const run = options.run ?? defaultRunner;
   const now = options.now ?? (() => new Date());
@@ -118,12 +130,12 @@ export async function waitForHerdrReceipt(
   let previousState = task.previousState;
 
   for (let poll = 0; poll < maxPolls; poll += 1) {
-    const view = await run(["show", task.id, "--folder", task.folder, "--json", "--evidence"]);
+    const view = await run(["show", task.ref, "--folder", task.folder, "--json", "--evidence"]);
     const state = view.state;
     if (state !== "ready") {
       if (state === "done") throw new Error("task reached done before a ready receipt was collected");
       if (typeof state !== "string") throw new Error("collie-task show returned no state");
-      previousState = state === "running" ? "working" : state;
+      previousState = state;
       if (poll + 1 < maxPolls) await sleep(interval);
       continue;
     }
@@ -134,37 +146,26 @@ export async function waitForHerdrReceipt(
     const details = text(evidence.details ?? view.details, "details");
     const proof = evidence.proof ?? view.proof;
     if (!proof || typeof proof !== "object") throw new Error("ready task is missing proof");
+    const proofId = text(proof.id, "proof id");
+    const proofTitle = text(proof.title, "proof title");
     const commits = (evidence.commits?.list ?? []).map((row: unknown) =>
       Array.isArray(row) ? `commit:${row[0]}` : `commit:${String(row)}`,
     );
-    const proofRef = proof.id ? `artifact:${proof.id}` : null;
-    const refs = [...new Set([...commits, proofRef].filter(Boolean))] as string[];
-    if (refs.length === 0) throw new Error("ready task proof has no verifiable refs");
-    const reviews = (view.reviews ?? []).filter((review: Json) =>
-      ["report", "pass", "changes"].includes(review.result),
-    );
-    if (reviews.length === 0 && requireReview) throw new Error("ready task has no recorded review");
-    const review = reviews.at(-1) ?? null;
-    const tags = decision.risk?.tags ?? [];
-    const spawn = decision.actions.find((action: Json) => action.kind === "spawn_task").spawn;
-    const autoAccept = tags.length === 0 && spawn.merge === true;
-    const verifications = Array.isArray(view.verifications) ? view.verifications : [];
-    const lastVerification = verifications.at(-1);
-    if (verify && lastVerification?.verdict !== "pass") throw new Error("task reached ready without a passing verifier verdict");
+    const proofRef = `artifact:${proofId}`;
+    const refs = [...new Set([...commits, proofRef])] as string[];
 
     return {
       id: receiptId(),
       decision_ref: decision.id,
       received_at: received.toISOString(),
       origin: "herdr-task ready",
-      last_message_used: false,
       task: {
-        id: task.ref ?? task.key ?? task.id,
+        id: task.ref,
         space: task.space,
         state: "ready",
         previous_state: previousState,
         state_changed_at: iso(view.ready_at, received),
-        started_at: iso(view.started, received),
+        started_at: iso(view.started_at, received),
       },
       progress: {
         basis: "task_state_advance",
@@ -173,24 +174,14 @@ export async function waitForHerdrReceipt(
       },
       summary,
       details,
-      proof: { refs, text: text(proof.text ?? proof.title ?? proof.id, "proof text") },
-      review: review ? {
-        reviewed: true,
-        reviewer_ref: text(review.ref ?? review.reviewer ?? review.by ?? review.head ?? review.commit, "reviewer ref"),
-        must_fix: 0,
-      } : null,
-      ...(lastVerification ? {
-        verification: {
-          verdict: lastVerification.verdict,
-          evidence: lastVerification.evidence,
-          head: lastVerification.head ?? null,
-          by: lastVerification.by ?? null,
-        },
-      } : {}),
-      risk: { tags, level: tags.length ? "high" : "low", auto_accept: autoAccept },
+      proof: {
+        id: proofId,
+        title: proofTitle,
+        refs,
+      },
     };
   }
-  throw new Error(`task ${task.key ?? task.id} did not reach ready after ${maxPolls} polls`);
+  throw new Error(`task ${task.ref} did not reach ready after ${maxPolls} polls`);
 }
 
 export async function runHerdrTask(
@@ -199,7 +190,6 @@ export async function runHerdrTask(
   options: HerdrAgentOptions = {},
 ): Promise<Json> {
   const task = await spawnHerdrTask(decision, rule, options);
-  const spawn = decision.actions.find((action: Json) => action.kind === "spawn_task").spawn;
   await options.onSpawn?.(task);
-  return waitForHerdrReceipt(task, decision, options, rule.to?.verify === true, spawn.review !== false);
+  return waitForHerdrReceipt(task, decision, options);
 }

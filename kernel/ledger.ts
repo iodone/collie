@@ -3,7 +3,7 @@ import { dirname, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 
 type Json = Record<string, any>;
-type Entry = { seq: number; kind: "event" | "case" | "decision" | "receipt"; payload: Json };
+type Entry = { seq: number; kind: "event" | "message" | "case" | "decision" | "receipt"; payload: Json };
 
 const id = (prefix: string) => `${prefix}_${randomUUID().replaceAll("-", "").slice(0, 16)}`;
 export const ledgerId = id;
@@ -74,13 +74,18 @@ export class Ledger {
   }
 
   get events(): Json[] { return this.latest("event"); }
+  get messages(): Json[] { return this.latest("message"); }
   get cases(): Json[] { return this.latest("case"); }
   get decisions(): Json[] { return this.latest("decision"); }
   get receipts(): Json[] { return this.latest("receipt"); }
 
   waiting(): Json[] {
+    const time = (value: unknown) => typeof value === "string" ? Date.parse(value) || 0 : 0;
     return this.decisions.filter((decision) => decision.state === "waiting").sort((a, b) =>
-      (a.priority?.value ?? 5) - (b.priority?.value ?? 5) || a.decided_at.localeCompare(b.decided_at),
+      Number(Boolean(a.hold)) - Number(Boolean(b.hold))
+      || (a.priority?.value ?? 5) - (b.priority?.value ?? 5)
+      || time(a.decided_at ?? a.card?.created_at) - time(b.decided_at ?? b.card?.created_at)
+      || String(a.id).localeCompare(String(b.id)),
     );
   }
 }

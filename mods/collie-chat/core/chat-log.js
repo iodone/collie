@@ -238,7 +238,7 @@ function replyOf(t) {
 }
 
 // Where a message has code, fenced (```) or inline (`…`): [[start, end]]. Herdr's own tags never start inside code: a
-// role template's or brief's examples there (collie-coordinator.md's <herdr-news> lines) are words, not tags (#589). A real
+// role template's or brief's examples there (coordinator.md's <herdr-news> lines) are words, not tags (#589). A real
 // tag may hold code (a failed check's log): only where it starts counts.
 function codeRanges(t) {
   return [...String(t).matchAll(/```[\s\S]*?(?:```|$)|`[^`\n]*`/g)].map((m) => [m.index, m.index + m[0].length]);
@@ -379,10 +379,6 @@ const short = (p) => {
   return parts.length > 2 ? parts.slice(-2).join("/") : s;
 };
 const clip = (s, n = 90) => { s = String(s ?? "").replace(/\s+/g, " ").trim(); return s.length > n ? s.slice(0, n - 1) + "…" : s; };
-
-// A command that publishes an artifact (mods/collie-artifacts): the chat shows a card for it, found in
-// the artifacts' registry by who published it and when.
-const ARTIFACT = /\bcollie-artifact\b[^\n|;&]*\b(publish|update)\b/;
 
 // The messages a shell command sends other agents: [{ to, text, how }], how "hc" (`hc send [flags] <terminal>
 // <text>`, to a terminal) or "assistant" (`collie-task tell-assistant <address or space> <text>`). Read with a small
@@ -925,7 +921,6 @@ export class Conversation {
             const st = claudeStep(String(b.name ?? ""), b.input ?? {});
             if (st) st.at = time(l.timestamp) || Date.now();
             this.step(String(b.id), off, st, b.name === "Agent" || b.name === "Task" ? String(b.id) : null);
-            if (b.name === "Bash" && ARTIFACT.test(String(b.input?.command ?? ""))) this.push({ kind: "artifact", id: `art${off}`, at: time(l.timestamp) });
             if (b.name === "Bash") this.sent(String(b.input?.command ?? ""), off, time(l.timestamp));
           }
         }
@@ -968,7 +963,6 @@ export class Conversation {
         // Codex's helpers count as running until its turn ends (its log says no more).
         if (st?.spawn) this.helpers.set(cid, { desc: st.spawn, done: false, untilTurn: true });
         this.step(cid, off, st, st?.spawn ? cid : null);
-        if (ARTIFACT.test(JSON.stringify(p.arguments ?? p.input ?? p.action ?? ""))) this.push({ kind: "artifact", id: `art${off}`, at: time(l.timestamp) });
         this.sent(codexCommand(p.arguments ?? p.input ?? p.action), off, time(l.timestamp));
       }
     } else if (l.type === "turn_context") {

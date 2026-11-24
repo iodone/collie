@@ -54,6 +54,7 @@ describe("Collie native client e2e", () => {
     const service = new CollieService({
       stateDir: dir,
       ruleset,
+      agent: { run: async () => ({ tasks: [] }) },
       decide: () => ({
         state: "settled", why: "e2e intake accepted",
         actions: [], settled: { at: new Date().toISOString(), by: "coordinator", outcome: "dropped" },
@@ -89,15 +90,14 @@ describe("Collie native client e2e", () => {
     const project = join(dir, "projects", "collie");
     const calls: string[][] = [];
     const run = async (args: string[]) => {
-      calls.push(args);
+      if (args[0] !== "list") calls.push(args);
       if (args[0] === "add") return { id: 1, key: "work-system-weaver-projects-collie#1", ref: "COLL-1" };
       if (args[0] === "start") return { id: 1, state: "running" };
       if (args[0] === "list") return [];
       return {
         id: 1, key: "work-system-weaver-projects-collie#1", ref: "COLL-1",
-        state: "ready", started: 1_763_664_030_000, ready_at: 1_763_666_480_000,
+        state: "ready", started_at: 1_763_664_030_000, ready_at: 1_763_666_480_000,
         evidence: { summary: "done", details: "- review", commits: { list: [["abc1234", "x"]] }, proof: { id: "proof-e2e", title: "proof" } },
-        reviews: [{ result: "report", by: "t99", head: "abc1234" }],
       };
     };
     const { mkdirSync } = await import("node:fs");
@@ -105,11 +105,14 @@ describe("Collie native client e2e", () => {
     const service = new CollieService({
       stateDir: dir, ruleset, agent: { run },
       workspaces: { "system-weaver": { folder: dir, projects: { collie: project } } },
-      decide: () => ({
+      decide: (job) => job.message.type === "task.ready" ? ({
+        state: "settled", why: "ready proof accepted", actions: [{ kind: "noop", risk_tags: [] }],
+        settled: { at: new Date().toISOString(), by: "coordinator", outcome: "accepted" },
+      }) : ({
         state: "open", why: "review collie", project: "collie",
         actions: [{
           kind: "spawn_task", risk_tags: [],
-          spawn: { title: "review collie", brief_ref: "/tmp/brief.md", base: "current", review: true, merge: false, access: "read", tells: "needed" },
+          spawn: { title: "review collie", brief_ref: "/tmp/brief.md", base: "current", access: "read" },
         }],
         run: { kind: "review" },
       }),
@@ -131,5 +134,8 @@ describe("Collie native client e2e", () => {
     expect(add).toBeDefined();
     expect(add![add!.indexOf("--folder") + 1]).toBe(project);
     expect(response.decisions[0].run.task_ref).toBe("COLL-1");
+    expect(response.decisions[0].state).toBe("settled");
+    expect(calls.map((call) => call[0])).toEqual(["add", "start", "show", "accept"]);
+    expect(calls.at(-1)).toContain("COLL-1");
   });
 });

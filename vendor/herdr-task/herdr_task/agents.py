@@ -13,7 +13,7 @@ from .base import hc_json, HOME, now, RANK, SHELLS
 # A worker's own helper agents (SHEP-54): hc children of its terminal it starts itself (`hc run`), labelled
 # herdr.task (its task) and herdr.role reviewer or helper. Never one of the task's agents: no second worker, no
 # status of their own; a working one keeps its quiet worker Working (own_work).
-HELPER_ROLES = ("reviewer", "helper")
+HELPER_ROLES = ("reviewer", "verifier", "helper")
 
 
 def parent_of(k):
@@ -77,32 +77,20 @@ def status_of(task, live):
     return best or "stopped"
 
 
-# What people see a task as: one of eight, derived, never stored. From the task's record (todo,
-# scheduled (SHEP-38: starts by itself at a time), queued, ready, done, attention, a merge asked for or waiting on checks) and its agents' own
-# Herdr status (working, blocked, idle/done), which agents report as always.
-STATUSES = {"todo": "To do", "scheduled": "Scheduled", "queued": "Queued", "working": "Working", "needs": "Needs you",
-            "ready": "Ready", "merging": "Merging", "done": "Done"}
+# Derived live status, never a stored Task state.
+STATUSES = {"todo": "To do", "working": "Working", "needs": "Needs you", "ready": "Ready", "done": "Done"}
 
 
 def task_status(task, live):
-    """(status, needs, why): a STATUSES key; for Needs you what kind ("attention", "asks",
-    "reply", "stopped") and a one-line reason. live = its running agents (hc records)."""
+    """(status, needs, why): a live projection over the four stored Task states."""
     st = task["state"]
-    if st == "scheduled":
-        from .when import starts_words
-        return "scheduled", None, starts_words(task.get("scheduled_for") or now(), now())
     if st not in ("running", "ready"):
-        return (st if st in STATUSES else "todo"), None, None
+        return st, None, None
     states = []
     for k in live:
         x = k.get("status")
         states.append(x.get("state") if isinstance(x, dict) else x)
-    # A problem Herdr just found (SHEP-133): not Needs you before GRACE_MS have passed, while its
-    # agent is told and takes it up; until then the task reads as it would without it.
-    if task.get("attention") and now() - (task.get("attention_at") or 0) < GRACE_MS:
-        return task_status({**task, "attention": None}, live)
-    # What Herdr found that stops it (failing checks, a conflict): Needs you, unless its agent is
-    # already on it (on_it()); then it is Working, with its agent's own status line.
+    # What Herdr found that stops it: Needs you, unless its agent is already on it.
     if task.get("attention") and not on_it(task, live):
         return "needs", "attention", task["attention"]
     # Cut off by its provider (retry_pass): still Working while Herdr waits to tell it to carry
@@ -117,10 +105,6 @@ def task_status(task, live):
     if task.get("attention"):
         return "working", None, WORKING_AGAIN if st == "ready" else None
     if st == "ready":
-        if task.get("merge_requested") and live:
-            return "merging", None, None
-        if task.get("auto_merge") and task.get("pr") and not task.get("merged"):
-            return "merging", None, "Merges once its checks pass"
         return "ready", None, None
     # An agent that hasn't reported yet is starting: working.
     if any(x not in ("idle", "done", "blocked") for x in states):
@@ -153,8 +137,8 @@ STOPPED = "Agent stopped"
 # moment before it runs herdr-task ready or status, a background job's notice wakes it, a problem
 # is found just before its agent is handed it. So a quiet agent (Needs you: reply) and a problem
 # Herdr found (attention) need the person only once they've lasted GRACE_MS: the agent's own
-# status change (hc's status_ms) or the problem's attention_at says since when. What really asks
-# (a question tool, a permission: blocked) needs the person at once. As core/tasks.js GRACE_MS.
+# status change (hc's status_ms) says since when. What really asks (a question tool, a permission:
+# blocked) needs the person at once. As core/tasks.js GRACE_MS.
 GRACE_MS = 20_000
 
 
@@ -187,7 +171,7 @@ def busy_again(task, live):
     """A Ready task whose agent is at work again since it said ready. Not while it merges as
     asked (the merge is its work), nor a reviewer's turn. A ready said before turns were kept:
     any work once STARTING_MS have passed."""
-    if task["state"] != "ready" or task.get("merge_requested"):
+    if task["state"] != "ready":
         return False
     seen = task.get("ready_turns")
     if seen is None and now() - (task.get("ready_at") or 0) < STARTING_MS:
@@ -197,12 +181,9 @@ def busy_again(task, live):
 
 
 # ---- someone is on what needs the person -------------------------------------------------------
-# A task's attention (failing checks, a conflict, a failed merge) needs the person only while
-# nobody is on it (SHEP-8). On it: one of its agents is at work (working, or asking: then the
-# question shows), it was just handed the problem (herdr-task fix, GitHub news: handed_at) and is
-# starting, or its agent said what it's doing (herdr-task status) since the problem came up and
-# that is still fresh: an agent that set its line and waits on CI in the background is idle to
-# Herdr. Nobody on it and the problem still there: Needs you. As core/tasks.js onIt().
+# A task's attention needs the person only while nobody is on it (SHEP-8). On it: one of its
+# agents is at work (working, or asking: then the question shows), or its agent said what it's
+# doing (herdr-task status) recently. As core/tasks.js onIt().
 ON_IT_MS = 30 * 60000  # how long an agent's own status line counts, or its own time left if longer
 
 
@@ -211,11 +192,9 @@ def on_it(task, live):
     if any(status_word(k) in ("working", "blocked") and (k.get("labels") or {}).get("herdr.role") != "reviewer"
            for k in live):
         return True
-    if now() - (task.get("handed_at") or 0) < STARTING_MS:
-        return True
     p = task.get("progress") or {}
     said = p.get("set") or 0
-    if p.get("by") or not live or not said or said < (task.get("attention_at") or 0):
+    if p.get("by") or not live or not said:
         return False
     left = p.get("left") if isinstance(p.get("left"), (int, float)) else 0
     return now() - said < max(ON_IT_MS, left)
@@ -509,7 +488,7 @@ def starting(task):
     last = (task.get("agents") or [None])[-1]
     if last and last.get("ended"):
         return False
-    at = max([x for x in (task.get("started"), (last or {}).get("at"), (task.get("review") or {}).get("at")) if isinstance(x, (int, float))] or [0])
+    at = max([x for x in (task.get("started_at"), (last or {}).get("at")) if isinstance(x, (int, float))] or [0])
     return now() - at < STARTING_MS
 
 

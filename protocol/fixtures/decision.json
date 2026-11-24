@@ -26,11 +26,7 @@
         "title": "protocol: 补不变量单测",
         "brief_ref": "/home/user/.local/state/collie/briefs/dc_01h9z3k7m2n4p6q9.md",
         "base": "main",
-        "review": true,
-        "merge": false,
-        "access": "edit",
-        "tells": "needed",
-        "parallel": 1
+        "access": "edit"
       }
     }
   ],
@@ -49,8 +45,6 @@
   "ack": null,
   "settled": null,
   "run": {
-    "claimed_until": null,
-    "unknown_policy": "normal",
     "task_ref": null,
     "coordinator_ref": null
   },

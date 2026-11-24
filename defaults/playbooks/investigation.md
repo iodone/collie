@@ -1,7 +1,6 @@
 ---
-kind: "playbook"
-id: "investigation"
-title: "Investigation"
+name: "investigation"
+description: "只读调查事实与根因"
 version: 4
 ---
 

@@ -173,7 +173,7 @@ export function expandTasks(text, picked) {
 }
 
 // How sure a task is wanted near the top of the list: waiting on you, at work, then ready; done last.
-export const TASK_RANK = { need: 0, work: 1, ready: 2, merging: 3, queued: 4, todo: 5, done: 9 };
+export const TASK_RANK = { need: 0, work: 1, ready: 2, todo: 5, done: 9 };
 
 // Tasks for what is typed: [{ ref, title, status, at?, space?, machine? }]. IDs that start with it first, then IDs,
 // titles, spaces or machines that contain it; within each, by TASK_RANK then newest, so Done ones come last.

@@ -105,8 +105,7 @@ export function answerCard(decision, answer) {
   }
 
   const hopsBefore = decision.occurrence.hops;
-  const nextState =
-    answer.option === "drop" ? "settled" : answer.option === "later" ? "waiting" : "open";
+  const nextState = answer.option === "later" ? "waiting" : "open";
 
   const cardState = answer.option === "drop" ? "closed" : answer.option === "later" ? "open" : "decided";
 
@@ -128,14 +127,10 @@ export function answerCard(decision, answer) {
     },
   };
 
-  if (answer.option === "drop") {
-    next.settled = { at: answer.at, by: "human", outcome: "dropped" };
-  }
-
   assert(next.occurrence.hops === hopsBefore,
     `卡片回答不得改变 hops（${hopsBefore} → ${next.occurrence.hops}）`);
   assert(HOPS_RESET_ON_CARD === false, "常量 HOPS_RESET_ON_CARD 被改成了非 false，与 DESIGN §3.2 冲突");
-  return next;
+  return answer.option === "drop" ? settle(next, { at: answer.at, by: "human", outcome: "dropped" }) : next;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -144,14 +139,13 @@ export function answerCard(decision, answer) {
 
 /**
  * 窗口内已用的唤醒次数。**不按 space 分组**——这是 DESIGN §1.2「队列只有一份」的落点。
- * 只数 wake=true 的 Case（job turn）；人主动说话的 chat turn 不烧预算。
+ * 只数 origin=event 的 Message；人的消息不烧事件预算。
  */
 export function usedBudget(cases, now, { window_minutes = BUDGET_WINDOW_MINUTES } = {}) {
   const end = ms(now);
   const start = end - window_minutes * 60 * 1000;
   return (cases || []).filter((c) => {
-    if (!c || c.wake !== true) return false;
-    if (c.stream !== undefined && c.stream !== "job_turn") return false;
+    if (!c || c.origin !== "event") return false;
     const t = ms(c.created_at);
     return t > start && t <= end;
   });
@@ -181,23 +175,6 @@ export function checkBudget(cases, now, { limit = BUDGET_PER_HOUR, window_minute
     window_start: new Date(end - window_minutes * 60 * 1000).toISOString(),
     window_end: new Date(end).toISOString(),
     reset_at: new Date(oldest + window_minutes * 60 * 1000).toISOString(),
-  };
-}
-
-/**
- * 账本入口：预算不足时不许建 job turn 的 Case。
- * 返回 { allowed, case? , card_required } —— 调用方拿到 card_required 就必须出卡。
- */
-export function admitCase(existingCases, candidate, now, opts) {
-  const budget = checkBudget(existingCases, now, opts);
-  const isWake = candidate && candidate.stream === "job_turn";
-  if (!isWake) return { allowed: true, budget, card_required: false };
-  if (budget.allowed) return { allowed: true, budget, card_required: false };
-  return {
-    allowed: false,
-    budget,
-    card_required: true,
-    reason: `全局预算已用 ${budget.used}/${budget.limit}，不唤醒 coordinator，降级为卡片`,
   };
 }
 
@@ -296,7 +273,7 @@ export function assertRulesetGuard(ruleset) {
 /**
  * 护栏执行器。**在 decision 落账前无条件跑一遍**，输出才是权威。
  * 它做三件事：
- *  1. 命中七条 → 把 state 钉成 waiting，强制出 approval 卡（无视 tells/state/decided_by 的任何说法）
+ *  1. 命中七条 → 把 state 钉成 waiting，强制出 approval 卡（无视 state/decided_by 的任何说法）
  *  2. 用 authoritative.hops 覆写 occurrence.hops（coordinator 改不了跳数）
  *  3. 重写 risk，使「自称没有风险」不能成立
  */
@@ -339,11 +316,6 @@ export function applyGuard(decision, ruleset, { authoritative = {} } = {}) {
     snooze_until: existingCard.snooze_until ?? null,
     closed_at: existingCard.closed_at ?? null,
   };
-  // 护栏一出，spawn 的 tells 不再是「不通知」——否则 notification 语义会吞掉审批。
-  next.actions = (next.actions || []).map((a) =>
-    a && a.kind === "spawn_task" && a.spawn ? { ...a, spawn: { ...a.spawn, tells: "needed" } } : a,
-  );
-
   return {
     decision: next,
     hits,

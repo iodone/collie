@@ -6,18 +6,20 @@ import { sourceEvent, verifySource } from "./sources.ts";
 import { intakeEvent } from "./intake.ts";
 
 const MAX_BODY = 1_048_576;
-const routes = ["/answer", "/request", "/ticket", "/ticket/adopt", "/decision", "/v1/ingress"];
+const routes = ["/answer", "/ticket", "/ticket/adopt", "/decision", "/deliver", "/v1/ingress", "/v1/collaboration/reload"];
 
 function send(response: ServerResponse, status: number, value: unknown): void {
-  if (!response.headersSent) response.writeHead(status, { "content-type": "application/json" });
-  response.end(JSON.stringify(value));
+  if (response.headersSent) return response.end();
+  const body = JSON.stringify(value);
+  response.writeHead(status, { "content-type": "application/json", "content-length": Buffer.byteLength(body) });
+  response.end(body);
 }
 
 function deliveryError(error: unknown, attempt = 1) {
   const message = error instanceof Error ? error.message : String(error);
   let code = "invalid_decision";
   let field: string | null = null;
-  if (/unknown playbook/i.test(message)) { code = "unknown_playbook"; field = "playbook.id"; }
+  if (/unknown playbook/i.test(message)) { code = "unknown_playbook"; field = "playbook.name"; }
   else if (/invalid project|no project folder/i.test(message)) { code = "invalid_project"; field = "project"; }
   else if (/invalid space/i.test(message)) { code = "invalid_space"; field = "space"; }
   else if (/budget/i.test(message)) { code = "budget_exhausted"; }
@@ -42,10 +44,15 @@ function readBody(request: IncomingMessage): Promise<string> {
 }
 
 /** One HTTP surface for the Unix socket and the optional ingress listener. */
-export function serviceHandler(service: CollieService, { requireClientAuth = false, requireSecrets = false }: { requireClientAuth?: boolean; requireSecrets?: boolean } = {}) {
+export function serviceHandler(service: CollieService, { requireClientAuth = false, requireSecrets = false, ingressOnly = false }: { requireClientAuth?: boolean; requireSecrets?: boolean; ingressOnly?: boolean } = {}) {
   const startedAt = Date.now();
   return async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
     const url = (request.url ?? "").split("?")[0];
+    // The TCP ingress listener exposes only the two external ingress contracts. Local
+    // command routes (/ticket, /decision, /answer, ...) stay on the Unix socket.
+    if (ingressOnly && url !== "/v1/ingress" && !url.startsWith("/v1/in/") && url !== "/health") {
+      return send(response, 404, { error: "not found" });
+    }
     let input: Record<string, any> = {};
     try {
       if (request.method === "GET" && url === "/health") {
@@ -86,21 +93,27 @@ export function serviceHandler(service: CollieService, { requireClientAuth = fal
       if (url === "/v1/ingress") {
         const config = loadIngressConfig(service.configDir);
         // A local socket with no configured clients is trusted; any remote listener must configure a client token.
-        if ((requireClientAuth || Object.keys(config.clients ?? {}).length) && !clientAuth(config, request.headers.authorization).ok) {
+        const auth = clientAuth(config, request.headers.authorization);
+        if ((requireClientAuth || Object.keys(config.clients ?? {}).length) && !auth.ok) {
           return send(response, 401, { error: "bad ingress token" });
         }
-        return send(response, 200, await service.handleEvent(intakeEvent(input, service.stateDir)));
+        const clientSpace = auth.ok && auth.client ? config.clients?.[auth.client]?.space : undefined;
+        const hasSpace = Boolean(input.space) || (Array.isArray(input.space_candidates) && input.space_candidates.length > 0);
+        const eventInput = clientSpace && !hasSpace ? { ...input, space_candidates: [clientSpace] } : input;
+        return send(response, 200, await service.handleEvent(intakeEvent(eventInput, service.stateDir)));
       }
 
-      const result = url === "/request"
-        ? await service.request(input.space, input.goal, input.ticket_refs ?? [])
+      const result = url === "/v1/collaboration/reload"
+        ? service.reloadCollaboration()
         : url === "/decision"
           ? await service.commitDecision({ space: input.space, project: input.project, decision: input.decision, turn_id: input.turn_id })
         : url === "/ticket"
           ? await service.createTicket({ space: input.space, project: input.project, title: input.title, brief: input.brief, kind: input.kind, playbook: input.playbook })
           : url === "/ticket/adopt"
             ? await service.adoptTicket({ space: input.space, task_ref: input.task_ref, title: input.title, brief: input.brief, kind: input.kind })
-            : await service.answerCard(input.decisionId, input.answer, input.coordinatorAddress);
+            : url === "/deliver"
+              ? await service.deliver(input.decisionId)
+              : await service.answerCard(input.decisionId, input.answer, input.coordinatorAddress);
       send(response, 200, result);
     } catch (error) {
       if (url === "/decision") {
@@ -118,5 +131,5 @@ export function startAnswerServer(service: CollieService, socketPath: string) {
 
 /** Optional TCP ingress; intended for clients that cannot reach the local Unix socket. */
 export function startIngressServer(service: CollieService, port: number, host = "127.0.0.1") {
-  return createServer(serviceHandler(service, { requireClientAuth: true, requireSecrets: true })).listen(port, host);
+  return createServer(serviceHandler(service, { requireClientAuth: true, requireSecrets: true, ingressOnly: true })).listen(port, host);
 }

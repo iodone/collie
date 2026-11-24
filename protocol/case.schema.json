@@ -2,17 +2,15 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:collie:case:v1",
   "title": "Case",
-  "description": "内核递给 coordinator 的一条『活事件 + 有界快照』，即一次 job turn（DESIGN §3.2）。它只存在于 Ledger，不进 chat 历史；同一个 space 也可能有 chat turn，但两者共用一套记忆（Ledger），不共用会话。",
+  "description": "内核递给 Coordinator 的一条 Message 上下文：来源 + 有界快照。它只存在于 Ledger；人和事件共用一套记忆（Ledger），不按 turn 类型拆协议。",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "id",
     "created_at",
-    "stream",
-    "wake",
-    "visibility",
     "space",
-    "event",
+    "message",
+    "origin",
     "scope",
     "snapshot",
     "memory",
@@ -29,27 +27,29 @@
       "format": "date-time",
       "description": "递出时刻。**预算的唯一计费依据**：invariants.checkBudget 按它数窗口内的 Case 数。"
     },
-    "stream": {
-      "enum": [
-        "job_turn",
-        "chat_turn"
-      ],
-      "description": "哪个入口产生的。job_turn = 内核递的事件，headless、不可见；chat_turn = 人说话。DESIGN §3.2：两个入口、两套会话，但只有一套记忆。"
-    },
     "origin": {
-      "enum": ["event", "human"],
+      "enum": [
+        "event",
+        "human"
+      ],
       "description": "这个 CoordinatorTurn 由外部事件还是人的消息触发；两者共享同一 Case/Decision 契约。"
     },
     "playbook": {
-      "type": ["object", "null"],
+      "type": [
+        "object",
+        "null"
+      ],
       "description": "这个 turn 选定的 playbook；null 表示尚未选择。",
       "additionalProperties": false,
-      "required": ["id", "version"],
+      "required": [
+        "name",
+        "version"
+      ],
       "properties": {
-        "id": {
+        "name": {
           "type": "string",
           "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$",
-          "description": "playbook 标识，来自 role/playbook registry。"
+          "description": "playbook 的稳定 name，来自 playbook registry。"
         },
         "version": {
           "type": "integer",
@@ -58,16 +58,47 @@
         }
       }
     },
-    "wake": {
-      "type": "boolean",
-      "description": "是否消耗唤醒预算。job_turn 恒为 true、chat_turn 恒为 false（下面 allOf 强制）：人主动说话不算唤醒，否则人自己会把自己的预算吃光。"
-    },
-    "visibility": {
-      "enum": [
-        "ledger_only",
-        "chat"
+    "catalog": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "playbooks"
       ],
-      "description": "job_turn 必须是 ledger_only——机器事件进不了人的对话；chat_turn 是 chat。schema 用 allOf 强制这条对应关系。"
+      "description": "程序注入的动态 playbook 注册表。只含选择所需的元数据，不含 prompt 正文。",
+      "properties": {
+        "playbooks": {
+          "description": "可用 playbook 的元数据；Coordinator 只能从这里选择。",
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "description",
+              "version"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$",
+                "description": "playbook 的稳定 name。"
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 240,
+                "description": "一句话说明，用于选择。"
+              },
+              "version": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "锁定进 Decision 的版本。"
+              }
+            }
+          }
+        }
+      }
     },
     "space": {
       "type": "object",
@@ -131,59 +162,6 @@
           }
         }
       ]
-    },
-    "event": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "ref",
-        "key",
-        "type",
-        "hops",
-        "lane_key",
-        "object_key",
-        "occurrences"
-      ],
-      "description": "被归并后的活事件摘要（正文仍在 data_ref，不复制进来）。",
-      "properties": {
-        "ref": {
-          "type": "string",
-          "pattern": "^ev_[0-9a-z]{8,32}$",
-          "description": "代表事件 id（Event.id）。"
-        },
-        "key": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 200,
-          "description": "去重键 (source,key) 的拼合形式，与 Event.key 一致。"
-        },
-        "type": {
-          "type": "string",
-          "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$",
-          "description": "事件 type，coordinator 判断的起点。"
-        },
-        "hops": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "当前跳数（原样带入，不在 Case 里改）。coordinator 读它做熔断判断的依据之一。"
-        },
-        "lane_key": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 200,
-          "description": "归并泳道（rule_id:object_key），与 Event.merge.lane_key 一致。"
-        },
-        "object_key": {
-          "type": "string",
-          "pattern": "^(mr|issue|pipeline|none):.+$",
-          "description": "绑定对象键，priority 计数与卡片合并的单位。"
-        },
-        "occurrences": {
-          "type": "integer",
-          "minimum": 1,
-          "description": "泳道累计事件数。>1 表示这是『4 个 commit 判一次』的那一次。"
-        }
-      }
     },
     "scope": {
       "type": "object",
@@ -278,19 +256,12 @@
               "task_id": {
                 "type": "string",
                 "minLength": 1,
-                "maxLength": 80,
-                "description": "herdr-task 任务 id（外部标识）。"
+                "maxLength": 240,
+                "description": "collie-task canonical task ref。"
               },
               "state": {
-                "enum": [
-                  "todo",
-                  "queued",
-                  "working",
-                  "ready",
-                  "merging",
-                  "done"
-                ],
-                "description": "herdr-task 的状态，原样带入，本设计不改它的语义（DESIGN §4.2）。"
+                "enum": ["todo", "running", "ready", "done"],
+                "description": "共享 Task 的四态执行事实，原样带入 Coordinator 快照。"
               },
               "state_changed_at": {
                 "type": "string",
@@ -423,7 +394,7 @@
         "role_prompt_ref",
         "output_contract"
       ],
-      "description": "这次 turn 的输入约定。角色提示词是 templates/roles/coordinator.md（从 shepherdr 的 assistant.md 改）。",
+      "description": "这次 turn 的输入约定。角色提示词是 templates/coordinator.md（从 shepherdr 的 assistant.md 改）。",
       "properties": {
         "role_prompt_ref": {
           "type": "string",
@@ -435,104 +406,10 @@
           "description": "coordinator 必须回一个 Decision（或一组 Decision action）。冻结为 Decision schema 的 $id：产出形状不可协商，换 schema 就是换协议版本。"
         }
       }
+    },
+    "message": {
+      "$ref": "urn:collie:message:v1",
+      "description": "被判断的 Message；正文在 data_ref，不在 Case 中复制。"
     }
-  },
-  "allOf": [
-    {
-      "if": {
-        "required": [
-          "stream"
-        ],
-        "properties": {
-          "stream": {
-            "const": "job_turn"
-          }
-        }
-      },
-      "then": {
-        "required": [
-          "visibility",
-          "wake"
-        ],
-        "properties": {
-          "visibility": {
-            "const": "ledger_only"
-          },
-          "origin": {
-      "enum": ["event", "human"],
-      "description": "这个 CoordinatorTurn 由外部事件还是人的消息触发；两者共享同一 Case/Decision 契约。"
-    },
-    "playbook": {
-      "type": ["object", "null"],
-      "description": "这个 turn 选定的 playbook；null 表示尚未选择。",
-      "additionalProperties": false,
-      "required": ["id", "version"],
-      "properties": {
-        "id": {
-          "type": "string",
-          "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$",
-          "description": "playbook 标识，来自 role/playbook registry。"
-        },
-        "version": {
-          "type": "integer",
-          "minimum": 1,
-          "description": "playbook 版本，Task 锁定该版本。"
-        }
-      }
-    },
-    "wake": {
-            "const": true
-          }
-        }
-      }
-    },
-    {
-      "if": {
-        "required": [
-          "stream"
-        ],
-        "properties": {
-          "stream": {
-            "const": "chat_turn"
-          }
-        }
-      },
-      "then": {
-        "required": [
-          "visibility",
-          "wake"
-        ],
-        "properties": {
-          "visibility": {
-            "const": "chat"
-          },
-          "origin": {
-      "enum": ["event", "human"],
-      "description": "这个 CoordinatorTurn 由外部事件还是人的消息触发；两者共享同一 Case/Decision 契约。"
-    },
-    "playbook": {
-      "type": ["object", "null"],
-      "description": "这个 turn 选定的 playbook；null 表示尚未选择。",
-      "additionalProperties": false,
-      "required": ["id", "version"],
-      "properties": {
-        "id": {
-          "type": "string",
-          "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$",
-          "description": "playbook 标识，来自 role/playbook registry。"
-        },
-        "version": {
-          "type": "integer",
-          "minimum": 1,
-          "description": "playbook 版本，Task 锁定该版本。"
-        }
-      }
-    },
-    "wake": {
-            "const": false
-          }
-        }
-      }
-    }
-  ]
+  }
 }

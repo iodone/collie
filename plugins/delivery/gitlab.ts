@@ -47,5 +47,3 @@ export async function deliverGitlab(decision: Json, options: DeliveryOptions = {
 
   return (options.run ?? runGlab)(args);
 }
-
-export const deliverGitLab = deliverGitlab;

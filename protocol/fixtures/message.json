@@ -1,0 +1,18 @@
+{
+  "ref": "ev_01h9z3k7m2n4p6q8",
+  "key": "mr!93@head_sha",
+  "type": "merge_request.updated",
+  "hops": 0,
+  "lane_key": "mr-review:mr:mr!93",
+  "object_key": "mr:mr!93",
+  "occurrences": 4,
+  "source": "gitlab",
+  "object": {
+    "kind": "mr",
+    "id": "mr!93"
+  },
+  "title": "MR !93",
+  "data_ref": "/home/user/.local/state/collie/event-bodies/ev_01h9z3k7m2n4p6q8.md",
+  "data_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "received_at": "2026-11-13T10:00:00Z"
+}

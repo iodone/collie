@@ -31,7 +31,7 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 240,
-      "description": "去重键，形如 <source>:<event.key>。DESIGN §3.3 的四个管理字段之一：同一 key 已有未终结的决定时，新事件归并进去而不是再判一次。"
+      "description": "去重键：event 为 <source>:<key>，human 直接使用 Message.key。DESIGN §3.3 的四个管理字段之一：同一 key 已有未终结的决定时，新事件归并进去而不是再判一次。"
     },
     "space": {
       "type": "string",
@@ -45,12 +45,12 @@
     "playbook": {
       "type": ["object", "null"],
       "additionalProperties": false,
-      "required": ["id", "version"],
+      "required": ["name", "version"],
       "properties": {
-        "id": {
+        "name": {
           "type": "string",
           "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$",
-          "description": "playbook 标识，来自 role/playbook registry。"
+          "description": "playbook 的稳定 name，来自 playbook registry。"
         },
         "version": {
           "type": "integer",
@@ -74,11 +74,11 @@
     },
     "event_ref": {
       "type": ["string", "null"],
-      "description": "来源事件 id（Event.id）。活事件归并后指向代表事件；纯流程决定可为 null。"
+      "description": "来源 Event id（Event.id）。活事件归并后指向代表事件；human Message 和纯流程决定为 null。"
     },
     "case_ref": {
       "type": ["string", "null"],
-      "description": "触发这次判断的 Case id（一个 job turn）。路由表直派（没过 coordinator）时为 null——这正是区分『高频模式』与『真的想了想』的字段。"
+      "description": "触发这次判断的 Case id（一条 Message）。路由表直派（没过 coordinator）时为 null——这正是区分高频模式与真正判断的字段。"
     },
     "state": {
       "enum": ["open", "waiting", "settled"],
@@ -162,32 +162,23 @@
     "run": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["claimed_until", "unknown_policy", "task_ref", "coordinator_ref"],
-      "description": "运行态。**照抄 agent-autoloop 会坏的第 1 处**落在这里：一轮不是一次 agent turn，run 保持 claimed 直到 task ready；这期间 unknown 是正常态（unknown_policy 冻结为 normal），判断依据是任务状态有没有前进，见 Receipt.progress 与 invariants.judgeProgress。",
+      "required": ["task_ref", "coordinator_ref"],
+      "description": "运行关联。Task 的持久状态是唯一执行进度事实；长任务没有回执不是失败信号。",
       "properties": {
         "kind": {
           "enum": ["build", "review"],
           "default": "build",
           "description": "任务类型。build = 写代码；review = 审（review 事件派出的只读任务）。未写按 build。它是审阅工作的判据：review 任务的 agent 一启动就按审阅工作运行。"
         },
-        "claimed_until": {
-          "type": ["string", "null"],
-          "format": "date-time",
-          "description": "本次 run 的认领到期时刻。null = 不按墙钟超时，只等 task 状态推进（长任务可能跑一小时）。"
-        },
-        "unknown_policy": {
-          "const": "normal",
-          "description": "冻结为 normal：长任务期间没收到回执不是失败信号，不得据此结案或出失败卡。"
-        },
         "task_ref": {
           "type": ["string", "null"],
-          "maxLength": 80,
-          "description": "spawn 后由 herdr-task 返回的任务 key 或 id；它是 Working 视图与 Task/Diff 导航的持久关联，不是第二份任务状态。未派发时为 null。"
+          "maxLength": 240,
+          "description": "spawn 后由 collie-task 返回的 canonical task ref；它是 Working 视图与 Task/Diff 导航的持久关联，不是第二份任务状态。未派发时为 null。"
         },
         "coordinator_ref": {
           "type": ["string", "null"],
           "maxLength": 200,
-          "description": "产生这次 Decision 的 agent 会话引用。New / Build 建立会话，Card answer 按它恢复原 coordinator；机器 job turn 可为独立会话。"
+          "description": "产生这次 Decision 的 agent 会话引用。New / Build 建立会话；Card answer 按它恢复原 coordinator。"
         }
       }
     },
@@ -361,7 +352,7 @@
           "items": { "enum": ["delete_data", "stop_service", "spend_money", "outbound_message", "product_direction", "rotate_secret", "change_permission"] },
           "uniqueItems": true,
           "maxItems": 7,
-          "description": "这条动作触碰的不可逆/外部影响面。由 action 自己声明，applyGuard 据此强制出卡——coordinator 写什么 state/tells 都不影响判定。emit_command 的对外动作至少带一个 tag。"
+          "description": "这条动作触碰的不可逆/外部影响面。由 action 自己声明，applyGuard 据此强制出卡——coordinator 写什么 state 都不影响判定。emit_command 的对外动作至少带一个 tag。"
         },
         "why": {
           "type": "string",
@@ -371,7 +362,7 @@
         "spawn": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["title", "brief_ref", "base", "review", "merge", "access", "tells"],
+          "required": ["title", "brief_ref", "base", "access"],
           "description": "kind=spawn_task 时必填。只表达『派了什么、为什么』，不定义新的派工协议（DESIGN §3.2）。",
           "properties": {
             "title": {
@@ -396,27 +387,9 @@
               "maxLength": 120,
               "description": "base=branch 时的分支名。"
             },
-            "review": {
-              "type": "boolean",
-              "description": "是否起只读 reviewer。一票否决任何写成 false 的护栏相关任务由 guard 处理，不在这里。"
-            },
-            "merge": {
-              "type": "boolean",
-              "description": "ready 后是否允许自动合并。true 且命中护栏时仍会出 Accept 卡。"
-            },
             "access": {
               "enum": ["read", "edit", "full"],
               "description": "worker 的沙箱级别。coordinator 只能降不能升：applyGuard 不允许它超过来源规则的 access（见 protocol/README.md『保留判据』）。"
-            },
-            "tells": {
-              "enum": ["always", "needed", "never"],
-              "description": "这个任务出不出卡。needed = 仅在与护栏冲突时出；never 也不能压掉护栏。"
-            },
-            "parallel": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 8,
-              "description": "这次拆成几个并行 worker。省略按规则的 limits.parallel。"
             }
           },
           "allOf": [

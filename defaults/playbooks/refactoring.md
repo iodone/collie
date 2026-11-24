@@ -1,7 +1,6 @@
 ---
-kind: "playbook"
-id: "refactoring"
-title: "Refactoring"
+name: "refactoring"
+description: "行为保持的结构重构"
 version: 4
 ---
 

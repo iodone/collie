@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:collie:message:v1",
+  "title": "Message",
+  "description": "进入 Coordinator 的一条消息。Event 与人的消息只在 source 和去重/归并语义上不同；正文一律通过 data_ref 指向磁盘，不内联。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ref",
+    "key",
+    "source",
+    "type",
+    "object",
+    "data_ref",
+    "data_digest",
+    "hops",
+    "lane_key",
+    "object_key",
+    "occurrences"
+  ],
+  "properties": {
+    "ref": {
+      "type": "string",
+      "pattern": "^(ev|msg)_[0-9a-z]{8,32}$",
+      "description": "代表事件 id（Event.id）。"
+    },
+    "key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "description": "去重键 (source,key) 的拼合形式，与 Event.key 一致。"
+    },
+    "type": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$",
+      "description": "事件 type，coordinator 判断的起点。"
+    },
+    "hops": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "当前跳数（原样带入，不在 Case 里改）。coordinator 读它做熔断判断的依据之一。"
+    },
+    "lane_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "description": "归并泳道（rule_id:object_key），与 Event.merge.lane_key 一致。"
+    },
+    "object_key": {
+      "type": "string",
+      "pattern": "^(mr|issue|pipeline|none):.+$",
+      "description": "绑定对象键，priority 计数与卡片合并的单位。"
+    },
+    "occurrences": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "泳道累计事件数。>1 表示这是『4 个 commit 判一次』的那一次。"
+    },
+    "source": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "description": "message 来源，例如 gitlab / github / human。"
+    },
+    "title": {
+      "type": "string",
+      "maxLength": 200,
+      "description": "给人看的标题。"
+    },
+    "data_ref": {
+      "type": "string",
+      "pattern": "^/[^\\s]+$",
+      "description": "正文文件绝对路径。"
+    },
+    "data_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "正文摘要。"
+    },
+    "received_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "收到消息的时刻。"
+    },
+    "project": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$",
+      "description": "项目。"
+    },
+    "space_candidates": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$"
+      },
+      "minItems": 1,
+      "maxItems": 8,
+      "description": "候选 space。"
+    },
+    "object": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "id"
+      ],
+      "description": "消息绑定对象。",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40,
+          "description": "对象种类。"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240,
+          "description": "对象标识。"
+        },
+        "url": {
+          "type": "string",
+          "description": "对象链接。"
+        }
+      }
+    }
+  }
+}

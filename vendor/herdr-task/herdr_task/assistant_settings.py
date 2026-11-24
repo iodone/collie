@@ -13,20 +13,17 @@ import os
 import sys
 
 from .base import addon_off, hc_json, MAX_RUNNING, now, run, STORE
-from .settings import DEFAULTS, LOCAL_MACHINE, MUST_WORDS, SETTINGS, agent_key, bare, read_settings
+from .settings import DEFAULTS, LOCAL_MACHINE, SETTINGS, agent_key, bare, read_settings
 from .launch import coordinators, is_coordinator
 from . import reactions
 
-# What an Assistant was last told, on its terminal: "review:1a2b3c,merge:…", a short hash of each line.
+# What an Assistant was last told, on its terminal: a short hash of each settings line.
 LABEL = "herdr.settings"
 STATE = os.path.join(STORE, ".assistant-settings.json")
 EVERY_MS = 60000  # looked at again this often (Autopilot's switch is in its own file), and at once when the settings file changes
 
 HEAD = ("Your settings: (Shepherdr settings for this space, the truth for every task you add; a task's own --set wins, "
         "and `herdr-task show <id>` says what one task has)")
-MERGE_SHORT = {"ask": "ask the person first (they accept it in the Tasks panel, which merges it)",
-               "checks": "after checks (Herdr merges a ready task once its checks pass)",
-               "auto": "on its own (Herdr merges a ready task)"}
 BY = {"space": "set for this space", "machine": "this machine's setting", "everywhere": "your setting everywhere"}
 NOTICE_END = "Nothing to answer: reply only <hc no-reply/>."
 
@@ -93,11 +90,6 @@ def rows(space, d=None, auto=None):
 
     def lines(cfg, autopilot):
         t = cfg["tasks"]
-        rounds = int(t.get("review_rounds") or 0)
-        must = t.get("must_fix") if t.get("must_fix") in MUST_WORDS else "major"
-        review = "off" if rounds <= 0 else (f"on, at most {rounds} round{'s' if rounds > 1 else ''}, must fix {MUST_WORDS[must]}, "
-                                            f"reviewer {pick_words(cfg.get('reviewer'), 'the other CLI')}")
-        merge = t.get("merge") if t.get("merge") in MERGE_SHORT else "ask"
         notes = [w for w, k in (("start", "start_notes"), ("finish", "finish_notes")) if str(t.get(k) or "").strip()]
         a_on, a_every, a_dir = autopilot
         reacting = (cfg.get("agents") or {}).get("reactions") is not False
@@ -105,14 +97,10 @@ def rows(space, d=None, auto=None):
         from .feedback import feedback_repo
         repo = feedback_repo(d)
         return [
-            ("review", "Review", review, "on" if rounds > 0 else "off",
-             [("tasks", "review_rounds"), ("tasks", "must_fix"), ("reviewer", None)]),
-            ("merge", "Merge", MERGE_SHORT[merge], merge, [("tasks", "merge")]),
-            ("proof", "Proof", "on" if t.get("proof") is not False else "off (tasks show no proof artifact)",
-             "off" if t.get("proof") is False else "on", [("tasks", "proof")]),
-            ("agent", "Task agent", pick_words(cfg.get("worker"), "claude, its own default model and effort"),
-             pick_words(cfg.get("worker"), "claude").replace(", model ", "/").replace(", effort ", "/"), [("worker", None)]),
-            ("base", "Base branch", f"{t['base']} (new tasks branch from it and merge into it)" if str(t.get("base") or "").strip()
+            ("agent", "Task agent", pick_words(cfg.get("driver") or cfg.get("worker"), "claude, its own default model and effort"),
+             pick_words(cfg.get("driver") or cfg.get("worker"), "claude").replace(", model ", "/").replace(", effort ", "/"),
+             [("driver", None), ("worker", None)]),
+            ("base", "Base branch", f"{t['base']} (new tasks branch from it)" if str(t.get("base") or "").strip()
              else "the folder's checked-out branch", str(t.get("base") or "").strip(), [("tasks", "base")]),
             ("worktrees", "Worktrees", "on (in a git repo, a worktree and branch per task)" if t.get("worktrees") is not False
              else "off (tasks work in the folder itself)", "off" if t.get("worktrees") is False else "on", [("tasks", "worktrees")]),

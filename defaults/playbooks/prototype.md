@@ -1,7 +1,6 @@
 ---
-kind: "playbook"
-id: "prototype"
-title: "Prototype"
+name: "prototype"
+description: "用最小原型验证方向"
 version: 4
 ---
 

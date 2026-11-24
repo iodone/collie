@@ -6,9 +6,7 @@
 //            min 5%; half full while it reports none)
 //   needs    a 10px red dot (halo: a faint ring around it, as Shepherdr's chat header)
 //   ready    green, a white tick        done     the same in grey
-//   merging  the green ring with a quarter gap, turning
-//   queued   the grey ring with a clock's two hands      todo  the grey ring      off  dashed
-//   scheduled  a small grey calendar (SHEP-38: starts by itself at a time)
+//   todo     the grey ring
 import { div, svg } from "gpui-kit";
 import { theme } from "herdr";
 import { terminals } from "./live.js";
@@ -25,9 +23,9 @@ const readyColor = green;
 const pie = (pct) => `mods/collie-inbox/task/pie/${Math.min(100, Math.max(5, Math.round(pct / 5) * 5))}.svg`;
 
 const box = () => div().relative().size(14).flex_none();
-const ring = (color, file = "circle") => svg(`mods/collie-inbox/task/${file}.svg`).size(14).flex_none().text_color(color);
+const ring = (color) => svg("mods/collie-inbox/task/circle.svg").size(14).flex_none().text_color(color);
 
-// s: needs, working, merging, ready, queued, scheduled, todo, done, off. pct: the % done (working).
+// s: needs, working, ready, todo, done. pct: the % done (working).
 export function taskDot(s, { pct = null, halo = false } = {}) {
   const t = theme();
   switch (s) {
@@ -38,10 +36,6 @@ export function taskDot(s, { pct = null, halo = false } = {}) {
     case "ready":
     case "done": return box().rounded(7).bg(s === "ready" ? readyColor() : t.dim)
       .child(svg("mods/collie-inbox/task/tick.svg").size(14).flex_none().text_color("#ffffff"));
-    case "merging": return ring(readyColor(), "merging").spin(1400);
-    case "queued": return ring(t.dim, "queued");
-    case "scheduled": return ring(t.dim, "scheduled");
-    case "off": return ring(t.dim, "off");
   }
   return ring(t.dim);
 }

@@ -9,11 +9,11 @@ export type ChannelRunner = (args: string[]) => Promise<unknown>;
 
 export interface ChannelOptions {
   run?: ChannelRunner;
-  beforeResume?: (decision: Json) => Promise<void> | void;
+  beforeResume?: (decision: Json) => Promise<Json | void> | Json | void;
 }
 
 const defaultRunner: ChannelRunner = async (args) => {
-  const { stdout } = await execFileAsync(process.env.COLLIE_TASK_CLI ?? "collie-task", args, { maxBuffer: 4 * 1024 * 1024 });
+  const { stdout } = await execFileAsync(process.env.COLLIE_HC_CLI ?? "hc", args, { maxBuffer: 4 * 1024 * 1024 });
   return stdout;
 };
 
@@ -24,9 +24,9 @@ export async function answerHerdrCard(
   coordinatorAddress?: string,
   options: ChannelOptions = {},
 ): Promise<Json> {
-  const answered = answerCard(decision, answer);
-  await options.beforeResume?.(answered);
-  if (answer.option === "drop" || answer.option === "later") {
+  let answered = answerCard(decision, answer);
+  answered = await options.beforeResume?.(answered) ?? answered;
+  if (answer.option === "drop" || answer.option === "later" || answered.state === "settled") {
     return { decision: answered, resumed: false };
   }
   if (typeof coordinatorAddress !== "string" || !coordinatorAddress.trim()
@@ -40,6 +40,6 @@ export async function answerHerdrCard(
     answer: answered.card.answer,
     hops: answered.occurrence.hops,
   });
-  const output = await (options.run ?? defaultRunner)(["tell-assistant", coordinatorAddress, message]);
+  const output = await (options.run ?? defaultRunner)(["send", coordinatorAddress, message, "--json"]);
   return { decision: answered, resumed: true, output };
 }

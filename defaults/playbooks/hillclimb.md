@@ -1,7 +1,6 @@
 ---
-kind: "playbook"
-id: "hillclimb"
-title: "Hillclimb"
+name: "hillclimb"
+description: "持续小步提升现有实现"
 version: 4
 ---
 

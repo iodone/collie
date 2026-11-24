@@ -39,7 +39,7 @@ Collie 沿用 Agent Autoloop 的循环模型：
 | Helper | 同一 task 下的局部 role terminal | 第二个 task、第二个 driver |
 | Playbook | 交给 driver 的工作编排 prompt | driver 的本地执行说明 |
 | Role | 职责、禁项、输入输出 | 绑定某个 agent |
-| Task | 执行事实：状态、review、verify、receipt | 定义 workflow |
+| Task | 执行事实：四态、进度、summary / details / proof | 定义 workflow、保存 review / verify / delivery gate |
 | Human | 最终裁决 | 交付物 |
 
 接收 playbook 的 agent 是 **driver**；它本身也可以工作，也可以启动 helper role。
@@ -62,7 +62,7 @@ Coordinator 是 space 内唯一判断者。
 ```text
 Decision
 ├── origin: event | human
-├── playbook: { id, version }?
+├── playbook: { name, version }?
 ├── project?
 ├── why
 ├── actions[]
@@ -93,7 +93,22 @@ Coordinator 不负责：
 - 执行实现、review、verify
 - 写 task facts
 
-Event 和 human message 共用同一 Decision 契约；入口只改变输入。
+Event 和 human message 共用同一 Decision 契约；入口只改变输入。Coordinator 拥有业务判断，service/system 可以写 guard、Card answer、driver failure 和 accept / drop finalization revision；这些系统写入不构成第二个 dispatcher，Driver 不写 Decision。
+
+### 2.1 Coordinator context
+
+```text
+静态 prompt
+  ~/.config/herdr-core/templates/coordinator.md
+  → 职责、边界、Decision 契约、默认 playbook 映射
+
+动态注入
+  catalog.playbooks: { name, description, version }
+  event / human input
+  queue / running / recent / policy / budget / space_note
+```
+
+程序从 CollaborationRegistry 读取 catalog 并注入 Case；Coordinator 只能从 catalog 选择 playbook。playbook / role 的正文不进入 Coordinator context，选中的 playbook 由 service 渲染进 task brief。
 
 ---
 
@@ -111,11 +126,12 @@ driver 收到：
 driver 可以做：
 
 - 自己完成工作
-- 启动 helper role
+- 按 playbook 启动 helper role
 - 等待 helper 的 findings / verdict
 - 修复并继续
-- 记录 review / verify
-- 提交 ready receipt
+- 用 `status` 记录执行进度
+- 按 playbook 执行或请求 delivery
+- 提交只含 summary / details / proof 的 ready receipt
 
 driver 不做：
 
@@ -134,9 +150,9 @@ Playbook 是交给 driver 的编排 prompt。
 
 ```text
 Playbook
-├── id
+├── name
+├── description
 ├── version
-├── title
 └── body
 ```
 
@@ -158,7 +174,7 @@ review 有 must-fix 就修；
 最后记录 ready。
 ```
 
-Playbook 按 task 需要选择 implement / review / verify 等步骤。
+Playbook 按 task 需要选择 implement / review / verify 等步骤，也决定 merge / comment / close 等 delivery 何时执行、何时需要 Decision 授权。Decision 的 spawn 只选择 playbook 和执行目标，不含 `spawn.review` 或 `spawn.merge`；Task 不保存这些流程的 gate，accept 也不以 delivery 完成为前提。
 
 ---
 
@@ -170,12 +186,10 @@ Role 定义职责、禁项、输入输出；playbook 负责编排这些 role 的
 
 ```text
 system fixed   coordinator / driver      定义只读，runner 可配
-built-in       reviewer / verifier / ...  可被 user / project 覆盖
-user           ~/.config/collie/roles    用户自定义
-project        <project>/.collie/roles   项目自定义
+user config    ~/.config/collie/roles    用户自定义，可编辑、可新增
 ```
 
-每个 role 记录 `origin: builtin | user | project` 和实际文件路径。
+每个 role 记录 `origin: system | config` 和实际文件路径。
 
 `coordinator` / `driver` 的 role 定义不可覆盖；只允许修改 runner。
 
@@ -183,11 +197,11 @@ project        <project>/.collie/roles   项目自定义
 
 ```ts
 type Role = {
-  id: string;
-  title: string;
-  purpose: string;
-  duties: string[];
-  prohibitions: string[];
+  name: string;
+  description: string;
+  version?: number;
+  duties?: string[];
+  prohibitions?: string[];
   inputs?: string[];
   outputs?: string[];
 };
@@ -208,7 +222,7 @@ Playbook 决定何时用 role
 Role prompt 决定这个 role 怎么做
 ```
 
-driver 从 catalog 取 role prompt，再把 prompt 交给 helper terminal。
+driver 从 role catalog 取 role name / description / file，再把 role prompt 交给 helper terminal。
 
 ---
 
@@ -221,7 +235,7 @@ Coordinator 的 Decision：
 ```json
 {
   "state": "open",
-  "playbook": { "id": "feature", "version": 1 },
+  "playbook": { "name": "feature", "version": 1 },
   "actions": [{
     "kind": "spawn_task",
     "risk_tags": [],
@@ -252,6 +266,7 @@ hc run --bg
 - helper 用 `herdr.role` 标识局部角色
 - helper 不创建新 task
 - helper 不写 Work 状态
+- helper 使用独立 Herdr tab；Ticket body 的 Terminal 始终属于 driver，helper-only 不抢占它
 
 ### 6.3 交接
 
@@ -265,9 +280,9 @@ hc kill <helper>
 
 读取局部结果。
 
-driver 用 `collie task reviewed` / `collie task verified` 记录事实；最后 `collie task ready` 提交 receipt。
+driver 自己按 playbook 决定 review / verify 是否完成；最后用 `collie task ready` 提交 task-level receipt。
 
-helper 的 findings / verdict 不等于 Worker 状态，也不等于 Work 状态。
+helper 的 findings / verdict 不等于 Task 状态，也不等于 Work 状态。
 
 ---
 
@@ -276,21 +291,17 @@ helper 的 findings / verdict 不等于 Worker 状态，也不等于 Work 状态
 ### 7.1 三层事实
 
 ```text
+Decision   open / waiting / settled
+Task       todo / running / ready / done
 Work       Todo / Working / Needs you / Settled
-Task       running / ready / reviewed / verified
-Helper     working / blocked / idle
+Helper     live terminal 状态（不进入 task state）
 ```
 
 ### 7.2 Work 投影
 
-| Work | 来源 |
-|---|---|
-| Todo | task 未 running；Decision open |
-| Working | driver 或 helper 活跃 |
-| Needs you | 问题、阻塞、待验收、approval |
-| Settled | Decision settled |
+Work 只由 Decision + Task + live agent 投影，不写回 Ledger 或 task store。唯一规范判定表见 [`TASK-LIFECYCLE.md`](TASK-LIFECYCLE.md) §2.5：Decision settled / waiting 优先，其次是 live blocked / live roles，然后才是 Task ready / done / running。Task running 没有 live agent 仍为 Working；没有更高优先级条件时 Task done 为 Settled。
 
-Work 只由 Decision + task facts 投影，不写回 Ledger。
+Ticket body 只有 Terminal 与 Artifacts。Terminal 属于 driver（已结束时可显示其历史 terminal）；reviewer / verifier / helper 各有独立 Herdr tab，helper-only 不能抢占 driver Terminal。Artifact 必须通过 `artifact.task` 或 `Task.proof` 显式绑定，不能从日志、publisher 或时间窗口推断。
 
 ### 7.3 phase
 
@@ -308,15 +319,15 @@ phase 是读时投影：
 - reviewer 活跃 → reviewing
 - verifier 活跃 → verifying
 
-phase 是读时投影；Work 的持久状态保持四态。
+phase 是读时投影；Task 的持久状态保持四态，Work 自身没有持久状态。
 
 ### 7.4 关键规则
 
+- `Task.state` 只有 `todo / running / ready / done`。
+- `ready` 只表示 driver 已交付；下一步 accept/rework/drop 由 Decision / Card 决定。
 - helper 完成不会自动推进 Work。
-- `ready` 不等于 `done`。
-- `ack` 不等于 settled。
-- 只有 accept / drop / 终结让 Work 进入 Settled。
-- helper 提问且 driver 无法代答时，Work 才是 Needs you。
+- `ready` 不等于 `done`；`ack` 不等于 settled。
+- Decision `settled` 让 Work 进入 Settled；没有更高优先级条件时 Task `done` 也进入 Settled，包括 orphan 或 Decision 仍为 open 的情况。accept / drop 同时终结对应 Task。
 
 ---
 
@@ -336,6 +347,8 @@ Coordinator chooses playbook
 - Coordinator 不需要每个 helper 的 turn。
 - 需要继续同一 Work 时，新 Decision 引用已有 Ticket / Task。
 
+完整状态流转与最终交付见 [`TASK-LIFECYCLE.md`](TASK-LIFECYCLE.md)。
+
 ---
 
 ## 9. 失败
@@ -343,8 +356,8 @@ Coordinator chooses playbook
 - reviewer findings → driver 修复
 - verifier fail → driver 修复
 - helper 崩溃 / 超时 → driver 重试或升级
-- driver 无法处理 → task blocked / Card
-- Coordinator 读 task receipt，决定 continue / rework / ask / settle
+- driver 无法处理 → service 写 Decision waiting / Card，Task 不增加 blocked 状态
+- Coordinator 读 task receipt，决定 accept / rework / drop
 
 不可逆动作必须 approval Card。
 
@@ -352,16 +365,11 @@ Coordinator chooses playbook
 
 ## 10. 命令边界
 
-| 动作 | 命令 |
-|---|---|
-| 人明确建 Ticket | `collie ticket create` |
-| Coordinator 提交 Decision | `collie decision commit` |
-| 读 Ticket / Decision | `collie ticket show` |
-| 读 task facts | `collie task show/status` |
-| 执行 task 操作 | `collie task ...` |
-| 查看 registry | `collie roles list` |
+完整命令、参数和状态迁移以 [`CLI.md`](CLI.md) 为准；注入 Coordinator / Driver 的 `skills/cli/SKILL.md` 保持自包含，不依赖本文表格。
 
-`collie-task` 是内部 task CLI，不是用户/prompt 契约。
+人通过 `collie ticket create` 明确建 Ticket，Coordinator 用 `collie decision commit` 提交判断，Driver 只用 `collie task status/ready` 记录进度和交付。accept / drop 后由 service 终结 Task，rework 对同一 Task 调 `start`。公开 `collie task` 子命令只有 `add / list / show / start / status / ready / accept / done`；`drop` 是 Card 选项，不是 task 子命令。
+
+`collie-task` 是内部 task CLI，tick / revive / scheduler 等内部能力不进入公开命令面。Chat 只使用 `collie` CLI；`/ticket`、`/decision` 是 CLI 包装的本地 service 路由，不是对外 ingress。
 
 ---
 
@@ -375,30 +383,25 @@ Role / Playbook 的来源、优先级、系统固定规则和 Settings 细节见
 system fixed roles
   coordinator / driver
 
-built-in defaults
-  reviewer / verifier
-  built-in playbooks
-
-user custom
+user config
   ~/.config/collie/roles
   ~/.config/collie/playbooks
-
-project custom
-  <project>/.collie/roles
-  <project>/.collie/playbooks
+  ~/.config/collie/coordinator.json
+  ~/.config/collie/settings.json
+  ~/.config/collie/sources.json
+  ~/.config/collie/workspaces.json
 ```
 
 规则：
 
 - `coordinator` / `driver` 的定义不可覆盖；只允许配置 runner（agent / model / effort / permission）。
-- 默认 role 和 built-in playbook 可以被 user / project 覆盖。
-- user 覆盖 built-in，project 覆盖 user；Task 记录实际 `origin`。
-- 每个 role / playbook 保留 `origin: builtin | user | project` 和实际文件路径。
-- 不再加载 `<project>/.agents/skills/collie`。
+- 所有用户级 role / playbook 都在 `~/.config/collie/`，可编辑和新增。
+- Task 记录实际使用的 role / playbook 文件。
+- 旧路径 `~/.config/herdr-core/templates/roles/`、`~/.config/herdr-core/templates/playbooks/`、`<project>/.collie/`、`<project>/.agents/skills/collie/` 不再加载。
 - 未知 role / playbook fail closed。
 - repo 不能自动提高 driver / helper 权限。
 - Event payload 不能选择 role / playbook。
-- Task 锁定 playbook id / version。
+- Task 锁定 playbook name / version。
 
 ---
 

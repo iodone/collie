@@ -31,15 +31,17 @@ function assertInvalid(data, target, keyword, note) {
   return result;
 }
 
-test("六个 schema 都存在、都有 $id、都能被装载", () => {
+test("八个 schema 都存在、都有 $id、都能被装载", () => {
   const ids = docs.map((d) => d.schema.$id).sort();
   assert.deepEqual(ids, [
     "urn:collie:card:v1",
     "urn:collie:case:v1",
     "urn:collie:decision:v1",
     "urn:collie:event:v1",
+    "urn:collie:message:v1",
     "urn:collie:receipt:v1",
     "urn:collie:ruleset:v1",
+    "urn:collie:task:v1",
   ]);
 });
 
@@ -121,11 +123,17 @@ test("Ruleset：预算作用域与跳数上限冻结为常量", async () => {
   assertInvalid({ ...rs, max_hops: 12 }, "urn:collie:ruleset:v1", "const", "放宽跳数");
 });
 
-test("Case：fixture 合法；job_turn 不得出现在 chat 里", async () => {
+test("Message：fixture 合法；人的消息不伪装成 Event", async () => {
+  const message = await fixture("message");
+  assert.deepEqual(validate(message, "urn:collie:message:v1").errors, []);
+  assertInvalid({ ...message, source: "human", ref: "bad" }, "urn:collie:message:v1", "pattern", "human id");
+  assertInvalid({ ...message, data_ref: "https://example.com/body" }, "urn:collie:message:v1", "pattern", "内联正文");
+});
+
+test("Case：fixture 合法；Message 来源必须是 event 或 human", async () => {
   const ca = await fixture("case");
   assert.deepEqual(validate(ca, "urn:collie:case:v1").errors, []);
-  assertInvalid({ ...ca, visibility: "chat" }, "urn:collie:case:v1", "const", "机器事件进对话");
-  assertInvalid({ ...ca, wake: false }, "urn:collie:case:v1", "const", "job_turn 必须计预算");
+  assertInvalid({ ...ca, origin: "system" }, "urn:collie:case:v1", "enum", "未知消息来源");
 });
 
 test("Case：快照不许超过 4KB、不许自己扩大视野", async () => {
@@ -144,9 +152,33 @@ test("Case：快照不许超过 4KB、不许自己扩大视野", async () => {
   );
 });
 
-test("Decision：fixture 合法", async () => {
+test("Decision：fixture 合法，run 只保留 canonical ref 与执行关联", async () => {
   const dc = await fixture("decision");
   assert.deepEqual(validate(dc, "urn:collie:decision:v1").errors, []);
+  const longRef = { ...dc, run: { ...dc.run, task_ref: "COLL-" + "x".repeat(235) } };
+  assert.deepEqual(validate(longRef, "urn:collie:decision:v1").errors, []);
+  assertInvalid({ ...dc, run: { ...dc.run, task_ref: "x".repeat(241) } }, "urn:collie:decision:v1", "maxLength");
+  assertInvalid({ ...dc, run: { ...dc.run, claimed_until: null } }, "urn:collie:decision:v1", "additionalProperties");
+  assertInvalid({ ...dc, run: { ...dc.run, unknown_policy: "normal" } }, "urn:collie:decision:v1", "additionalProperties");
+});
+
+test("Decision：spawn 只选择执行目标与 playbook，不接受 review/merge 门禁", async () => {
+  const dc = await fixture("decision");
+  const action = dc.actions[0];
+  assertInvalid(
+    { ...dc, actions: [{ ...action, spawn: { ...action.spawn, review: true } }] },
+    "urn:collie:decision:v1", "additionalProperties",
+  );
+  assertInvalid(
+    { ...dc, actions: [{ ...action, spawn: { ...action.spawn, merge: true } }] },
+    "urn:collie:decision:v1", "additionalProperties",
+  );
+  for (const field of ["tells", "parallel"]) {
+    assertInvalid(
+      { ...dc, actions: [{ ...action, spawn: { ...action.spawn, [field]: field === "tells" ? "needed" : 1 } }] },
+      "urn:collie:decision:v1", "additionalProperties",
+    );
+  }
 });
 
 test("Decision：终态必须有 settled（ack 结不了账）", async () => {
@@ -235,29 +267,49 @@ test("Card：rework 必须带结构化批注", async () => {
 test("Receipt：fixture 合法；回执必须是 ready 三件套，不是最后一条消息", async () => {
   const rc = await fixture("receipt");
   assert.deepEqual(validate(rc, "urn:collie:receipt:v1").errors, []);
-  assertInvalid({ ...rc, last_message_used: true }, "urn:collie:receipt:v1", "const", "拿最后一条消息当回执");
   assertInvalid({ ...rc, origin: "agent last message" }, "urn:collie:receipt:v1", "const", "回执来源");
-  const noProof = { ...rc, proof: { refs: [], text: "看提交吧" } };
+  assertInvalid({ ...rc, last_message_used: false }, "urn:collie:receipt:v1", "additionalProperties", "旧 sentinel 不再属于协议");
+  const noProof = { ...rc, proof: { ...rc.proof, refs: [] } };
   assertInvalid(noProof, "urn:collie:receipt:v1", "minItems", "没有凭据锚点");
+  assertInvalid({ ...rc, proof: { ...rc.proof, text: rc.proof.title } }, "urn:collie:receipt:v1", "additionalProperties", "proof 不重复 title 文本");
   const noDetails = { ...rc };
   delete noDetails.details;
   assertInvalid(noDetails, "urn:collie:receipt:v1", "required", "缺 --details");
 });
 
-test("Receipt：没复核不许 ready；护栏命中不许 auto_accept", async () => {
+test("Receipt：只交付 summary/details/proof，不携带 review/verify/auto_accept 门禁", async () => {
   const rc = await fixture("receipt");
-  assertInvalid(
-    { ...rc, review: { ...rc.review, reviewed: false } },
-    "urn:collie:receipt:v1",
-    "const",
-    "没复核就 ready",
-  );
-  assertInvalid(
-    { ...rc, risk: { tags: ["delete_data"], level: "high", auto_accept: true } },
-    "urn:collie:receipt:v1",
-    "const",
-    "护栏命中还自动接受",
-  );
+  assertInvalid({ ...rc, review: null }, "urn:collie:receipt:v1", "additionalProperties");
+  assertInvalid({ ...rc, verification: { verdict: "pass", evidence: "checks" } }, "urn:collie:receipt:v1", "additionalProperties");
+  assertInvalid({ ...rc, risk: { auto_accept: true } }, "urn:collie:receipt:v1", "additionalProperties");
+});
+
+test("Task：todo/running/ready/done 四态及各自必需事实", async () => {
+  const ready = await fixture("task");
+  const todo = {
+    ...structuredClone(ready), state: "todo", started_at: null, ready_at: null,
+    summary: null, details: null, proof: null, progress: null,
+  };
+  const running = { ...structuredClone(todo), state: "running", started_at: ready.started_at };
+  const done = { ...structuredClone(ready), state: "done", done_at: ready.ready_at + 1, done_by: "human" };
+  for (const task of [todo, running, ready, done]) {
+    assert.deepEqual(validate(task, "urn:collie:task:v1").errors, [], task.state);
+  }
+
+  assertInvalid({ ...ready, state: "queued" }, "urn:collie:task:v1", "enum");
+  for (const field of ["ready_at", "details"]) {
+    const invalid = structuredClone(ready);
+    delete invalid[field];
+    assertInvalid(invalid, "urn:collie:task:v1", "required", `ready 缺 ${field}`);
+  }
+  for (const field of ["done_at", "done_by"]) {
+    const invalid = structuredClone(done);
+    delete invalid[field];
+    assertInvalid(invalid, "urn:collie:task:v1", "required", `done 缺 ${field}`);
+  }
+  assertInvalid({ ...ready, state: "ready", proof: null }, "urn:collie:task:v1", "type");
+  assertInvalid({ ...done, done_by: null }, "urn:collie:task:v1", "enum");
+  assertInvalid({ ...ready, depends_on: ["COLL-41", "COLL-41"] }, "urn:collie:task:v1", "uniqueItems");
 });
 
 test("Receipt：判据必须是状态前进，不能是进程存活", async () => {

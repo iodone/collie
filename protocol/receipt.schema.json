@@ -10,14 +10,11 @@
     "decision_ref",
     "received_at",
     "origin",
-    "last_message_used",
     "task",
     "progress",
     "summary",
     "details",
-    "proof",
-    "review",
-    "risk"
+    "proof"
   ],
   "properties": {
     "id": {
@@ -39,10 +36,6 @@
       "const": "herdr-task ready",
       "description": "回执来源，冻结为 herdr-task ready。冻结它意味着：走这个 schema 的回执只能来自那三件套，不能来自截屏、日志尾巴或最后一条消息。"
     },
-    "last_message_used": {
-      "const": false,
-      "description": "**照抄 agent-autoloop 会坏的第 3 处**在这里被结构性地否掉：回执明确声明没拿最后一条消息当回执。要改成 true 必须改 schema 版本，等于改协议。"
-    },
     "task": {
       "type": "object",
       "additionalProperties": false,
@@ -52,8 +45,8 @@
         "id": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 80,
-          "description": "herdr-task 任务 id，外部标识。"
+          "maxLength": 240,
+          "description": "collie-task canonical task ref。"
         },
         "space": {
           "type": "string",
@@ -61,12 +54,12 @@
           "description": "任务所在的 space。回执回到这个 space 的 coordinator，跨 space 不自动协调。"
         },
         "state": {
-          "enum": ["ready", "done"],
-          "description": "回执时刻的任务状态。ready = 干完了待人验收；done = 已被接受。"
+          "const": "ready",
+          "description": "回执时刻的任务状态；只有 driver 交付的 ready 才能产生回执。"
         },
         "previous_state": {
-          "enum": ["todo", "queued", "working", "ready", "merging"],
-          "description": "上一个状态，用于算『状态有没有前进』——这是判断长任务活着的唯一依据。"
+          "enum": ["todo", "running", "ready"],
+          "description": "上一个持久 Task 状态；working 等仅是 Work/live 投影，不进入 Task 事实。"
         },
         "state_changed_at": {
           "type": "string",
@@ -92,7 +85,7 @@
         },
         "advanced": {
           "type": "boolean",
-          "description": "本轮任务状态是否较上次观测推进了（todo→queued→working→ready 任一前进即为 true）。"
+          "description": "本轮任务状态是否较上次观测推进了（todo→running→ready 任一前进即为 true）。"
         },
         "verdict": {
           "enum": ["advanced", "idle_normal", "stalled"],
@@ -115,105 +108,29 @@
     "proof": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["refs", "text"],
+      "required": ["id", "title", "refs"],
       "description": "herdr-task ready --proof：验收凭据。**必填且 refs 至少一项**——没有凭据的 ready 不算完成，这是『回执 ≠ 最后一条消息』的实质。",
       "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300,
+          "description": "与 Task.proof.id 一致的 Artifact 绑定 id。"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300,
+          "description": "与 Task.proof.title 一致的凭据标题。"
+        },
         "refs": {
           "type": "array",
           "minItems": 1,
           "maxItems": 32,
           "items": { "type": "string", "minLength": 1, "maxLength": 300 },
           "description": "可复核的凭据锚点：commit sha、测试命令与输出路径、file:line、外部评论链接。每条都必须能被人或 reviewer 重新打开。"
-        },
-        "text": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 8000,
-          "description": "--proof 的原文（通常是命令与输出摘要）。不内联大文件，只放判据。"
         }
       }
-    },
-    "review": {
-      "type": ["object", "null"],
-      "additionalProperties": false,
-      "required": ["reviewed", "reviewer_ref", "must_fix"],
-      "description": "task 的复核事实；playbook 要求 review 时，ready 前记录 reviewed。",
-      "properties": {
-        "reviewed": {
-          "const": true,
-          "description": "冻结为 true：schema 层面拒绝『没复核就 ready』。低风险任务也必须走只读 reviewer，只是不出卡。"
-        },
-        "reviewer_ref": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 300,
-          "description": "reviewer 的标识（终端 label 或任务 id），便于回查它看了什么。"
-        },
-        "must_fix": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "复核留下的必改项数量。>0 时正常流程是回 worker 再提交，而不是 ready。"
-        }
-      }
-    },
-    "verification": {
-      "type": ["object", "null"],
-      "additionalProperties": false,
-      "required": ["verdict", "evidence"],
-      "description": "独立验证位的 verdict 与证据；playbook 有 verifier seat 时 ready 必须为 pass。",
-      "properties": {
-        "verdict": {
-          "enum": ["pass", "fail", "uncertain"],
-          "description": "验证位的结论。"
-        },
-        "evidence": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 8000,
-          "description": "支持 verdict 的命令、输出、截图路径或可复核锚点。"
-        },
-        "head": {
-          "type": ["string", "null"],
-          "description": "验证针对的 commit。"
-        },
-        "by": {
-          "type": ["string", "null"],
-          "description": "验证位终端或任务标识。"
-        }
-      }
-    },
-    "risk": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["tags", "level", "auto_accept"],
-      "description": "回执自带的风险信号（DESIGN §4.1：Receipt(ready) + 风险信号），决定这张 ready 是自动接受还是出 Accept 卡。",
-      "properties": {
-        "tags": {
-          "type": "array",
-          "items": { "enum": ["delete_data", "stop_service", "spend_money", "outbound_message", "product_direction", "rotate_secret", "change_permission"] },
-          "uniqueItems": true,
-          "maxItems": 7,
-          "description": "命中的护栏项。非空即 auto_accept 必须为 false（下面 allOf 强制）。"
-        },
-        "level": {
-          "enum": ["low", "high"],
-          "description": "综合风险档。low 可自动接受（不出卡）；high 一律出 Accept 卡。"
-        },
-        "auto_accept": {
-          "type": "boolean",
-          "description": "是否允许 coordinator 直接接受（emit merge）。护栏命中或 level=high 时为 false。"
-        }
-      },
-      "allOf": [
-        {
-          "if": { "required": ["tags"], "properties": { "tags": { "minItems": 1 } } },
-          "then": { "required": ["auto_accept"], "properties": { "auto_accept": { "const": false } } }
-        },
-        {
-          "if": { "required": ["level"], "properties": { "level": { "const": "high" } } },
-          "then": { "required": ["auto_accept"], "properties": { "auto_accept": { "const": false } } }
-        }
-      ]
     }
   }
 }

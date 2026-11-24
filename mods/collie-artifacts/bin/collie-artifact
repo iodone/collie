@@ -45,23 +45,8 @@ def _primary_store():
 
 STORE = _primary_store()
 FILES = os.path.join(STORE, "files")
-# Collie has one artifact store; Shepherdr legacy stores are not read.
-LEGACY = []
-
-
-def stores():
-    """Every store, the collie one first."""
-    return [STORE] + LEGACY
-
-
-def is_primary(store):
-    return os.path.abspath(store) == os.path.abspath(STORE)
-
-
-def in_primary(path):
-    """Whether a path lives under the collie store (a version folder, a note)."""
-    return os.path.abspath(path).startswith(os.path.abspath(STORE) + os.sep)
 APP = os.environ.get("HERDR_APP_HOME") or os.path.join(HOME, ".config", "herdr-app")
+TASK_STORE = os.path.abspath(os.path.expanduser(os.environ.get("COLLIE_TASK_STORE") or os.path.join(HOME, ".local", "share", "collie", "tasks")))
 GUIDE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "ARTIFACTS.md")
 # Mark up (the person points at a spot and writes to the agent), laid over every installed artifact.
 MARKUP = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "markup.js")
@@ -138,43 +123,27 @@ def list_files(store):
 
 
 def store_path(folder):
-    """The slug and the collie store's list path for a folder (where a write goes)."""
+    """The slug and list path for a folder in Collie's store."""
     slug = slug_of(folder)
-    for base in stores():
-        p = os.path.join(base, slug + ".json")
-        if os.path.exists(p):
-            try:
-                with open(p) as f:
-                    if json.load(f).get("folder") not in (None, folder):
-                        slug = f"{slug}-{hashlib.sha1(folder.encode()).hexdigest()[:6]}"
-            except (OSError, ValueError):
-                pass
-            break
+    p = os.path.join(STORE, slug + ".json")
+    if os.path.exists(p):
+        try:
+            with open(p) as f:
+                if json.load(f).get("folder") not in (None, folder):
+                    slug = f"{slug}-{hashlib.sha1(folder.encode()).hexdigest()[:6]}"
+        except (OSError, ValueError):
+            pass
     return slug, os.path.join(STORE, slug + ".json")
 
 
-def read_path(slug):
-    """Where a slug's list is read from: the collie store, else the first legacy store that has it."""
-    for base in stores():
-        p = os.path.join(base, slug + ".json")
-        if os.path.exists(p):
-            return base, p
-    return STORE, os.path.join(STORE, slug + ".json")
-
-
 class Store:
-    """One folder's artifacts, locked while open. Reads the collie store, else a legacy one; a write
-    always goes to the collie store (a legacy artifact is copied there as it changes)."""
+    """One folder's artifacts in Collie's store, locked while open."""
 
     def __init__(self, loc, write=True):
         self.loc = loc
         self.write = write
         self.slug = loc.get("slug") or store_path(loc["folder"])[0]
-        self.root, self.path = read_path(self.slug)
-        if loc.get("store"):
-            self.root = loc["store"]
-            self.path = os.path.join(self.root, self.slug + ".json")
-        self.target = os.path.join(STORE, self.slug + ".json")
+        self.path = os.path.join(STORE, self.slug + ".json")
         self.lock = None
         self.dirty = False
 
@@ -183,7 +152,7 @@ class Store:
             os.makedirs(STORE, exist_ok=True)
             self.lock = open(os.path.join(STORE, "." + self.slug + ".lock"), "a")
             fcntl.flock(self.lock, fcntl.LOCK_EX)
-        elif is_primary(self.root) and os.path.isdir(STORE):
+        elif os.path.isdir(STORE):
             self.lock = open(os.path.join(STORE, "." + self.slug + ".lock"), "a")
             fcntl.flock(self.lock, fcntl.LOCK_SH)
         try:
@@ -206,7 +175,7 @@ class Store:
                 with os.fdopen(fd, "w") as f:
                     json.dump(self.data, f, indent=1)
                     f.write("\n")
-                os.replace(tmp, self.target)
+                os.replace(tmp, self.path)
         finally:
             if self.lock:
                 fcntl.flock(self.lock, fcntl.LOCK_UN)
@@ -220,34 +189,23 @@ class Store:
 
 
 def find_anywhere(ref):
-    """The store and folder list that hold an artifact id, on this machine."""
-    for base in stores():
-        for f in list_files(base):
-            try:
-                with open(os.path.join(base, f)) as fh:
-                    d = json.load(fh)
-            except (OSError, ValueError):
-                continue
-            if any(a.get("id") == ref for a in d.get("artifacts") or []):
-                return {"folder": d.get("folder") or f[:-5], "kind": d.get("kind", "folder"),
-                        "name": d.get("name", ""), "slug": d.get("slug") or f[:-5], "store": base}
+    """The folder list that holds an artifact id in Collie's store."""
+    for f in list_files(STORE):
+        try:
+            with open(os.path.join(STORE, f)) as fh:
+                d = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        if any(a.get("id") == ref for a in d.get("artifacts") or []):
+            return {"folder": d.get("folder") or f[:-5], "kind": d.get("kind", "folder"),
+                    "name": d.get("name", ""), "slug": d.get("slug") or f[:-5]}
     raise Fail(f"No artifact {ref!r} on this machine. `collie-artifact list --all` shows them.")
 
 
 def version_dir(aid, v):
-    """A kept version's folder: the collie store's, else a legacy one's; None when it's gone."""
-    for base in stores():
-        p = os.path.join(base, "files", aid, f"v{v}")
-        if os.path.isdir(p):
-            return p
-    return None
-
-
-def check_writable(loc):
-    """Removal must not touch a legacy store: only the collie store is written."""
-    if loc.get("store") and not is_primary(loc["store"]):
-        raise Fail(f"{loc['folder']} is listed in the old store {loc['store']}, which this CLI only reads. "
-                   "Publish or update it first (that copies it into the collie store), or remove it there by hand.")
+    """A kept version's folder in Collie's store; None when it's gone."""
+    p = os.path.join(FILES, aid, f"v{v}")
+    return p if os.path.isdir(p) else None
 
 
 # ---- who is publishing --------------------------------------------------------------------
@@ -270,18 +228,18 @@ def me():
 
 
 def task_ref(key):
-    """A task's key ("dev-shop#4") as its people know it ("SHOP-4"): its list's prefix, else "#4"."""
+    """A task key ("dev-shop#4") as its canonical ref ("SHOP-4"), using Collie's current store."""
     if not key or "#" not in key:
         return None
     slug, n = key.rsplit("#", 1)
     if not n.isdigit():
         return None
     try:
-        with open(os.path.join(HOME, ".herdr", "tasks", slug + ".json")) as f:
+        with open(os.path.join(TASK_STORE, slug + ".json")) as f:
             prefix = json.load(f).get("prefix")
     except (OSError, ValueError):
         prefix = None
-    return f"{prefix}-{n}" if prefix else f"#{n}"
+    return f"{prefix}-{n}" if prefix else None
 
 
 # ---- files -------------------------------------------------------------------------------
@@ -867,19 +825,14 @@ def prune_versions(art, base=None):
 
 def cmd_list(o):
     if o.all:
-        lists, seen = [], set()
-        for base in stores():
-            for f in list_files(base):
-                try:
-                    with open(os.path.join(base, f)) as fh:
-                        d = json.load(fh)
-                except (OSError, ValueError):
-                    continue
-                for a in d.get("artifacts") or []:
-                    # the collie store wins over a legacy copy of the same artifact
-                    if a.get("id") not in seen:
-                        seen.add(a.get("id"))
-                        lists.append(a)
+        lists = []
+        for f in list_files(STORE):
+            try:
+                with open(os.path.join(STORE, f)) as fh:
+                    d = json.load(fh)
+            except (OSError, ValueError):
+                continue
+            lists.extend(d.get("artifacts") or [])
         arts = sorted(lists, key=lambda a: -(a.get("at") or 0))
         out = {"artifacts": [public(a) for a in arts]}
     else:
@@ -900,9 +853,7 @@ def cmd_list(o):
 def cmd_where(o):
     loc = locate(o.folder)
     slug, path = store_path(loc["folder"])
-    root, _ = read_path(slug)
-    print(json.dumps(dict(loc, store=path, slug=slug, files=FILES,
-                          read=os.path.join(root, slug + ".json"), legacy=[p for p in LEGACY if os.path.isdir(p)])))
+    print(json.dumps(dict(loc, store=path, slug=slug, files=FILES, read=path)))
     return 0
 
 
@@ -921,7 +872,6 @@ def cmd_show(o):
 
 def cmd_rm(o):
     loc = find_anywhere(o.id)
-    check_writable(loc)
     with Store(loc) as s:
         a = s.find(o.id)
         s.data["artifacts"].remove(a)
@@ -950,14 +900,6 @@ def cmd_pack(o):
     d = version_dir(a["id"], a["version"])
     if not d:
         raise Fail(f"The files of {a['id']} v{a['version']} are gone.")
-    if not in_primary(d):
-        # pack writes its record beside the files; a legacy store stays read-only.
-        with tempfile.TemporaryDirectory(prefix="collie-artifact-") as t:
-            d = shutil.copytree(d, os.path.join(t, os.path.basename(d)))
-            with open(os.path.join(d, ".record.json"), "w") as f:
-                json.dump(dict(public(a), latest=a["latest"]), f)
-            sys.stdout.flush()
-            return subprocess.call(["tar", "-C", d, "-cf", "-", "."])
     with open(os.path.join(d, ".record.json"), "w") as f:
         json.dump(dict(public(a), latest=a["latest"]), f)
     sys.stdout.flush()
@@ -1059,37 +1001,37 @@ def live_terminals():
 
 
 def task_worker(task, folder, live):
-    """The live worker of a task ("HERD-47") of this folder, or None."""
-    prefix, _, n = (task or "").rpartition("-")
-    if not prefix or not n.isdigit():
+    """The live driver of a task's canonical ref in this folder, or None."""
+    if not task:
         return None
-    tdir = os.path.join(HOME, ".herdr", "tasks")
-    for f in sorted(os.listdir(tdir)) if os.path.isdir(tdir) else []:
+    for f in sorted(os.listdir(TASK_STORE)) if os.path.isdir(TASK_STORE) else []:
         if not f.endswith(".json"):
             continue
         try:
-            with open(os.path.join(tdir, f)) as fh:
+            with open(os.path.join(TASK_STORE, f)) as fh:
                 d = json.load(fh)
         except (OSError, ValueError):
             continue
-        if d.get("folder") != folder or (d.get("prefix") or "").upper() != prefix.upper():
+        if d.get("folder") != folder:
             continue
-        t = next((x for x in d.get("tasks") or [] if str(x.get("id")) == n), None)
+        prefix = d.get("prefix")
+        t = next((x for x in d.get("tasks") or []
+                  if prefix and x.get("id") is not None and f"{prefix}-{x['id']}" == task), None)
         for ag in reversed((t or {}).get("agents") or []):
-            if ag.get("role") not in ("reviewer",) and ag.get("address") in live:
+            if ag.get("role") in (None, "driver", "worker") and ag.get("address") in live:
                 return ag["address"]
     return None
 
 
 def keeper(a, folder):
-    """Who keeps an artifact: the agent that published it, while it runs; else its task's worker."""
+    """A bound artifact goes to its live task driver; an unbound one goes to its live publisher."""
     live = live_terminals()
-    if a.get("publisher") in live:
-        return a["publisher"], "made it"
     w = task_worker(a.get("task"), folder, live)
     if w:
         return w, f"works on {a['task']}"
-    raise Fail("The agent that made this artifact has ended" + (f", and {a['task']} has no agent running" if a.get("task") else "") + ".")
+    if not a.get("task") and a.get("publisher") in live:
+        return a["publisher"], "made it"
+    raise Fail("The agent that made this artifact has ended" + (f", and {a['task']} has no driver running" if a.get("task") else "") + ".")
 
 
 def attr(s):
@@ -1238,8 +1180,6 @@ def cmd_picture(o):
             d = version_dir(a["id"], o.version)
             if not x or not d:
                 raise Fail(f"v{o.version} of {o.id} isn't kept.")
-            if not in_primary(d):
-                raise Fail(f"v{o.version} of {o.id} lives in the old read-only store; update it into the collie store first.")
             if version_kind(a["id"], o.version) == "recipe":
                 raise Fail("A recipe needs no picture: the web app draws it.")
             shutil.copyfile(src, os.path.join(d, PICTURE))
@@ -1450,18 +1390,13 @@ def cmd_convert(o):
         raise Fail("herdr-app isn't here: it draws each artifact once to read what it shows.")
     done, skipped, hand, failed = [], [], [], []
     lists = []
-    seen = set()
-    for base in stores():
-        for name in list_files(base):
-            try:
-                with open(os.path.join(base, name)) as f:
-                    data = json.load(f)
-            except (OSError, ValueError):
-                continue
-            for a in data.get("artifacts") or []:
-                if a.get("id") not in seen:
-                    seen.add(a.get("id"))
-                    lists.append(a)
+    for name in list_files(STORE):
+        try:
+            with open(os.path.join(STORE, name)) as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            continue
+        lists.extend(data.get("artifacts") or [])
     for a in lists:
         if o.id and a["id"] != o.id:
             continue
@@ -1665,12 +1600,6 @@ def cmd_guide(_o):
 
 # ---- another machine ------------------------------------------------------------------------
 
-def sync_held():
-    """Shepherdr's installer used to hold copies to other machines here (its sync-hold file). Collie
-    installs this CLI itself, so nothing holds it: always None. Never reads or writes ~/.herdr."""
-    return None
-
-
 def remote(machine, argv):
     """Runs collie-artifact on the machine that holds the folder, installing it there first."""
     me_ = os.path.realpath(__file__)
@@ -1686,9 +1615,6 @@ def remote(machine, argv):
         installed = False
 
     def install():
-        held = sync_held()
-        if held:
-            raise Fail(f"collie-artifact isn't current on {machine}, and copies wait: {held}.")
         r = subprocess.run(["hc", "file", "write", "--on", machine, target], input=body, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if r.returncode != 0:
             raise Fail(f"Couldn't install collie-artifact on {machine}: {r.stderr.decode().strip()}")
@@ -1697,8 +1623,7 @@ def remote(machine, argv):
         with open(mark, "w") as f:
             f.write(digest)
 
-    # Held (sync_held): no copy goes; the copy already there runs. A no-op with collie.
-    if not installed and not sync_held():
+    if not installed:
         install()
     call = ["hc", "exec", "--on", machine, "--", "sh", "-c", 'exec "$HOME/.local/bin/collie-artifact" "$@"', "collie-artifact", *argv]
     r = run(call)

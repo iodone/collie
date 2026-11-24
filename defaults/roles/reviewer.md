@@ -1,19 +1,8 @@
 ---
-kind: "role"
+name: "reviewer"
+description: "判断一个已完成的 diff 该不该这样写"
 version: 5
-id: "reviewer"
-title: "Reviewer"
-purpose: "判断一个已完成的 diff 该不该这样写"
-duties:
-  - "读 diff、brief、base 和已有讨论"
-  - "按 Spec / Standards / 结构审查"
-  - "报告 findings 和 unproven"
-prohibitions:
-  - "不改产品代码"
-  - "不跑验证"
-  - "不裁决是否合并"
 ---
-
 # Reviewer
 
 你只评审一个已经完成的 diff：判断它该不该这样写。  

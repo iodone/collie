@@ -22,7 +22,7 @@ import sys
 import threading
 import time
 
-from .base import addon_off, sync_held, bundle, ENTRY, Fail, guard, HOME, hc_json, now, PACKAGE, run, STORE
+from .base import addon_off, bundle, ENTRY, Fail, guard, HOME, hc_json, now, PACKAGE, run, STORE
 from .news import news_send, send_or_hold, typing
 
 
@@ -99,7 +99,8 @@ def manifest():
     if browser:
         add(".local/bin/herdr-browser", _read(browser), 0o755, [browser])
     for role in ROLES:
-        rel = f".config/herdr-core/templates/roles/{role}.md"
+        rel = (f".config/herdr-core/templates/{role}.md" if role == "coordinator"
+               else f".config/collie/roles/{role}.md")
         p = os.path.join(HOME, rel)
         if os.path.isfile(p):
             add(rel, _read(p), 0o644, [p], protect=True)
@@ -301,9 +302,7 @@ def _save_state(update):
 
 
 def sync(names=None, op="install", force=False):
-    """Every connected machine (or those named), all at once: {version, machines: [...]}. While
-    an install holds copies (base.sync_held), an install round sends nothing: each is "held"."""
-    held = sync_held() if op != "check" else None
+    """Every connected machine (or those named), all at once: {version, machines: [...]}."""
     m = manifest()
     links = {x["name"]: x for x in connected_machines()}
     if names:
@@ -314,9 +313,6 @@ def sync(names=None, op="install", force=False):
     out = {}
 
     def one(name):
-        if held:
-            out[name] = {"machine": name, "state": "held", "details": [held], "version": m["version"]}
-            return
         out[name] = sync_machine(name, m, op, force) if links[name].get("state") == "connected" else \
             {"machine": name, "state": "unreachable", "details": [f"herdr-core link {links[name].get('state')}"], "version": m["version"]}
     threads = [threading.Thread(target=one, args=(n,)) for n in targets]
@@ -349,7 +345,7 @@ def cmd_machines(args):
         else:
             print(f"Tools here: version {r['version']}." if r["machines"] else "No other machines connected here.")
             for x in r["machines"]:
-                word = {"current": "current", "drift": "out of date", "failed": "failed", "unreachable": "can't reach", "held": "held"}.get(x["state"], x["state"])
+                word = {"current": "current", "drift": "out of date", "failed": "failed", "unreachable": "can't reach"}.get(x["state"], x["state"])
                 more = f" (updated {len(x['changed'])} file(s))" if x.get("changed") else ""
                 print(f"  {x['machine']}: {word}{more}" + "".join(f"\n      {d}" for d in x["details"]))
         if args.check and any(x["state"] != "current" for x in r["machines"]):
@@ -385,13 +381,12 @@ def _busy(name):
 def machines_pass(report):
     """Each round: after the tools here change (once they've stayed put SYNC_DEBOUNCE_MS), and
     when a machine connects, syncs the machines that need it; refreshes the reach map every
-    REACH_EVERY_MS. Both run detached: the round never waits on another machine. No syncs while
-    the machines add-on is off or an install holds them (base.SYNC_HOLD)."""
+    REACH_EVERY_MS. Both run detached: the round never waits on another machine."""
     ms = connected_machines()
     version = manifest()["version"]
     t = now()
     due = []
-    held = addon_off("machines") or sync_held()
+    held = addon_off("machines")
 
     def look(d):
         if d.get("seen") != version:

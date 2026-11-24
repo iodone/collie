@@ -4,7 +4,6 @@ the Settings block a task's brief ends with."""
 import json
 import os
 import re
-import shutil
 
 from .base import Fail, HOME, MAX_RUNNING
 
@@ -15,17 +14,14 @@ AGENTS = {"claude": ["claude"], "codex": ["codex", "--no-daemon"]}
 
 # ---- the person's settings ------------------------------------------------------------------
 
-SETTINGS = os.environ.get("COLLIE_TASK_SETTINGS") or os.environ.get("HERDR_TASK_SETTINGS") or os.path.join(HOME, ".config", "collie", "settings.json")
-# The role instructions are herdr-core templates (`hc templates` lists them): roles/coordinator.md, roles/worker.md and
-# roles/reviewer.md. Workers and reviewers used ~/.herdr/instructions.
-TEMPLATES = os.environ.get("COLLIE_TASK_TEMPLATES") or os.environ.get("HERDR_TASK_TEMPLATES") or os.path.join(HOME, ".config", "herdr-core", "templates")
-OLD_INSTRUCTIONS = os.path.join(HOME, ".herdr", "instructions")
-ASSISTANT_TEMPLATES = ("assistant", "coordinator", "collie-coordinator")  # "coordinator": Assistants started before the rename
-DEFAULTS = {"tasks": {"merge": "ask", "review_rounds": 0, "must_fix": "major", "max_running": MAX_RUNNING, "worktrees": True,
-                      "start_notes": "", "finish_notes": "", "archive_after": 7, "proof": True, "verify": False, "base": "", "branch": ""},
-            "automations": {"enabled": True}, "driver": {}, "worker": {}, "reviewer": {}, "coordinator": {}, "backup": {},
+SETTINGS = os.environ.get("COLLIE_TASK_SETTINGS") or os.path.join(HOME, ".config", "collie", "settings.json")
+# The role instructions are herdr-core templates (`hc templates` lists them).
+TEMPLATES = os.environ.get("COLLIE_TASK_TEMPLATES") or os.path.join(HOME, ".config", "herdr-core", "templates")
+ASSISTANT_TEMPLATES = ("assistant", "coordinator")  # "coordinator": the Collie Coordinator role
+DEFAULTS = {"tasks": {"max_running": MAX_RUNNING, "worktrees": True, "start_notes": "", "finish_notes": "",
+                      "archive_after": 7, "base": "", "branch": ""},
+            "automations": {"enabled": True}, "driver": {}, "worker": {}, "coordinator": {}, "backup": {},
             "agents": {"reactions": True, "feedback": True, "feedback_repo": "iodone/collie"}}
-LEVELS = ["blocker", "major", "minor"]
 
 
 # The machine layer's key for the computer whose Herdr window wrote the file. A copy the window
@@ -128,6 +124,8 @@ def settings_for(s, space=None):
     def merge(part):
         for k, v in (part or {}).items():
             if isinstance(v, dict) and isinstance(out.get(k), dict):
+                if k == "tasks":
+                    v = {kk: vv for kk, vv in v.items() if kk in out[k]}
                 out[k].update({kk: vv for kk, vv in v.items() if vv is not None})
             elif k in out and v is not None:
                 out[k] = v
@@ -240,81 +238,38 @@ def argv_model(argv):
 # ---- the Settings block: the settings that shape a task's work, as words in its brief ---------
 # As in Shepherdr: settings only change what goes into an agent's starting prompt. Every brief
 # ends with this block, one line per setting; a line that differs from Herdr's default says who
-# changed it. The coordinator changes one task's with `add --set key=value` (and --model, --effort,
-# --reviewer...). The brief's own words win over the block.
+# changed it. The coordinator changes one task's with `add --set key=value` (and --model, --effort).
+# The brief's own words win over the block.
 
 SETTINGS_HEAD = "Settings: (from herdr-task show; where the brief above says otherwise, it wins)"
 SET_BY = {"task": "set by the assistant for this task", "folder": "this folder's setting", "machine": "this machine's setting",
           "all": "your setting everywhere"}
-MERGE_WORDS = {"ask": "ask the person first: they accept it in the Tasks panel, which merges it",
-               "checks": "after checks: once you say ready, Herdr merges it when its checks pass",
-               "auto": "on its own: once you say ready, Herdr merges it"}
-MUST_WORDS = {"blocker": "blocker", "major": "major and up (blocker, major)", "minor": "everything (blocker, major, minor)"}
-# --set's keys (Shepherdr's spellings too) and the task fields they set.
-SET_KEYS = {"review": "review", "brief.review": "review", "merge": "merge", "brief.merge": "merge",
-            "rounds": "review_rounds", "review.rounds": "review_rounds", "review-rounds": "review_rounds", "review_rounds": "review_rounds",
-            "mustfix": "must_fix", "must-fix": "must_fix", "must_fix": "must_fix", "review.mustfix": "must_fix",
-            "agent": "agent", "task.agent": "agent", "model": "model", "task.model": "model", "effort": "effort", "task.effort": "effort",
-            "reviewer": "reviewer", "reviewer.agent": "reviewer", "reviewer.model": "reviewer_model", "reviewer.effort": "reviewer_effort",
-            "proof": "proof", "brief.proof": "proof", "playbook": "playbook", "verify": "verify"}
-# The Proof line (as Shepherdr's skill asks of its task agents), on and off.
-PROOF_WORDS = {"on": "show verifiable proof in one recipe artifact: each proof with a one-line caption, real and from this work now, "
-                     "plus a \"Not proven\" list; then say ready with --proof <its id>",
-               "off": "not needed for this task: no proof artifact; say in your summary how you checked it"}
-MERGE_VALUES = {"ask": "ask", "ask me first": "ask", "ask first": "ask", "ask the person first": "ask", "wait": "ask",
-                "checks": "checks", "after checks": "checks", "after github checks": "checks", "after checks pass": "checks",
-                "auto": "auto", "on its own": "auto", "merge it": "auto", "at once": "auto"}
-MUST_VALUES = {"blocker": "blocker", "blockers": "blocker", "critical": "blocker", "major": "major",
-               "minor": "minor", "trivial": "minor", "everything": "minor"}
+SET_KEYS = {
+    "agent": "agent", "task.agent": "agent", "model": "model", "task.model": "model",
+    "effort": "effort", "task.effort": "effort", "playbook": "playbook",
+}
+PROOF_WORDS = ("show verifiable proof in one recipe artifact: each proof with a one-line caption, real and from this work now, "
+               "plus a \"Not proven\" list; then say ready with --proof <its id>")
 EFFORTS = {"none", "minimal", "lowest", "low", "medium", "high", "xhigh", "max", "ultra"}
-ONOFF = {"on": "on", "yes": "on", "true": "on", "1": "on", "off": "off", "no": "off", "false": "off", "0": "off"}
 
 
 def set_task(t, key, value):
-    """One --set key=value (or flag) on task t; an empty value or "default" goes back to Settings'."""
+    """Set one driver/playbook option on a task."""
     field = SET_KEYS.get(key.strip().lower())
     if not field:
-        raise Fail(f"--set takes review, review.rounds, review.mustFix, merge, proof, agent, model, effort or reviewer settings, not {key!r}.")
+        raise Fail(f"--set takes agent, model, effort or playbook, not {key!r}.")
     v = value.strip().strip("\"'").strip()
-    sets = t.setdefault("set", {})
     if not v or v.lower() == "default":
-        sets.pop(field, None)
         t.pop(field, None)
-        if not sets:
-            t.pop("set", None)
         return
-    low = v.lower()
-    if field in ("review", "proof", "verify"):
-        if low not in ONOFF:
-            raise Fail(f"{field} is on or off.")
-        sets[field] = ONOFF[low]
-    elif field == "review_rounds":
-        m = re.fullmatch(r"(\d+)\s*(rounds?)?", low)
-        if not m or not 0 <= int(m.group(1)) <= 10:
-            raise Fail("review.rounds is 1 to 10 (0: no review).")
-        sets[field] = int(m.group(1))
-    elif field == "must_fix":
-        if low not in MUST_VALUES:
-            raise Fail("review.mustFix is blocker, major or minor.")
-        sets[field] = MUST_VALUES[low]
-    elif field == "merge":
-        if low not in MERGE_VALUES:
-            raise Fail('merge is "on its own", "after checks" or "ask me first".')
-        sets[field] = MERGE_VALUES[low]
-    else:
-        # Agents, models and efforts are the task's own fields (worker_pick reads them).
-        if field in ("effort", "reviewer_effort") and low not in EFFORTS:
-            raise Fail(f"{field.replace('_', ' ')} is one of {', '.join(sorted(EFFORTS))} (or default).")
-        sets.pop(field, None)
-        t[field] = v
-    if not sets:
-        t.pop("set", None)
+    if field == "effort" and v.lower() not in EFFORTS:
+        raise Fail(f"effort is one of {', '.join(sorted(EFFORTS))} (or default).")
+    t[field] = v
 
 
 def set_opts(t, args):
-    """add/edit's --set pairs and --agent, --model, --effort, --reviewer, --reviewer-model,
-    --reviewer-effort, in that order (a --set pair wins over its flag)."""
-    for flag in ("agent", "model", "effort", "reviewer", "reviewer_model", "reviewer_effort"):
+    """Apply add/edit's driver flags, then any --set pairs."""
+    for flag in ("agent", "model", "effort"):
         v = getattr(args, flag, None)
         if v is not None:
             set_task(t, flag, v)
@@ -336,74 +291,28 @@ def by_layer(s, space, section, key, value, default):
     return None
 
 
-def other_cli(agent):
-    """The reviewer by default: the other CLI than the task agent's where it's installed, else its own."""
-    other = {"claude": "codex", "codex": "claude"}.get(agent)
-    return other if other and shutil.which(other) else agent
-
-
 def task_settings(s, t, space=None, argv=None):
-    """The settings that shape this task's work, each {label, text, value, by}."""
+    """Driver, branch and proof settings shown in the brief; no review or delivery policy."""
     space = space or t.get("space")
     cfg = settings_for(s, space)
-    k, sets = cfg["tasks"], t.get("set") or {}
-    lines = []
-
-    def add(label, text, value, by):
-        lines.append({"label": label, "text": text, "value": value, "by": by})
-
-    rounds_cfg = int(k.get("review_rounds") or 0)
-    if "review" in sets:
-        on, rev_by = sets["review"] == "on", "task"
-    elif "review_rounds" in sets:
-        on, rev_by = sets["review_rounds"] > 0, "task"
-    else:
-        on, rev_by = rounds_cfg > 0, by_layer(s, space, "tasks", "review_rounds", rounds_cfg > 0, False)
-    here = t.get("mode") != "worktree"
-    add("Review", "off" if not on else "on", on, rev_by)
-    # What it runs on: the given argv, else its last agent's, else what it would start with.
     argv = argv or (t["agents"][-1].get("argv") if t.get("agents") else None) or worker_argv(s, t, space)
     agent = agent_key(argv)
-    if on:
-        rv = dict(cfg.get("reviewer") or {})
-        if t.get("reviewer") and t["reviewer"] != rv.get("agent"):
-            rv = {"agent": t["reviewer"]}
-        rv_by = "task" if any(t.get(f) for f in ("reviewer", "reviewer_model", "reviewer_effort")) else \
-            by_layer(s, space, "reviewer", None, bool(cfg.get("reviewer")), False)
-        for f in ("model", "effort"):
-            if t.get(f"reviewer_{f}"):
-                rv[f] = t[f"reviewer_{f}"]
-        who = rv.get("agent") or other_cli(agent)
-        text = who + (f", model {rv['model']}" if rv.get("model") else "") + (f", effort {rv['effort']}" if rv.get("effort") else "")
-        if not rv.get("agent"):
-            text += " (the other CLI)" if who != agent else " (your own CLI: no other is installed)"
-        add("Reviewer", text, {"agent": who, "model": rv.get("model"), "effort": rv.get("effort")}, rv_by)
-        must = sets.get("must_fix") or (k.get("must_fix") if k.get("must_fix") in LEVELS else "major")
-        add("Must fix", MUST_WORDS[must], must, "task" if "must_fix" in sets else by_layer(s, space, "tasks", "must_fix", must, "major"))
-        rounds = sets.get("review_rounds") or (rounds_cfg if rounds_cfg > 0 else 3)
-        more = int(t.get("review_rounds_added") or 0)
-        add("Review rounds", f"at most {rounds + more}" + (f" ({more} added by the assistant)" if more else ""), rounds + more,
-            "task" if "review_rounds" in sets else by_layer(s, space, "tasks", "review_rounds", rounds, 3))
-    policy = sets.get("merge") or (k.get("merge") if k.get("merge") in MERGE_WORDS else "ask")
-    m_by = "task" if "merge" in sets else by_layer(s, space, "tasks", "merge", policy, "ask")
-    if here:
-        add("Merge", "nothing to merge: you work in the folder itself, and the person accepts it", policy, m_by)
-    else:
-        add("Merge", MERGE_WORDS[policy], policy, m_by)
-        if t.get("base_set"):
-            add("Base", f"{t['base']}: your branch starts from it and merges into it", t["base"],
-                "folder" if t.get("base_by") == "space" else "task")
-    proof = sets["proof"] == "on" if "proof" in sets else k.get("proof") is not False
-    add("Proof", PROOF_WORDS["on" if proof else "off"], proof,
-        "task" if "proof" in sets else by_layer(s, space, "tasks", "proof", proof, True))
-    verify = sets["verify"] == "on" if "verify" in sets else k.get("verify") is True
-    add("Verify", "on" if verify else "off", verify,
-        "task" if "verify" in sets else by_layer(s, space, "tasks", "verify", verify, False))
     model, effort = argv_model(argv)
-    text = agent + (f", model {model}" if model else "") + (f", effort {effort}" if effort else "")
-    a_by = "task" if any(t.get(f) for f in ("agent", "model", "effort")) else \
-        by_layer(s, space, "driver" if cfg.get("driver") else "worker", None, bool(cfg.get("driver") or cfg.get("worker")), False)
-    add("Agent", text, {"agent": agent, "model": model, "effort": effort}, a_by)
+    driver_by = "task" if any(t.get(f) for f in ("agent", "model", "effort")) else by_layer(
+        s, space, "driver" if cfg.get("driver") else "worker", None, bool(cfg.get("driver") or cfg.get("worker")), False
+    )
+    lines = [{
+        "label": "Agent",
+        "text": agent + (f", model {model}" if model else "") + (f", effort {effort}" if effort else ""),
+        "value": {"agent": agent, "model": model, "effort": effort},
+        "by": driver_by,
+    }]
+    if t.get("base_set"):
+        lines.append({
+            "label": "Base", "text": f"{t['base']}: your branch starts from it", "value": t["base"],
+            "by": "folder" if t.get("base_by") == "space" else "task",
+        })
+    lines.append({"label": "Proof", "text": PROOF_WORDS, "value": True, "by": None})
     return lines
 
 
@@ -412,21 +321,12 @@ def settings_block(s, t, space=None, argv=None):
     return "\n".join([SETTINGS_HEAD, *rows])
 
 
-def review_limits(s, t):
-    """(review on, rounds allowed now): the Settings block's Review and Review rounds lines, with
-    the rounds the assistant added (review-more)."""
-    on, rounds = False, 0
-    for x in task_settings(s, t):
-        if x["label"] == "Review":
-            on = x["value"]
-        elif x["label"] == "Review rounds":
-            rounds = x["value"]
-    return on, rounds
+
 
 
 def space_base(s, space=None):
-    """The branch a space's new tasks branch from and merge into (Shepherdr settings > Tasks >
-    Base branch, per space); "" when unset: the folder's current branch."""
+    """The branch a space's new tasks branch from (Collie settings > Tasks > Base branch,
+    per space); "" when unset: the folder's current branch."""
     return str(settings_for(s, space)["tasks"].get("base") or "").strip()
 
 
@@ -451,10 +351,7 @@ def branch_pattern_problem(pattern):
     return None
 
 
-def merge_policy(s, t):
-    """How a ready task merges: its own --set merge, else Settings' (auto, checks or ask)."""
-    p = (t.get("set") or {}).get("merge") or settings_for(s, t.get("space"))["tasks"].get("merge")
-    return p if p in MERGE_WORDS else "ask"
+
 
 def agent_argv(key, argv_json=None):
     if argv_json:

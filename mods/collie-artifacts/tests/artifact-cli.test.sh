@@ -1,5 +1,5 @@
 #!/bin/sh
-# collie-artifact CLI: publish/list/show/export/rm, the collie store, and the read-only legacy fallback.
+# collie-artifact CLI: publish/list/show/export/rm, explicit task binding, and the single collie store.
 # Runs entirely under a temporary HOME; no Shepherdr artifacts mod and no herdr-app state needed.
 set -eu
 
@@ -64,6 +64,69 @@ test -f "$TMP/out-old/$ID-v1/recipe.json" || fail "older export"
 $CLI rm "$ID" --json >/dev/null
 test "$($CLI list --json | json 'len(d["artifacts"])')" = "0" || fail "rm left it listed"
 test ! -d "$HOME/.local/share/collie/artifacts/files/$ID" || fail "rm left files"
+
+# ---- explicit task binding, proof ordering, and live-driver Mark up routing -------------------
+export COLLIE_TASK_STORE="$TMP/task-store"
+SLUG=$($CLI where --folder "$WORK" | json 'd["slug"]')
+python3 - "$COLLIE_TASK_STORE" "$SLUG" "$WORK" <<'PY'
+import json, os, sys
+store, slug, folder = sys.argv[1:]
+folder = os.path.realpath(folder)
+os.makedirs(store, exist_ok=True)
+with open(os.path.join(store, slug + ".json"), "w") as f:
+    json.dump({"folder": folder, "prefix": "COLL", "tasks": [{
+        "id": 42, "title": "Bind artifacts",
+        "agents": [
+            {"address": "t88", "role": "worker"},
+            {"address": "t90", "role": "reviewer"},
+            {"address": "t91", "role": "verifier"},
+            {"address": "t92", "role": "helper"}
+        ]
+    }]}, f)
+PY
+mkdir -p "$TMP/bin"
+cat > "$TMP/bin/hc" <<'SH'
+#!/bin/sh
+case "$1" in
+  ls) printf '%s\n' "$HC_LIVE" ;;
+  get) printf '{}\n' ;;
+  send) printf '%s\n' "$2" > "$HC_CAPTURE" ;;
+esac
+SH
+chmod +x "$TMP/bin/hc"
+export PATH="$TMP/bin:$PATH"
+export HC_CAPTURE="$TMP/note-target"
+export HC_LIVE='{"terminals":[{"address":"t88","state":"live"},{"address":"t90","state":"live"},{"address":"t91","state":"live"},{"address":"t92","state":"live"}]}'
+TASK_SHOW=$(HC_TERMINAL_ID=t90 $CLI publish ./report --title "Task proof" --task COLL-42 --json)
+TASK_ID=$(printf '%s' "$TASK_SHOW" | json 'd["id"]')
+test "$(printf '%s' "$TASK_SHOW" | json 'd["task"]')" = "COLL-42" || fail "publish --task binding"
+test "$(printf '%s' "$TASK_SHOW" | json 'd["publisher"]')" = "t90" || fail "publisher"
+PROOF_SHOW=$(HERDR_BROWSER_TASK="$SLUG#42" $CLI publish ./report --title "Accepted proof" --json)
+test "$(printf '%s' "$PROOF_SHOW" | json 'd["task"]')" = "COLL-42" || fail "current task store ref lookup"
+PROOF_ID=$(printf '%s' "$PROOF_SHOW" | json 'd["id"]')
+NOTE=$($CLI note "$TASK_ID" --text "Driver only" --json)
+test "$(printf '%s' "$NOTE" | json 'd["to"]')" = "t88" || fail "markup did not choose driver: $NOTE"
+test "$(cat "$HC_CAPTURE")" = "t88" || fail "markup sent to helper"
+export HC_LIVE='{"terminals":[{"address":"t88","state":"live"}]}'
+test "$($CLI note "$TASK_ID" --text "Publisher ended" --json | json 'd["to"]')" = "t88" || fail "ended publisher did not fall back to driver"
+export HC_LIVE='{"terminals":[{"address":"t90","state":"live"},{"address":"t91","state":"live"},{"address":"t92","state":"live"}]}'
+if $CLI note "$TASK_ID" --text "No driver" --json >/dev/null 2>&1; then fail "markup fell back to helper"; fi
+TASK_ID="$TASK_ID" PROOF_ID="$PROOF_ID" node --input-type=module - "$HERE" <<'JS'
+import { pathToFileURL } from "node:url";
+const { taskArtifacts } = await import(pathToFileURL(`${process.argv[2]}/core/task-artifacts.js`));
+const task = { ref: "COLL-42", folder: "/repo", machine: "vm", proof: { id: process.env.PROOF_ID, title: "Proof" } };
+const at = (id, extra = {}) => ({ id, folder: "/repo", machine: "vm", at: 1, ...extra });
+const ids = taskArtifacts([
+  at(process.env.TASK_ID, { task: "COLL-42", at: 2 }),
+  at(process.env.PROOF_ID, { task: "COLL-42", at: 0 }),
+  at("same-publisher", { versions: [{ publisher: "t90" }], at: 9 }),
+  at("wrong-folder", { task: "COLL-42", folder: "/other" }),
+  at("wrong-machine", { task: "COLL-42", machine: "other" }),
+], task);
+if (JSON.stringify(ids) !== JSON.stringify([process.env.PROOF_ID, process.env.TASK_ID])) {
+  throw new Error(`explicit artifact binding failed: ${JSON.stringify(ids)}`);
+}
+JS
 
 # ---- $COLLIE_ARTIFACTS_HOME picks the store --------------------------------------------------
 cd "$WORK"

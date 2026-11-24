@@ -141,7 +141,8 @@ describe("plugins/channel/herdr", () => {
     expect(result.resumed).toBe(true);
     expect(result.decision.occurrence.hops).toBe(6);
     expect(fake.calls).toHaveLength(1);
-    expect(fake.calls[0].slice(0, 2)).toEqual(["tell-assistant", "laptop>vm-1/t23"]);
+    expect(fake.calls[0].slice(0, 2)).toEqual(["send", "laptop>vm-1/t23"]);
+    expect(fake.calls[0][3]).toBe("--json");
     const message = JSON.parse(fake.calls[0][2]);
     expect(message).toMatchObject({ type: "card.answer", decision_ref: decision.id, hops: 6 });
     expect(message.answer).toMatchObject(acceptedBy);

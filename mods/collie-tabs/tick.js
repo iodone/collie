@@ -6,25 +6,17 @@
 import { exec, appHome, home, run } from "herdr";
 import { terminals, spaces } from "./live.js";
 import { coordinatorTab } from "./coordinator.js";
-import { serviceRuns } from "./service.js";
+import { runTick } from "./core/tick.js";
 
 const CLI = () => (globalThis.process?.env?.COLLIE_TASK_CLI) ?? `${appHome()}/bin/collie-task`;
-const STORE = () => (globalThis.process?.env?.COLLIE_TASK_STORE) ?? (globalThis.process?.env?.HERDR_TASK_STORE) ?? `${home()}/.local/share/collie/tasks`;
+const STORE = () => (globalThis.process?.env?.COLLIE_TASK_STORE) ?? `${home()}/.local/share/collie/tasks`;
 let running = false, soon = false, seen = null;
 
 async function tick() {
-  // Collie's service may take the tick over later; until then the window owns it.
-  if (running || serviceRuns()) return;
+  if (running) return;
   running = true;
   try {
-    await exec(CLI(), ["tick", "--json"]).catch(() => {});
-    const r = await exec("sh", ["-c", 'ls "$1/.remote" 2>/dev/null; true', "x", STORE()]).catch(() => null);
-    // And each machine running an Assistant: its tick brings it back after a crash (revive.py).
-    const assisted = terminals().filter((k) => k.state === "live" && k.address.includes("/") && (k.labels?.["herdr.role"] === "coordinator" || k.labels?.["herdr.resume"]))
-      .map((k) => k.address.split("/")[0]);
-    for (const machine of new Set([...(r?.stdout ?? "").split("\n").filter((x) => x && !x.endsWith(".secret")), ...assisted])) {
-      await exec(CLI(), ["--on", machine, "tick", "--json"]).catch(() => {});
-    }
+    await runTick({ exec, cli: CLI(), store: STORE(), terminals });
   } finally {
     running = false;
   }

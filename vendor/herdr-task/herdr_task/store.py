@@ -6,11 +6,12 @@ import json
 import os
 import re
 
-from .base import Fail, git, hc_json, HOME, LEGACY, MAX_RUNNING, now, run, STORE
+from .base import Fail, git, HOME, MAX_RUNNING, now, STORE
 from .settings import settings_for
-from .agents import agent_running
-from .sessions import session_of
 from .launch import retag_tabs
+
+
+STATES = {"todo", "running", "ready", "done"}
 
 
 # ---- where a folder's tasks live ------------------------------------------------------------
@@ -120,9 +121,11 @@ class Store:
         d["slug"] = self.slug
         d.setdefault("next", 1)
         d.setdefault("tasks", [])
+        for task in d["tasks"]:
+            if task.get("state") not in STATES:
+                raise Fail(f"{self.path} has a task with unsupported state {task.get('state')!r}; expected todo, running, ready or done.")
         self.new_prefix = False
         if self.write:
-            self.migrate()
             if not d.get("prefix"):
                 # Its id prefix, unique on this machine; lists made before prefixes get one too.
                 taken, base = prefixes_in_use(self.path), auto_prefix(os.path.basename(self.loc["folder"]))
@@ -173,53 +176,16 @@ class Store:
 
     def new(self, title, prompt="", mode="here"):
         d = self.data
-        t = {"id": d["next"], "title": title, "prompt": prompt, "mode": mode, "state": "todo",
-             "created": now(), "agents": []}
+        t = {
+            "id": d["next"], "title": title, "prompt": prompt, "mode": mode, "state": "todo",
+            "created_at": now(), "started_at": None, "ready_at": None, "done_at": None, "done_by": None,
+            "space": None, "project": None, "worktree": None, "branch": None, "base": None, "start": None,
+            "agents": [], "progress": None, "summary": None, "details": None, "proof": None, "depends_on": [],
+        }
         d["next"] += 1
         d["tasks"].append(t)
         self.dirty = True
         return t
-
-    # The Tasks panel's old lists: <repo>/.git/herdr-tasks.json, and data/tasks/<slug>.json in the
-    # app's home for folders outside git. Read once, then set aside as *.migrated.
-    def migrate(self):
-        old = []
-        if self.loc["common"]:
-            old.append(os.path.join(self.loc["common"], "herdr-tasks.json"))
-        old.append(os.path.join(LEGACY, re.sub(r"[^\w.-]+", "_", "local" + self.loc["folder"]) + ".json"))
-        for p in old:
-            if not os.path.isfile(p):
-                continue
-            try:
-                with open(p) as f:
-                    items = json.load(f).get("tasks") or []
-            except (OSError, ValueError):
-                continue
-            for o in items:
-                if not isinstance(o, dict) or not o.get("title"):
-                    continue
-                state = {"started": "running", "complete": "done"}.get(o.get("state"), "todo")
-                t = self.new(o["title"], o.get("prompt") or "", "here")
-                t.update(state=state, created=o.get("created") or now(), legacy_id=o.get("id"))
-                if o.get("started"):
-                    t["started"] = o["started"]
-                if o.get("completed"):
-                    t["done_at"] = o["completed"]
-                if o.get("terminal"):
-                    a = {"address": o["terminal"], "agent": o.get("agent") or "", "at": o.get("started") or now()}
-                    k = hc_json("get", o["terminal"])
-                    if k and k.get("state") == "live":
-                        # Still running: label it so it shows as this task's agent.
-                        run(["hc", "label", o["terminal"], f"herdr.task={self.key(t)}"])
-                        labels = k.get("labels") or {}
-                        t["space"], t["tab"] = labels.get("herdr.space"), labels.get("herdr.tab")
-                        pid = (k.get("foreground") or {}).get("pid")
-                        sid, log = session_of(pid) if pid and agent_running(k) else (None, None)
-                        if sid:
-                            a["session"], a["log"] = sid, log
-                    t["agents"].append(a)
-            os.replace(p, p + ".migrated")
-            self.dirty = True
 
 
 def open_store(args, write=True):

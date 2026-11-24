@@ -4,17 +4,15 @@ import argparse
 import hashlib
 import json
 import os
-import shutil
 import subprocess
 import sys
 
-from .base import bundle, Fail, guard, run, STORE, sync_held, VERSION
+from .base import bundle, Fail, guard, run, STORE, VERSION
 from .agents import LINE_MAX, SUMMARY_MAX
 from .launch import cmd_allow, name_tabs
 from .commands import (
-    cmd_accept, cmd_add, cmd_alert, cmd_config, cmd_edit, cmd_fix, cmd_list, cmd_merge, cmd_ready,
-    cmd_resume, cmd_review, cmd_review_more, cmd_reviewed, cmd_verified, cmd_plan, cmd_rm, cmd_show, cmd_start, cmd_state, cmd_status,
-    cmd_switch, cmd_unarchive, cmd_where,
+    cmd_accept, cmd_add, cmd_alert, cmd_config, cmd_done, cmd_edit, cmd_list, cmd_ready,
+    cmd_rm, cmd_show, cmd_start, cmd_status, cmd_switch, cmd_unarchive, cmd_where,
 )
 from .tick import cmd_tick
 from .backups import cmd_backup, cmd_restore_spaces
@@ -43,9 +41,6 @@ def remote_run(machine, argv, timeout=None):
         installed = False
 
     def install():
-        held = sync_held()
-        if held:
-            raise Fail(f"collie-task isn't current on {machine}, and copies to other machines wait: {held}.")
         guard(["hc"])
         r = subprocess.run(["hc", "file", "write", "--on", machine, target], input=body, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if r.returncode != 0:
@@ -55,8 +50,7 @@ def remote_run(machine, argv, timeout=None):
         with open(mark, "w") as f:
             f.write(digest)
 
-    # Held (base.sync_held): no copy goes; the copy already there runs.
-    if not installed and not sync_held():
+    if not installed:
         install()
     wait = ["--timeout", str(timeout)] if timeout else []
     call = ["hc", "exec", "--on", machine, *wait, "--", "sh", "-c", 'exec "$HOME/.local/bin/collie-task" "$@"', "collie-task", *argv]
@@ -133,13 +127,9 @@ def main():
         c.add_argument("--agent", help="the CLI its agent runs (claude, codex, ...; default: Settings' Workers)")
         c.add_argument("--model", help="its agent's model, an id or alias (default: Settings'; \"default\": the CLI's own)")
         c.add_argument("--effort", help="its agent's effort: low, medium, high, xhigh, max... (default: Settings')")
-        c.add_argument("--reviewer", help="the CLI its agent's review uses (default: Settings' Reviewer, else the other CLI)")
-        c.add_argument("--reviewer-model", help="the reviewer's model")
-        c.add_argument("--reviewer-effort", help="the reviewer's effort")
         c.add_argument("--set", action="append", metavar="KEY=VALUE",
-                       help="one task's setting, a line of its brief's Settings block: review=on|off, review.rounds=1..10, "
-                            "review.mustFix=blocker|major|minor, proof=on|off, merge=\"on its own\"|\"after checks\"|\"ask me first\" (\"\": Settings' again)")
-        c.add_argument("--base", help="the branch its worktree branches from and merges into (default: its space's Base branch "
+                       help="one task's setting: agent, model, effort or playbook (\"\": Settings' again)")
+        c.add_argument("--base", help="the branch its worktree branches from (default: its space's Base branch "
                                       "setting, else the folder's current branch)")
         c.add_argument("--branch", help="its branch's exact name, e.g. a ticket's ABC-2137 (default: the folder's Branch names "
                                         "setting, else task/<n>-<title words>); refused when that branch exists already (\"\": the pattern's)")
@@ -169,15 +159,11 @@ def main():
     g = c.add_mutually_exclusive_group()
     g.add_argument("--here", action="store_true", help="work in the folder itself")
     g.add_argument("--worktree", action="store_true", help="work in a git worktree (default in repos)")
-    c.add_argument("--after", help="start only once these tasks are done: 3,5; another folder's by its id (WEB-2), another "
-                                   "machine's with the machine first (vm-b:HAT-12)")
+    c.add_argument("--depends-on", help="start only once these task refs are done: 3,5; WEB-2; vm-b:HAT-12")
     c.add_argument("--space", help="the space it's for, whose settings it takes (default: yours)")
-    c.add_argument("--plan", help=argparse.SUPPRESS)
     when_opts(c)
     c = cmd("show", cmd_show, "one task")
     c.add_argument("--evidence", action="store_true", help="with what its Accept card shows: commits, changed files, checks and its proof")
-    c = cmd("plan", cmd_plan, "record the selected playbook/stage/seat facts for a task")
-    c.add_argument("--plan", required=True, help="JSON {playbook, stage, seats, gate_results}")
     c = cmd("start", cmd_start, "start a task's agent (no tab: an hc child of the space's coordinator)")
     agent_opts(c)
     c.add_argument("--space")
@@ -188,23 +174,13 @@ def main():
     g.add_argument("--here", action="store_true")
     g.add_argument("--worktree", action="store_true")
     when_opts(c)
-    c = cmd("ready", cmd_ready, "a worker's task is finished (worktree tasks: committed): it waits in Ready for the person's Accept (opens a pull request on GitHub)")
+    c = cmd("ready", cmd_ready, "a running driver delivers summary, details and proof; it never opens a pull request")
     c.add_argument("--summary", help=f"what the person now sees or can do, in plain words, at most {SUMMARY_MAX} characters "
                                      "(no file names, flags or jargon); longer is refused")
-    c.add_argument("--details", help="optional: a few short bullets in plain words (one \"- \" per line): what changed for the "
-                                     "person first, then how it was checked; file names only where they help; never one dense "
-                                     "paragraph. Folded under Details in the Accept card")
+    c.add_argument("--details", help="required: a few short bullets in plain words (one \"- \" per line): what changed and how it was checked")
     c.add_argument("--proof", help="its proof artifact's id (collie-artifact publish prints it); default: its newest artifact titled \"... · Proof\"")
     c.add_argument("--agents-md", help="\"For AGENTS.md\": one line about setting up or testing this repo that the next agent "
                                        "would need and AGENTS.md lacks; the Assistant decides whether to add it")
-    c = cmd("reviewed", cmd_reviewed, "a task's agent records one review round of its current commit (Review: on): ready then "
-                                      "accepts that commit; uses one of its Review rounds")
-    c.add_argument("--report", help="the round's findings in a line (levels, what was fixed)")
-    c = cmd("verified", cmd_verified, "a verifier records the final commit's verdict (Verify: on): ready then requires a pass")
-    c.add_argument("--verdict", required=True, choices=("pass", "fail", "uncertain"))
-    c.add_argument("--evidence", required=True, help="the command/output, screenshot path or check supporting the verdict")
-    c.add_argument("--report", help="optional short report")
-    cmd("review-more", cmd_review_more, "the Assistant gives a task one more review round, once all are used (never its own agent)")
     c = cmd("status", cmd_status, "a task's agent says what it's doing now, at the start and each natural step: status 4 \"Fixing the two failing tests\" --done 40 --left 5m")
     c.add_argument("text", help=f"what it is doing, at most {LINE_MAX} characters (longer is cut at a word)")
     c.add_argument("--done", type=int, help="how far through the whole task, 0-100 (%%)")
@@ -234,11 +210,12 @@ def main():
     h.add_argument("--new", action="store_true", help="--file: file it even though duplicates are open")
     h.add_argument("--comment", type=int, metavar="N", help="--file: add it as a comment on open issue N instead")
     c.add_argument("--dry-run", action="store_true", help="--file: show the redacted draft and duplicates, file nothing")
-    cmd("done", lambda a: cmd_state(a, "done"), "mark done (the person's call: only when they ask; agents finish with ready)")
-    c = cmd("accept", cmd_accept, "the person's Accept on a Ready task: merges first when there is something to merge, then done")
-    agent_opts(c)
-    c.add_argument("--space")
-    cmd("reopen", lambda a: cmd_state(a, "reopen"), "undo done or ready; a queued or scheduled task goes back to to do")
+    c = cmd("done", cmd_done, "drop or finalize a task as done")
+    c.add_argument("--done-by", choices=("coordinator", "human"), default="human")
+    c.add_argument("--space", help=argparse.SUPPRESS)
+    c = cmd("accept", cmd_accept, "accept a ready task as done; no merge or delivery action")
+    c.add_argument("--done-by", choices=("coordinator", "human"), default="human")
+    c.add_argument("--space", help=argparse.SUPPRESS)
     cmd("unarchive", cmd_unarchive, "bring an archived task back into its list (only when the person asks; writing to it does too)")
     c = cmd("edit", cmd_edit, "change a task")
     c.add_argument("--title")
@@ -246,7 +223,7 @@ def main():
     c.add_argument("--prompt-file")
     task_opts(c)
     notes_opts(c)
-    c.add_argument("--after", help="start only once these tasks are done: 3,5, WEB-2, vm-b:HAT-12 (\"\" clears)")
+    c.add_argument("--depends-on", help="start only once these task refs are done: 3,5, WEB-2, vm-b:HAT-12 (\"\" clears)")
     g = c.add_mutually_exclusive_group()
     g.add_argument("--here", action="store_true")
     g.add_argument("--worktree", action="store_true")
@@ -254,18 +231,9 @@ def main():
     cmd("rm", cmd_rm, "remove a task")
     c = cmd("config", cmd_config, "this folder's settings", id=False)
     c.add_argument("--prefix", help="task ids' prefix, 2 to 5 letters (HAT -> HAT-4); unique on this machine")
-    c = cmd("tick", cmd_tick, "start queued tasks that can go; mark merged ones done (Herdr runs this)", id=False)
+    c = cmd("tick", cmd_tick, "start runnable todo tasks and recover live agents (Herdr runs this)", id=False)
     c.add_argument("--machine", help=argparse.SUPPRESS)  # this machine's name, from Herdr's window (HERD-40)
     c.add_argument("--hold", help=argparse.SUPPRESS)  # its start limits as JSON, from Settings > Machines
-    c = sub.add_parser("review")  # reviewers collie-task started before agents reviewed their own work
-    c.add_argument("id")
-    c.add_argument("--folder")
-    c.add_argument("--json", action="store_true")
-    c.set_defaults(fn=cmd_review)
-    c.add_argument("--pass", dest="passed", action="store_true", help="nothing that must be fixed")
-    c.add_argument("--changes", help="what must be fixed, for the worker")
-    c.add_argument("--changes-file")
-    c.add_argument("--notes", help="suggestions with a pass")
     c = cmd("scheduler", cmd_scheduler, "run automations and the queue (herdr-core keeps one as herdr-automations)", id=False)
     c.add_argument("--ensure", action="store_true", help="start it if automations need it and it isn't running")
     c.add_argument("--once", action="store_true", help="one round, then exit")
@@ -404,17 +372,6 @@ def main():
     c.add_argument("text")
     c.add_argument("--json", action="store_true")
     c.set_defaults(fn=cmd_tell)
-    c = cmd("fix", cmd_fix, "ask the task's agent to fix what keeps its pull request from merging")
-    agent_opts(c)
-    c.add_argument("--space")
-    c.add_argument("--reason", help="what to fix (default: what Herdr found)")
-    c = cmd("merge", cmd_merge, "ask the task's agent to merge it (the Merge button)")
-    agent_opts(c)
-    c.add_argument("--space")
-    c = cmd("resume", cmd_resume, "continue a stopped task")
-    agent_opts(c)
-    c.add_argument("--space")
-    c.add_argument("--parent")
     c = cmd("switch", cmd_switch, "replace the task's agent (no --agent: restart it)")
     agent_opts(c)
     c.add_argument("--space")
