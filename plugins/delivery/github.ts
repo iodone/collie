@@ -46,5 +46,3 @@ export async function deliverGithub(decision: Json, options: DeliveryOptions = {
 
   return (options.run ?? runGh)(args);
 }
-
-export const deliverGitHub = deliverGithub;

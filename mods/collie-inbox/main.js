@@ -1,5 +1,5 @@
 // One Inbox workbench: waiting decisions, working dispatches and settled history.
-// All rows come from the Ledger projection; collie-task is read only for navigation and diffs.
+// All rows come from the Ledger projection; collie-task is read only for navigation.
 // A ticket opens in its own page: collie's task view with only Terminal and Artifacts.
 import { View, div, svg } from "gpui-kit";
 import {
@@ -7,19 +7,19 @@ import {
   setShared, shared, spaces, terminals, theme, writeTextFile,
 } from "herdr";
 import {
-  parseQueue, queuePath, receiptPath, STAGE_WORD, taskTarget,
+  parseQueue, queuePath, receiptPath, STAGE_WORD, taskTarget, orphanTickets, taskAgents,
   ticketGroup, ticketNeed, ticketStage, todoReason, waitingQueue, workKind, workingCount,
 } from "./lib/inbox-queue.js";
 import { ownProgress, taskDot } from "./lib/ticket-dot.js";
-import { artifactCli, openViewer } from "./lib/artview.js";
+import { artifactCli } from "./lib/artview.js";
+import { ensureTerminalTab } from "./lib/terminal-tab.js";
 import { SLOT, chatPane } from "./core/spaces.js";
-import { GREP, publishedIds, taskArtifacts } from "./core/task-artifacts.js";
+import { taskArtifacts } from "./core/task-artifacts.js";
 import { RADIUS, TEXT, plainError, segmented, toast } from "./lib/ui.js";
 
 const v = () => div().flex().flex_col();
 const h = () => div().flex().flex_row();
 const CLI = () => (globalThis.process?.env?.COLLIE_TASK_CLI) ?? `${appHome()}/bin/collie-task`;
-const selected = () => shared("inbox.selected") ?? null;
 const ticket = () => shared("collie.ticket") ?? null;
 
 // The ticket page: collie's task view nodes (the same ids in layouts/collie.json).
@@ -65,8 +65,29 @@ function liveRoles(target) {
   const terms = label ? terminals().filter((k) => k.state === "live" && k.labels?.["herdr.task"] === label) : [];
   const has = (role) => record.some((a) => a.role === role && a.status !== "done")
     || terms.some((k) => k.labels?.["herdr.role"] === role && k.status !== "done");
+  const helper = (role) => Boolean(role) && role !== "driver" && role !== "worker";
+  const driver = record.some((a) => !helper(a.role) && a.status !== "done")
+    || terms.some((k) => !helper(k.labels?.["herdr.role"]) && k.status !== "done");
   const blocked = record.some((a) => a.status === "blocked") || terms.some((k) => k.status === "blocked");
-  return { worker: has("worker"), reviewer: has("reviewer"), blocked };
+  const other = record.some((a) => helper(a.role) && !["reviewer", "verifier"].includes(a.role) && a.status !== "done")
+    || terms.some((k) => helper(k.labels?.["herdr.role"]) && !["reviewer", "verifier"].includes(k.labels?.["herdr.role"]) && k.status !== "done");
+  return { driver, reviewer: has("reviewer"), verifier: has("verifier"), other, blocked };
+}
+
+const roleName = (role) => role ? role.charAt(0).toUpperCase() + role.slice(1) : "Agent";
+const roleTabName = (agent, agents) => {
+  const base = roleName(agent.role);
+  const same = agents.filter((item) => item.role === agent.role);
+  return same.length <= 1 ? base : `${base} ${same.findIndex((item) => item.address === agent.address) + 1}`;
+};
+
+async function showAgentTab(agent, cx, focus = true, name = roleName(agent.role)) {
+  try {
+    return await ensureTerminalTab({ terminal: agent.address, name, focus, cx });
+  } catch (error) {
+    if (focus) toast({ title: "Agent pane didn't open", body: plainError(error), level: "error" });
+    return null;
+  }
 }
 
 const stageOf = (decision, target) => ticketStage(decision, target, liveRoles(target));
@@ -133,10 +154,6 @@ const showArtifacts = () => selectPage(ARTIFACTS);
 
 // A click on a ticket: its page, on its live terminal when one runs, else its artifacts.
 function openTicket(decision, target, receipt, cx) {
-  if (!target?.ref && receipt?.proof?.id) {
-    openViewer({ id: receipt.proof.id, title: receipt.proof.title, machine: target?.machine, modal: true });
-    return;
-  }
   setShared("collie.ticket", { decision, target, receipt, at: Date.now() });
   setShared("tasks.thread", threadOf(target, decision));
   if (!target?.ref) setShared("tasks.thread.artifacts", { terminal: null, ref: decision.id, machine: null, list: [] });
@@ -151,42 +168,6 @@ async function loadTasks() {
     const result = await exec(CLI(), ["list", "--all", "--json", "--slim"]);
     return result.code === 0 ? JSON.parse(result.stdout || "[]") : [];
   } catch { return []; }
-}
-
-// Tasks can exist without a Ledger decision (direct collie-task adds, adopted work). The Inbox is
-// still the workbench for the space: project those tasks as synthetic tickets rather than hiding
-// them until a Decision exists.
-function orphanTickets(decisions, groups) {
-  const linked = new Set();
-  for (const decision of decisions) {
-    const ref = decision?.run?.task_ref;
-    if (ref) linked.add(String(ref));
-  }
-  const out = [];
-  for (const group of Array.isArray(groups) ? groups : []) {
-    for (const task of group?.tasks ?? []) {
-      const keys = [task.key, task.ref, task.id].filter((x) => x !== undefined && x !== null).map(String);
-      if (!task.space || keys.some((key) => linked.has(key))) continue;
-      const at = task.ready_at ?? task.started ?? task.created ?? task.agents?.at(-1)?.at ?? Date.now();
-      const done = task.state === "done";
-      const project = String(group.folder ?? "").split("/").filter(Boolean).pop() || null;
-      out.push({
-        id: `task:${task.key ?? task.ref ?? task.id}`,
-        ...(project ? { project } : {}),
-        state: done ? "settled" : "open",
-        decided_at: new Date(at).toISOString(),
-        ...(done ? { settled: { at: new Date(at).toISOString(), outcome: "done" } } : {}),
-        space: task.space,
-        title: task.title ?? task.ref ?? `#${task.id}`,
-        why: task.why ?? null,
-        synthetic: true,
-        run: { task_ref: task.key ?? task.ref ?? String(task.id),
-          // Orphan tasks have no Decision.run.kind; their title is the only review/build cue left.
-          kind: /\b(review|评审)\b/i.test(String(task.title ?? "")) ? "review" : "build" },
-      });
-    }
-  }
-  return out;
 }
 
 async function navigation(decisions, groups = null) {
@@ -205,14 +186,10 @@ async function navigation(decisions, groups = null) {
     let target = taskTarget(decision, receipt, groups);
     if (target && (!target.start || !target.worktree)) {
       try {
-        const shown = await exec(CLI(), ["show", target.ref, "--folder", target.folder, "--json", "--evidence"]);
+        const shown = await exec(CLI(), ["show", target.ref, "--folder", target.folder, "--json"]);
         if (shown.code === 0) {
           const detail = JSON.parse(shown.stdout);
           target = taskTarget(decision, receipt, groups, detail);
-          if (target) {
-            target.state = detail.state;
-            target.evidence = detail.evidence;
-          }
         }
       } catch { /* keep the list-only target */ }
     }
@@ -247,7 +224,7 @@ function stateColor(t, stage, need = null) {
 
 function stateChip(t, stage, need = null, kind = null, outcome = null) {
   const color = stateColor(t, stage, need);
-  const gerund = kind === "build" ? "building" : kind === "review" ? "reviewing" : kind === "merge" ? "merging" : null;
+  const gerund = kind === "build" ? "building" : kind === "review" ? "reviewing" : kind === "verify" ? "verifying" : null;
   const suffix = stage === "working" ? gerund : stage === "settled" ? outcome : null;
   const label = suffix ? `${STAGE_WORD[stage] ?? stage} · ${suffix}` : STAGE_WORD[stage] ?? stage;
   return h().flex_none().h(16).px(5).items_center().rounded(4).bg(color + "1f")
@@ -309,10 +286,10 @@ export default class Inbox extends View {
     this.view = _props?.view ?? props()?.view ?? "queue";
     const kept = ["all", "needs", "todo", "working", "settled"];
     const saved = shared("inbox.filter") ?? "all";
-    this.filter = saved === "waiting" || saved === "review" ? "needs" : kept.includes(saved) ? saved : "all";
+    this.filter = kept.includes(saved) ? saved : "all";
     this.rows = [];
     this.staged = [];
-    this.groups = { top: [], spaces: [], settled: [] };
+    this.groups = { top: [], projects: [], settled: [] };
     this.decisions = [];
     this.targets = new Map();
     this.receipts = new Map();
@@ -320,8 +297,7 @@ export default class Inbox extends View {
     this.loading = false;
     if (this.view === "queue") {
       try {
-        this.settledOpen = localStorage.getItem("collie.settledOpen") === "1"
-          || localStorage.getItem("collie.doneOpen") === "1";
+        this.settledOpen = localStorage.getItem("collie.settledOpen") === "1";
       } catch { this.settledOpen = false; }
       try { this.folded = new Set(JSON.parse(localStorage.getItem("collie.folded") ?? "[]")); } catch { this.folded = new Set(); }
       this.refresh(cx);
@@ -331,8 +307,11 @@ export default class Inbox extends View {
       this.artsBusy = false;
       this.artsKey = null;
       this.artsAt = 0;
+      this.agentTabs = new Map();
+      this.agentPending = new Set();
       this.pollArts(cx);
-      cx.timer.every(3000, (cx) => { this.pollArts(cx); cx.notify(); });
+      this.syncAgentTabs(cx);
+      cx.timer.every(3000, (cx) => { this.pollArts(cx); this.syncAgentTabs(cx); cx.notify(); });
     }
   }
 
@@ -354,13 +333,6 @@ export default class Inbox extends View {
         this.groups = ticketGroup(this.staged);
         this.error = null;
         setShared("inbox.queue", { waiting: waitingQueue(this.decisions).length, working: workingCount(this.decisions), at: Date.now() });
-        const current = selected();
-        if (current?.decision) {
-          const decision = this.decisions.find((d) => d.id === current.decision.id);
-          if (decision) setShared("inbox.selected", {
-            decision, target: this.targets.get(decision.id), receipt: this.receipts.get(decision.id),
-          });
-        }
         // The open ticket follows its Decision and Task as they change.
         const open = ticket();
         if (open?.decision?.id) {
@@ -382,8 +354,7 @@ export default class Inbox extends View {
     });
   }
 
-  // The shown ticket's artifacts, as Collie finds them (mods/collie-inbox/main.js loadArts): its
-  // folder's list (collie-artifact) and what its agents' logs say they published.
+  // The shown ticket's explicitly bound artifacts from its folder and machine.
   pollArts(cx) {
     if (this.view !== "head") return;
     const target = ticket()?.target;
@@ -391,19 +362,17 @@ export default class Inbox extends View {
     const key = artsKeyOf(target);
     if (this.artsBusy || (this.artsKey === key && Date.now() - this.artsAt < ARTS_EVERY)) return;
     this.artsBusy = true;
+    const proof = target.proof?.id ?? null;
     cx.spawn(async (cx) => {
       try {
         const on = target.machine ?? null;
         const out = await artifactCli(on, ["list", "--folder", target.folder]).catch(() => null);
         const arts = Array.isArray(out?.artifacts) ? out.artifacts : [];
-        const logs = (Array.isArray(target.agents) ? target.agents : [])
-          .map((agent) => agent?.log).filter((path) => typeof path === "string");
-        const said = logs.length ? await exec("grep", ["-ohE", GREP, ...logs], on ? { on } : {}).catch(() => null) : null;
         const ids = taskArtifacts(arts, {
-          ref: target.ref, folder: target.folder, machine: null, agents: target.agents, proof: target.proof ?? null,
-        }, publishedIds(said?.stdout));
+          ref: target.ref, folder: target.folder, machine: on, proof: target.proof ?? null,
+        });
         const list = ids.map((id) => arts.find((art) => art.id === id)).filter(Boolean)
-          .map((art) => ({ id: art.id, title: art.title, v: art.version, at: art.at, proof: art.id === target.proof }));
+          .map((art) => ({ id: art.id, title: art.title, v: art.version, at: art.at, proof: art.id === proof }));
         const value = { terminal: target.terminal ?? null, ref: target.ref, machine: on, list };
         if (ticket()?.target?.ref === target.ref && JSON.stringify(value) !== JSON.stringify(shared("tasks.thread.artifacts") ?? null)) {
           setShared("tasks.thread.artifacts", value);
@@ -423,10 +392,6 @@ export default class Inbox extends View {
     const a = shared("tasks.thread.artifacts"), w = shared("tasks.thread");
     const n = a && w && a.terminal === (w.terminal ?? null) && (w.terminal || a.ref === w.task) ? a.list.length : 0;
     return n ? `Artifacts ${n}` : "Artifacts";
-  }
-
-  back(_cx) {
-    backToInbox();
   }
 
   rowsFor() {
@@ -469,6 +434,7 @@ export default class Inbox extends View {
         .child(h().h(16).min_w(0).gap(6).items_center().text_size(12)
           .child(div().flex_none().font_family(ID_FONT).text_size(11).text_color(t.dim).child(ticketRef(decision, target)))
           .child(stateChip(t, stage, need, kind, decision.settled?.outcome))
+          .when(Boolean(target?.playbook), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(target.playbook)))
           .child(div().flex_shrink_1().min_w(0).truncate().text_color(t.muted).child(reason ?? ""))
           .when(!bare, (el) => el.child(div().flex_shrink(1000).min_w(0).truncate().text_color(t.dim).child(`· ${decision.space}`)))))
       .child(action(`collie-reply-${decision.id}`, "回复", true, () => replyToCoordinator(decision, target, receipt), t));
@@ -522,7 +488,7 @@ export default class Inbox extends View {
   listBody(t) {
     if (this.filter !== "all") return this.rows.map((decision) => this.row(decision, t));
     const body = [];
-    const { top, projects: places, settled } = this.groups;
+    const { top, projects: places = [], settled = [] } = this.groups;
     const shut = this.folded.has("needs");
     if (top.length) {
       body.push(this.groupHead(t, { id: "collie-group-needs", label: STAGE_WORD.needs, count: top.length, top: true, shut,
@@ -562,7 +528,8 @@ export default class Inbox extends View {
       .when(this.error, (el) => el.child(div().px(12).py(6).text_color(t.ansi1).child(this.error)));
   }
 
-  barRow(t, target) {
+  barRow(t, target, cx) {
+    const helpers = taskAgents(target, terminals());
     return h().id("collie-thread-bar").h(24).flex_none().pl(EDGE - 6).pr(EDGE).gap(4).items_center()
       .child(h().id("collie-thread-back").h(24).pl(2).pr(8).gap(2).flex_none().items_center().rounded(RADIUS.control).cursor_pointer()
         .text_size(TEXT.label).text_color(t.muted).hover((s) => s.bg(t.hover).text_color(t.foreground))
@@ -570,29 +537,46 @@ export default class Inbox extends View {
         .child(svg("mods/collie-chrome/chevron-left.svg").size(14).flex_none())
         .child("Inbox"))
       .child(div().flex_1())
+      .children(helpers.map((agent) => h().id(`collie-thread-agent-${agent.address}`).h(22).px(7).flex_none().items_center().rounded(6).cursor_pointer()
+        .text_size(TEXT.label).text_color(t.muted).hover((s) => s.bg(t.hover).text_color(t.foreground))
+        .on_click((_e, cx) => { cx.stop_propagation(); cx.spawn(async (cx) => { await showAgentTab(agent, cx, true, roleTabName(agent, helpers)); }); })
+        .child(roleTabName(agent, helpers))))
       .when(Boolean(target?.base_set && target?.base), (el) => el.child(div().id("collie-thread-base").flex_none().max_w(160).truncate().pr(4)
         .text_size(TEXT.label).text_color(t.muted).child(`→ ${target.base}`)));
   }
 
-  // Its status dot beside the id (the list's monospace) and title; under them the Decision's why.
+  // What the worker says it is doing (collie-task status), with the minutes it said are left, as
+  // shepherdr's task header: the words give way first, so the time never gets cut off. A waiting
+  // ticket has no running report, so the Decision's reason stands in the same line.
+  reportLine(t, stage, target, decision) {
+    const p = target?.progress;
+    const own = ownProgress([target?.terminal]);
+    const paused = stage !== "working";
+    let text = p?.text ?? (stage === "working" ? own?.msg : null);
+    if (!text) {
+      text = stage === "needs" ? decision.why
+        : stage === "todo" ? todoReason(target, decision)
+        : stage === "settled" ? decision.why
+        : null;
+    }
+    if (!text) return null;
+    const pct = paused ? pctOf(target) : null;
+    const left = paused ? null : shortLeft(minutesLeft(p));
+    const end = paused ? (pct != null ? `${pct}%` : null) : (left ? `~${left}` : null);
+    return h().id("collie-thread-report").w_full().min_w(0).gap(4).items_center().text_size(TEXT.label)
+      .text_color(paused ? t.dim : t.muted)
+      .child(div().min_w(0).truncate().child(text))
+      .when(Boolean(end), (el) => el.child(div().flex_none().text_color(t.dim).child(`· ${end}`)));
+  }
+
+  // The ticket as shepherdr draws a task: its dot (the list's) beside the id and title; under them
+  // what its worker is doing. No extra chips or metadata: the dot already says the stage.
   taskBlock(t, { decision, target, receipt }) {
     const title = receipt?.summary ?? decision.card?.question ?? target?.title ?? decision.why;
     const stage = stageOf(decision, target);
     const need = stage === "needs" ? ticketNeed(decision) : null;
-    const kind = stage === "working" ? kindOf(decision, target) : null;
-    const pct = stage === "working" ? pctOf(target) : null;
-    const own = ownProgress([target?.terminal]);
-    const said = stage === "working" ? (target?.progress?.text ?? own?.msg ?? null) : null;
-    const left = stage === "working" ? shortLeft(minutesLeft(target?.progress)) : null;
-    const reason = stage === "needs" ? decision.why
-      : stage === "todo" ? todoReason(target, decision)
-      : stage === "settled" ? decision.why
-      : said ?? decision.why;
-    const report = [
-      stage === "working" && pct != null ? `${pct}%` : null,
-      reason,
-      left ? `~${left}` : null,
-    ].filter(Boolean).join(" · ");
+    const pct = pctOf(target);
+    const report = this.reportLine(t, stage, target, decision);
     return h().id("collie-thread-task").flex_none().px(EDGE).gap(8).items_start().text_color(t.foreground)
       .child(h().w(16).h(22).flex_none().items_center().justify_center()
         .child(taskDot(stage === "needs" ? need : stage, { pct, halo: stage === "needs" && need === "needs" })))
@@ -600,9 +584,37 @@ export default class Inbox extends View {
         .child(h().h(22).min_w(0).gap(8).items_center()
           .child(div().flex_none().font_family(ID_FONT).text_size(TEXT.label).text_color(t.dim).child(ticketRef(decision, target)))
           .child(div().id("collie-thread-title").flex_1().min_w(0).truncate().text_size(TEXT.title).font_medium().child(title)))
-        .child(h().h(16).min_w(0).gap(6).items_center()
-          .child(stateChip(t, stage, need, kind, decision.settled?.outcome))
-          .child(div().flex_1().min_w(0).truncate().text_size(TEXT.label).text_color(t.muted).child(report))));
+        .child(h().h(16).min_w(0).items_center()
+          .child(div().flex_1().min_w(0).when(Boolean(report), (el) => el.child(report)))));
+  }
+
+  // Every live task-local role gets a tab automatically. The driver stays in the fixed
+  // Terminal block; this only creates/focuses helper tabs and never steals the view.
+  syncAgentTabs(cx) {
+    const target = ticket()?.target;
+    if (!target?.ref) return;
+    const agents = taskAgents(target, terminals());
+    for (const agent of agents) {
+      const existing = panes().find((pane) => pane.terminal === agent.address && pane.tab);
+      if (existing) {
+        if (this.agentTabs.get(agent.address) !== existing.tab) {
+          run("tab.rename", { id: existing.tab, name: roleTabName(agent, agents) });
+          this.agentTabs.set(agent.address, existing.tab);
+        }
+        continue;
+      }
+      // Once we opened a tab for this address, a closed tab means "park it": do not reopen
+      // automatically. The role button can still ask for it explicitly.
+      if (this.agentTabs.has(agent.address)) continue;
+      if (this.agentPending.has(agent.address)) continue;
+      this.agentPending.add(agent.address);
+      cx.spawn(async (cx) => {
+        const tab = await showAgentTab(agent, cx, false, roleTabName(agent, agents));
+        this.agentPending.delete(agent.address);
+        if (tab) this.agentTabs.set(agent.address, tab);
+        cx.notify();
+      });
+    }
   }
 
   head(t, cx) {
@@ -618,7 +630,7 @@ export default class Inbox extends View {
     if (target?.ref && this.artsKey !== artsKeyOf(target)) cx.timer.after(0, (cx) => { this.pollArts(cx); cx.notify(); });
     const live = isLive(target?.terminal);
     const active = find(layout(), BODY)?.active ?? ARTIFACTS;
-    // The worker ended while its terminal was up: back to its artifacts.
+    // The driver ended while its terminal was up: back to its artifacts.
     if (active === TERM && !live) cx.timer.after(0, () => showArtifacts());
     const shown = active === TERM && live ? "terminal" : "artifacts";
     const segs = [
@@ -627,7 +639,7 @@ export default class Inbox extends View {
     ];
     return root.child(v().id("collie-thread-head-rows").size_full().pt(8).pb(12).gap(12).border_b(1).border_color(t.border)
       .child(v().flex_none().gap(8)
-        .child(this.barRow(t, target))
+        .child(this.barRow(t, target, cx))
         .child(this.taskBlock(t, { decision, target, receipt })))
       .child(h().id("collie-thread-views").flex_none().px(EDGE).overflow_x_scroll()
         .child(segmented("collie-thread-mode", segs, shown, (pick, _e, cx) => {

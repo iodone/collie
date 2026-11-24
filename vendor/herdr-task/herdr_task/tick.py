@@ -1,5 +1,4 @@
-"""Tick: one pass over the tasks (start queued ones, finish merged ones, retry cut turns, hand a
-task whose CLI can't go on to its backup)."""
+"""Tick: start runnable todo tasks and recover live agents without doing delivery."""
 
 import fcntl
 import json
@@ -8,183 +7,57 @@ import secrets
 import subprocess
 import time
 
-from .base import Fail, git, guard, hc_json, now, PR_EVERY, run, SHELLS, STORE
-from .settings import machine_name, worker_argv
-from .agents import (
-    agent_log, agent_running, busy_again, detail, held_ask, last_question, live_agents, own_work, ready_turns, status_word,
-    task_status,
-)
+from .base import Fail, guard, hc_json, now, run, SHELLS, STORE
+from .settings import worker_argv
+from .agents import agent_log, agent_running, detail, held_ask, live_agents, status_word, task_status
 from .provider import NUDGE, provider_cut, provider_error, PROVIDER_WAITS
 from .sessions import find_lost_logs, refresh_sessions, session_of
-from .github import already_merged, finish, github, merged_here, pr_merged, pr_pending, pr_problem, pr_view, watch_main
 from .launch import default_space
 from .store import locate, read_list, Store, store_files
-from .queues import machine_hold, refresh_ext, running_count, set_hold, waiting_ext, waiting_for
+from .queues import machine_hold, pending_dependencies, running_count, set_hold
 from .archive import archive_pass
 from .browsers import browser_pass
 from .output import progress_clock, say
-from .commands import back_to_work, begin, merge_now, MERGE_FAILED
+from .commands import begin
 from .news import news_pass, typing
 from .takeover import cant_go_on, takeover
-from .ghnews import main_pass, pr_deliver, pr_news
 from .scheduler import SCHEDULER
 from .revive import revive_pass
 
 
-def at_work(s, t):
-    """Its agent is mid-turn (working, or asking): a task is never marked merged under it (SHEP-23);
-    a later tick looks again."""
-    return any(status_word(k) in ("working", "blocked") for k in live_agents(s.key(t)))
 
 
-def facts(s, t, report):
-    """A worktree task whose own work merged anywhere is done (once its agent is between turns); a
-    pull request's problems need the person."""
-    if t.get("pr"):
-        pr = t["pr"]
-        if now() - pr.get("checked", 0) < PR_EVERY:
-            return
-        pr["checked"] = now()
-        s.dirty = True
-        v = pr_view(t)
-        if not v:
-            return
-        if v.get("state") == "MERGED":
-            if at_work(s, t):
-                return
-            t["merged"] = True
-            watch_main(s, t, (v.get("mergeCommit") or {}).get("oid"))
-            finish(s, t)
-            report["done"].append(t["id"])
-            return
-        problem = pr_problem(v)
-        t["_pr_fresh"] = not problem and not pr_pending(v)
-        try:
-            pr_news(s, t, v, report)
-        except Exception as e:  # never stops the tick
-            report.setdefault("github_error", []).append(f"{s.ref(t)}: {e}")
-        # Kept up to date while it is back at work too (a fix pushed: the problem goes away), so its
-        # agent going quiet with the problem still there reads Needs you (on_it()).
-        if t["state"] in ("ready", "running") and problem != t.get("attention"):
-            if problem:
-                t["attention"], t["attention_at"] = problem, now()
-                report["attention"].append(t["id"])
-            elif t.get("attention", "").startswith(("Checks failing", "It conflicts", "The pull request was closed", MERGE_FAILED)):
-                t.pop("attention")
-    elif merged_here(s, t) and not at_work(s, t):
-        t["merged"] = True
-        finish(s, t)
-        report["done"].append(t["id"])
-    elif t.get("own") and not at_work(s, t) and now() - t.get("gh_checked", 0) >= PR_EVERY:
-        # SHEP-59: its pull request squash-merged without the task knowing (opened by its agent), or a
-        # Ready one whose work is already in its base: done, as ready would.
-        t["gh_checked"] = now()
-        s.dirty = True
-        gone = already_merged(s, t) if t["state"] == "ready" else squash_merged(s, t)
-        if gone is not None:
-            t["merged"] = True
-            if gone:
-                watch_main(s, t, (gone.get("mergeCommit") or {}).get("oid"))
-            finish(s, t)
-            report["done"].append(t["id"])
 
 
-def squash_merged(s, t):
-    """A Working task's branch whose pull request (opened by its agent) merged at its tip: that
-    pull request, recorded on the task, or None."""
-    repo = github(s)
-    found = pr_merged(t, repo) if repo else None
-    if not found or found.get("headRefOid") != (t.get("own") or t.get("head")):
-        return None
-    t["pr"] = {"number": found["number"], "url": found["url"], "repo": repo}
-    return {**t["pr"], "mergeCommit": found.get("mergeCommit")}
 
 
-def back_pass(s, t, report):
-    """A Ready task whose agent took up work again (a message from anyone in its chat) is Working
-    again until its next ready (busy_again()); its Assistant hears it (news: working-again)."""
-    live = live_agents(s.key(t))
-    # Cheap while nothing works: hc ls alone; its records in full (roles) only then.
-    if any(status_word(k) == "working" for k in live) and busy_again(t, [detail(k) for k in live]):
-        back_to_work(s, t, "its agent is at work again", auto=True)
-        report.setdefault("working_again", []).append(s.ref(t))
 
-
-def settle_back(s, t, report):
-    """A Ready task its agent's own turn took back to work (back_pass(): a message in its chat,
-    a background job's notice waking it) is Ready again once that turn ended with nothing new: its
-    branch where it said ready, nothing uncommitted, no question asked, no work of its own left
-    running (SHEP-133). Else it stays Working, and Needs you once its agent stays quiet."""
-    b = t.get("back") or {}
-    if t["state"] != "running" or not b.get("auto") or t.get("attention") or t.get("retry"):
-        return False
-    wt = t.get("worktree") if t.get("mode") == "worktree" else None
-    if not wt or not t.get("head") or not os.path.isdir(wt):
-        return False
-    live = [k for k in map(detail, live_agents(s.key(t))) if agent_running(k)]
-    if not live or any(status_word(k) not in ("idle", "done") for k in live):
-        return False
-    ok, head, _ = git(wt, "rev-parse", "HEAD")
-    if not ok or head != t["head"] or git(wt, "status", "--porcelain", "--untracked-files=no")[1]:
-        return False
-    if any(last_question(t, k.get("address")) for k in live) or own_work(t, live):
-        return False
-    t["state"], t["ready_turns"] = "ready", ready_turns(live)
-    if b.get("progress"):
-        t["progress"] = b["progress"]
-    else:
-        t.pop("progress", None)
-    t.pop("back", None)
-    s.dirty = True
-    report.setdefault("ready_again", []).append(s.ref(t))
-    return True
 
 
 def due_pass(s, report):
-    """Scheduled tasks whose time has come (SHEP-38), a time passed while the machine was off too, join
-    the queue in the order they were due: the queue below starts them (after their --after tasks,
-    when there's room), each once."""
+    """Mark due todo tasks as runnable without introducing another Task state."""
     for t in s.data["tasks"]:
-        if t["state"] == "scheduled" and (t.get("scheduled_for") or 0) <= now():
-            t["state"], t["queued_at"] = "queued", t.get("scheduled_for") or now()
+        if t["state"] == "todo" and t.get("scheduled_for") and t["scheduled_for"] <= now():
+            t["queued_at"] = t["scheduled_for"]
             t.pop("scheduled_for", None)
             s.dirty = True
             report.setdefault("due", []).append(s.ref(t))
 
 
 def tick_store(s, report):
-    """One folder's turn: Ready tasks back at work are Working again, merged tasks become done,
-    auto-merges go when they can, and queued tasks start while there's room."""
-    for t in s.data["tasks"]:
-        if t["state"] == "ready":
-            back_pass(s, t, report)
-        elif t["state"] == "running" and (t.get("back") or {}).get("auto"):
-            settle_back(s, t, report)
-        if t.get("worktree") and t["state"] in ("running", "ready"):
-            facts(s, t, report)
-            if t["state"] == "ready" and (t.get("pr") or {}).get("news"):
-                try:
-                    pr_deliver(s, t, report)
-                except Exception as e:  # never stops the tick
-                    report.setdefault("github_error", []).append(f"{s.ref(t)}: {e}")
-            if t["state"] == "ready" and t.get("auto_merge") and t.get("pr") and not t.get("attention") and t.get("_pr_fresh"):
-                if not merge_now(s, t):
-                    report["done"].append(t["id"])
-            t.pop("_pr_fresh", None)
+    """Start runnable todo tasks while there is room; ready changes require explicit start."""
     due_pass(s, report)
-    queued = sorted((t for t in s.data["tasks"] if t["state"] == "queued"), key=lambda t: t.get("queued_at") or 0)
-    n = running_count(s) if queued else 0
-    budget = [3]  # other machines asked this pass, at most
-    for t in queued:
-        waits = bool(waiting_for(s, t))
-        if not waits:
-            refresh_ext(s, t, budget=budget)
-            waits = bool(waiting_ext(t))
-        if waits or n >= s.max_running():
-            if t.pop("held", None):  # waits for something else now
+    runnable = sorted(
+        (t for t in s.data["tasks"] if t["state"] == "todo" and t.get("queued_at") and not t.get("scheduled_for")),
+        key=lambda t: t.get("queued_at") or 0,
+    )
+    count = running_count(s) if runnable else 0
+    budget = [3]
+    for t in runnable:
+        if pending_dependencies(s, t, budget) or count >= s.max_running():
+            if t.pop("held", None):
                 s.dirty = True
             continue
-        # Its machine too busy (HERD-40): it, and every one after it, waits with why.
         held = machine_hold()
         if (t.get("held") or None) != held:
             t["held"] = held
@@ -193,21 +66,16 @@ def tick_store(s, report):
             s.dirty = True
         if held:
             continue
-        q = t.get("queue") or {}
+        plan = t.get("queue") or {}
         try:
-            sp = q.get("space") or t.get("space") or default_space()
-            a = begin(s, t, q.get("argv") or worker_argv(s, t, sp), sp, q.get("parent"))
+            space = plan.get("space") or t.get("space") or default_space()
+            agent = begin(s, t, plan.get("argv") or worker_argv(s, t, space), space, plan.get("parent"))
         except Fail as e:
             t["attention"] = f"Couldn't start: {e}"
             s.dirty = True
             continue
-        n += 1
-        report["started"].append({"folder": s.loc["folder"], "id": t["id"], "ref": s.ref(t), "terminal": a["address"]})
-    if s.data.get("main_watch"):
-        try:
-            main_pass(s, report)
-        except Exception as e:  # never stops the tick
-            report["main_error"] = str(e)
+        count += 1
+        report["started"].append({"folder": s.loc["folder"], "id": t["id"], "ref": s.ref(t), "terminal": agent["address"]})
 
 
 def lost_log(t, a):
@@ -233,9 +101,9 @@ def lost_logs_pass(report, folder=None):
 
 # ---- Done tasks end their agents (as Shepherdr) -----------------------------------------------
 # A Done task's worker and reviewer terminals end (their shells too) once the final news went
-# and its agent is quiet; their sessions stay recorded on the task, so `resume` brings one back
-# (which makes it running again). Ready tasks keep theirs. Only terminals labelled with that
-# task's herdr.task key are touched. "ended_at" says a pass found nothing left of it.
+# and its agent is quiet; their sessions stay recorded on the task for history and crash recovery.
+# Ready tasks keep theirs. Only terminals labelled with that task's herdr.task key are touched.
+# "ended_at" says a pass found nothing left of it.
 
 DONE_GRACE_MS = 60000          # the done news and the agent's last words go first
 DONE_WORKING_MS = 15 * 60000   # an agent still working this long after Done ends anyway
@@ -452,8 +320,7 @@ def retry_pass(report):
 
 
 def cmd_tick(args):
-    """Starts queued tasks that can go now and finds merged ones. Cheap when nothing waits; one
-    at a time (a second tick while one runs does nothing)."""
+    """Run scheduler and recovery passes; never merge or complete a task."""
     os.makedirs(STORE, exist_ok=True)
     lock = open(os.path.join(STORE, ".tick.lock"), "a")
     try:
@@ -483,8 +350,9 @@ def cmd_tick(args):
     for p in store_files(args.folder):
         d = read_list(p)
         tasks = (d or {}).get("tasks") or []
-        if not d or not os.path.isdir(d.get("folder") or "") or not (d.get("main_watch") or any(
-                t.get("state") in ("queued", "scheduled", "ready") or (t.get("worktree") and t.get("state") == "running") for t in tasks)):
+        if not d or not os.path.isdir(d.get("folder") or "") or not any(
+                t.get("state") == "ready" or (t.get("state") == "todo" and (t.get("scheduled_for") or t.get("queued_at")))
+                for t in tasks):
             continue
         with Store(locate(d["folder"])) as s:
             tick_store(s, report)

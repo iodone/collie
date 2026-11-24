@@ -26,13 +26,14 @@ import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, TextareaState, Textarea, Scrollbar, VirtualListScrollHandle, TextView, v_virtual_list, InputState, Input } from "gpui-base";
 import { focused, props, run, theme, home, hc, exec, shared, setShared, watchFolder, window, settings, playSound, notify, appHome, readTextFile, writeTextFile, nextCommand, openOverlay, knownAgents, machines } from "herdr";
 import { agents, panes, terminals, spaces, inRender } from "./live.js";
+import { ensureTerminalTab } from "./lib/terminal-tab.js";
 import * as fs from "fs/promises";
 import { FIND, LOG, Conversation, records, resultText, summary, excerpt, names, pilotLine } from "./core/chat-log.js";
 import { BgJobs } from "./core/bg-jobs.js";
 import { ChatReader } from "./core/chat-reader.js";
 import { words, howAnswered, codexOnScreen, codexSteps } from "./core/asks.js";
 // The rows' words and rules the web app's chat draws by too (core/chat-view.js).
-import { WORDS, clock, bgGroups, subagentsOf, subagentWord, senderName, briefLabel, firstUser, firstKeys, literal, fromName, sentTo, selfName, initialOf, newsWords, resolveArtifacts, unsigned, ownWords, fitThumbs, bandActs, bandOrder, imagesLine, questionsBelow, notSent, published, artifactLine, elapsed, reportMsg, doingWords, LOST, lostMessage, shellWord, sessionStarted, sessionFailed } from "./core/chat-view.js";
+import { WORDS, clock, bgGroups, subagentsOf, subagentWord, senderName, briefLabel, firstUser, firstKeys, literal, fromName, sentTo, selfName, initialOf, newsWords, unsigned, ownWords, fitThumbs, bandActs, bandOrder, imagesLine, questionsBelow, notSent, elapsed, reportMsg, doingWords, LOST, lostMessage, shellWord, sessionStarted, sessionFailed } from "./core/chat-view.js";
 // Sending the person's words, as the web app does (core/send.js).
 import { refusal, taskTag, messageBody, replyInstead, steerNow, reactionLine, mentionedIn, sendTyped, SETTLE } from "./core/send.js";
 // hc whose send goes as the person, with no caller: never "Another agent" on another machine (SHEP-3, core/person.js).
@@ -40,7 +41,7 @@ import { asPerson } from "./core/person.js";
 import { AskCards, linkCtl } from "./cards.js";
 import * as strips from "./strips.js";
 import { button, red, green, amber, H, RADIUS, TEXT, toast, toastWho, plainError } from "./ui.js";
-import { openViewer, noteChatArea } from "./artview.js";
+import { noteChatArea } from "./artview.js";
 import { KEY_HOLDER, holdKeys, keysElsewhere } from "./keyholder.js";
 import { SecretCards } from "./secret-card.js";
 import * as secrets from "./secrets.js";
@@ -58,7 +59,7 @@ import { ScreenWatch, screenStrips, openCard, cardsOf, starting, cliOf } from ".
 import { dayLabel, dayOf } from "./days.js";
 
 // Messages a page of history holds: the newest page first, earlier ones as the person scrolls up.
-const PAGE = 200;
+const PAGE = 80;
 // At most this many log records (and opened tool outputs) kept in memory per chat: past it, the
 // oldest go (scrolling to the top reads them again).
 const KEEP = 2000;
@@ -147,7 +148,7 @@ const PILL = 46, PILL_H = 20, PILL_GAP = 4, PILL_EDGE = 6;
 // A task's id as shown and typed: collie-task's PREFIX-n (`ref`, e.g. HAT-1), else #n.
 const taskRef = (x) => (x?.ref ? String(x.ref) : `#${x?.id}`);
 // collie-task's status, as core/mentions.js TASK_RANK orders tasks
-const SECTION_DOT = { needs: "need", need: "need", working: "work", work: "work", merging: "merging", ready: "ready", queued: "queued", scheduled: "scheduled", todo: "todo", done: "done" };
+const SECTION_DOT = { needs: "need", need: "need", working: "work", work: "work", ready: "ready", todo: "todo", done: "done" };
 // Task chips under a message: this wide, this far apart.
 const TASK = 170, TASK_GAP = 6;
 // The picker's Frequently used before there is any history.
@@ -238,6 +239,7 @@ export default class Chat extends View {
     this.scroll = VirtualListScrollHandle.new();
     // Its placeholder is drawn by composer(): it changes while a card asks ("Reply instead…").
     this.box = TextareaState.new({ placeholder: "" });
+    cx.timer.after(1200, (cx) => this.autoHelper(cx));
     this.box.set_rows(1);
     // Ctrl+Enter (the textarea's secondary submit): held until the agent is free.
     this.box.on("submit", (e, cx) => { if (!e?.shift) this.enter(cx, Boolean(e?.secondary)); });
@@ -750,7 +752,7 @@ export default class Chat extends View {
   workerAskEnded(ask, how) {
     this.loadAskEnds();
     if (this.askEnds.some((e) => e.id === ask.id)) return;
-    this.askEnds = [...this.askEnds, { id: ask.id, title: `${ask.ref} · ${ask.words.title}`, how, at: this.afterNews(ask.ref, askAt(ask.id)) }].slice(-20);
+    this.askEnds = [...this.askEnds, { id: ask.id, title: `${ask.ref} · ${ask.words.title}`, how, at: askAt(ask.id) }].slice(-20);
     try { localStorage.setItem(`askends:${this.addr}`, JSON.stringify(this.askEnds)); } catch {}
   }
 
@@ -759,7 +761,7 @@ export default class Chat extends View {
     this.loadAskEnds();
     const id = `secret:${ask.address}:${ask.name}:${Date.now()}`;
     const ref = this.workerTasks().get(ask.address)?.ref;
-    const at = ref ? this.afterNews(ref, this.seenAt(`s:${ask.address}|${ask.name}`)) : this.seenAt(`s:${ask.address}|${ask.name}`);
+    const at = this.seenAt(`s:${ask.address}|${ask.name}`);
     this.askEnds = [...this.askEnds, { id, title: `${ref ? `${ref} · ` : ""}Secret: ${ask.name}`, how, at }].slice(-20);
     try { localStorage.setItem(`askends:${this.addr}`, JSON.stringify(this.askEnds)); } catch {}
   }
@@ -772,13 +774,6 @@ export default class Chat extends View {
     if (known) return known;
     this.seenNew = { ...(this.seenNew ?? {}), [key]: Date.now() };
     return this.seenNew[key];
-  }
-
-  // A worker's card in the Assistant's chat goes just under its task's needs-you line (the news
-  // can come a little after the ask): the moment of that line, when there is one near `at`.
-  afterNews(ref, at) {
-    const near = (this.needsAt?.get(ref) ?? []).filter((n) => n >= at - 300000 && n <= at + 1800000);
-    return near.length ? Math.max(at, Math.max(...near) + 1) : at;
   }
 
   // The cards waiting in this chat, each with its moment: this agent's own (an ask, a secret,
@@ -800,16 +795,16 @@ export default class Chat extends View {
     const open = (id) => [linkCtl(`wask-open-${id}`, "Open chat", () => openInbox())];
     for (const a of this.wasks ?? []) {
       if (a.secret) {
-        if (!a.secret.kept) out.push({ id: `card:${a.id}`, at: this.afterNews(a.ref, this.seenAt(`s:${a.secret.address}|${a.secret.name}`)),
+        if (!a.secret.kept) out.push({ id: `card:${a.id}`, at: this.seenAt(`s:${a.secret.address}|${a.secret.name}`),
           strips: this.secretCards.strips(a.secret, { who: a.ref, links: open(a.id) }) });
-      } else out.push({ id: `card:${a.id}`, at: this.afterNews(a.ref, askAt(a.id)), owner: this.workerCards, ask: a,
+      } else out.push({ id: `card:${a.id}`, at: askAt(a.id), owner: this.workerCards, ask: a,
         strips: this.workerCards.strips(a, { who: a.ref, links: open(a.id), terminal: false, chatHint: "Or write to it in its own chat." }) });
     }
     for (const [addr, x] of this.workerTasks()) {
       // Its secret asks' moments, noted even while a question of its hides them (seenAt()).
       for (const s of this.secretCards.items(addr)) if (!s.kept) this.seenAt(`s:${s.address}|${s.name}`);
       const card = openCard(addr);
-      if (card) out.push({ id: `card:${card.id}`, at: this.afterNews(x.ref, card.opened), strips: screenStrips(card, { who: x.ref, links: open(card.id),
+      if (card) out.push({ id: `card:${card.id}`, at: card.opened, strips: screenStrips(card, { who: x.ref, links: open(card.id),
         busy: this.screenBusy.has(card.id), error: this.screenErr.get(card.id), press: (i, cx) => this.pressScreen(card, i, cx) }) });
     }
     return out;
@@ -934,7 +929,7 @@ export default class Chat extends View {
     const named = /^([a-z][a-z0-9]*)-(\d+)(?:-|$)/.exec(t.name ?? "");
     const ref = this.workerTasks().get(t.address)?.ref ?? (t.labels?.["herdr.task"] && named ? `${named[1].toUpperCase()}-${named[2]}` : null);
     // An Assistant's role is in its first message (its template): it gets that again.
-    const template = assistant(t) && !t.address.includes("/") ? await readTextFile(`${home()}/.config/herdr-core/templates/collie-coordinator.md`).catch(() => null) : null;
+    const template = assistant(t) && !t.address.includes("/") ? await readTextFile(`${home()}/.config/herdr-core/templates/coordinator.md`).catch(() => null) : null;
     const msg = lostMessage({ ref, template });
     const mine = t.address === this.addr;
     if (mine) { this.note = { id: `note-${Date.now()}`, text: WORDS.sessionGone }; cx.notify(); }
@@ -1449,7 +1444,7 @@ export default class Chat extends View {
     // the exact one (its folder when not this one's).
     const at = mentions.typingTask(v);
     if (at !== null) {
-      const tk = mentions.matchTasks(this.mentionableTasks().map((x) => ({ ref: taskRef(x), title: x.title, status: SECTION_DOT[x.status ?? x.state] ?? x.state, at: x.ready_at ?? x.started ?? 0, x })), at, 8)
+      const tk = mentions.matchTasks(this.mentionableTasks().map((x) => ({ ref: taskRef(x), title: x.title, status: SECTION_DOT[x.status ?? x.state] ?? x.state, at: x.ready_at ?? x.started_at ?? 0, x })), at, 8)
         .map(({ x }) => ({ task: x, name: `@${taskRef(x)}`, about: x.title, state: x.status_text ?? x.state, key: `task-${x.folder}-${taskRef(x)}` }));
       if (tk.length) return tk;
     }
@@ -1532,9 +1527,8 @@ export default class Chat extends View {
     const space = spaces().find((x) => x.id === (props()?.space ?? rec?.space));
     const machine = space?.machine ?? null;
     const folder = props()?.folder ?? rec?.folder ?? space?.folder ?? null;
-    // Assistants start from the "assistant" template (chats saved before it was renamed say "coordinator").
-    const named = props()?.template ?? this.role;
-    const template = named === "coordinator" ? "assistant" : named;
+    // The Coordinator chat starts from the same system role prompt the service uses.
+    const template = props()?.template ?? this.role ?? "coordinator";
     // No message (the header's Terminal): the template alone.
     const reply = msg?.quote ? `<hc reply-to="${excerpt(msg.quote.text, 80)}"/>\n` : "";
     // Files here go as their paths; on another machine they follow once it runs (hc put needs it).
@@ -1574,7 +1568,12 @@ export default class Chat extends View {
           : btoa(unescape(encodeURIComponent(String(a))));
         const src = (await exec("sh", ["-c", TEMPLATE + 'cat "$dir/$1.md"', "x", template], on).catch(() => null))?.stdout ?? "";
         const head = /^---\n([\s\S]*?)\n---\n?/.exec(src);
-        const body = head ? src.slice(head[0].length) : src;
+        const rawBody = head ? src.slice(head[0].length) : src;
+        // The CLI skill is part of the Coordinator's runtime contract. Load it here, not by
+        // asking the agent to open a path from its prompt.
+        const skillSrc = (await exec("sh", ["-c", 'cat "$HOME/.config/collie/skills/cli/SKILL.md"'], on).catch(() => null))?.stdout ?? "";
+        const skillBody = skillSrc.replace(/^---\n[\s\S]*?\n---\n?/, "").trim();
+        const body = [rawBody.trim(), skillBody].filter(Boolean).join("\n\n");
         const own = /^command:[ \t]*(.+)$/m.exec(head?.[1] ?? "")?.[1]?.trim();
         const cmd0 = st?.agent && there ? agent.argvFor(st, { agent: null, argv: [] }).argv.map(q).join(" ") : own;
         let cmd = cmd0;
@@ -1880,23 +1879,20 @@ export default class Chat extends View {
     const space = this.assistant();
     const inline = new Map(), extra = [];
     if (!space) return { inline, extra };
-    const sig = [space, this.spaceTasks, this.spaceDecisions, items, items.length, items[items.length - 1]?.id, this.start,
-      (this.wasks ?? []).map((a) => a.ref).join(",")];
+    const sig = [space, this.spaceTasks, this.spaceDecisions, items, items.length, items[items.length - 1]?.id, this.start];
     if (this.newsMemo?.sig.every((v, i) => v === sig[i])) return this.newsMemo.out;
     const tasks = new Map();
     for (const x of this.spaceTasks ?? []) if ((x.space ?? x.queue?.space) === space && x.ref && !tasks.has(x.ref)) tasks.set(x.ref, x);
-    // A ticket is the Ledger decision; a task's task_ref is `<folder-slug>#<id>`.
-    const suffix = (v) => { const s = String(v ?? ""); const i = s.lastIndexOf("#"); return i >= 0 ? s.slice(i + 1) : s; };
+    // A ticket is the Ledger decision, linked by the task's canonical ref.
     const decisions = new Map();
     for (const d of this.spaceDecisions ?? []) {
       if (d.space !== space && !(d.space_candidates ?? []).includes(space)) continue;
-      const key = suffix(d.run?.task_ref);
-      if (key) decisions.set(key, d);
+      if (d.run?.task_ref) decisions.set(d.run.task_ref, d);
     }
     const all = [];
     for (const [ref, x] of tasks) {
-      const d = decisions.get(String(x.id)) ?? decisions.get(suffix(ref)) ?? null;
-      if (Number.isFinite(x.started)) all.push({ id: `ticket:${ref}:started:${x.started}`, at: x.started, ref, event: "started", text: "", made: true });
+      const d = decisions.get(ref) ?? null;
+      if (Number.isFinite(x.started_at)) all.push({ id: `ticket:${ref}:started:${x.started_at}`, at: x.started_at, ref, event: "started", text: "", made: true });
       if (Number.isFinite(x.ready_at)) all.push({ id: `ticket:${ref}:ready:${x.ready_at}`, at: x.ready_at, ref, event: "ready", text: "", made: true });
       // Done is a ticket transition, not a task timestamp: only a settled Ledger decision makes it.
       if (d?.state === "settled") {
@@ -1905,17 +1901,12 @@ export default class Chat extends View {
       }
     }
     all.sort((a, b) => a.at - b.at);
-    const last = new Map();
-    for (const e of all) last.set(e.ref, e);
-    this.needsAt = new Map();
     const order = [], ordered = new Set();
     for (const e of all) {
       const x = tasks.get(e.ref);
       if (!ordered.has(e.ref)) { ordered.add(e.ref); order.push(e.ref); }
-      const asks = (this.wasks ?? []).some((a) => a.ref === e.ref);
-      const live = last.get(e.ref) === e && (e.event === "needs-you" || e.event === "failed") && (x?.status === "needs" || asks);
       const row = { kind: "tasknews", id: e.id, ref: e.ref, task: x ?? null, taskId: x?.id ?? null, folder: x?.folder ?? null, title: x?.title ?? "",
-        ...newsWords(e, x), live, asks: live && asks };
+        ...newsWords(e, x) };
       extra.push({ at: e.at, row });
     }
     this.taskOrder = order;
@@ -2299,7 +2290,7 @@ export default class Chat extends View {
     this.resuming = true;
     cx.spawn(async (cx) => {
       try {
-        const r = await exec(`${appHome()}/bin/collie-task`, [...(k.machine ? ["--on", k.machine] : []), "resume", String(k.id), "--json", "--folder", k.folder]);
+        const r = await exec(`${appHome()}/bin/collie-task`, [...(k.machine ? ["--on", k.machine] : []), "start", String(k.id), "--json", "--folder", k.folder]);
         let out = null;
         try { out = JSON.parse(r.stdout || "null"); } catch {}
         if (r.code !== 0 || !out?.terminal) throw new Error(out?.error || r.stderr?.trim().split("\n").pop() || "Its agent didn't start.");
@@ -2356,14 +2347,13 @@ export default class Chat extends View {
     else if (this.start) out.push({ kind: "loading", id: "loading" });
     const items = this.conv?.items ?? [];
     const working = this.status() === "working";
-    const arts = this.resolveArts(items);
     // The space's tasks' news lines (newsLines()): Herdr's in place, the rest each before the
     // first thing said after its moment.
     const news = this.newsLines(items);
     this.loadAskEnds();
     // Start screens answered or gone (screens.js): this agent's, and an Assistant's workers'.
     const screenEnds = [[this.addr, null], ...this.workerTasks()].flatMap(([addr, x]) => (addr ? cardsOf(addr) : [])
-      .filter((c) => c.state !== "open").map((c) => ({ at: x?.ref ? this.afterNews(x.ref, c.opened) : c.opened,
+      .filter((c) => c.state !== "open").map((c) => ({ at: c.opened,
         row: { kind: "askend", id: `se:${c.id}`, text: `${x?.ref ? `${x.ref} · ` : ""}${c.cli}'s start screen · ${c.how}` } })));
     // Cards waiting on the person, in the timeline at their moment (DECISIONS, Chat): this
     // agent's own question in place of its "Asked you" line, the rest by time.
@@ -2400,14 +2390,6 @@ export default class Chat extends View {
       if (x.kind === "sent") {
         if (x.text) out.push({ kind: "brief", id: x.id, label: `Message to ${sentTo(x, (a) => this.sender(a))}`, text: unsigned(x.text), at: x.at,
           who: selfName({ assistant: this.role === "coordinator" || assistant(this.t), task: this.taskRef, kind: this.kind }), to: sentTo(x, (a) => this.sender(a)) });
-        continue;
-      }
-      if (x.kind === "artifact") {
-        // A published artifact: its card (the latest publish of it; earlier ones a line), or a
-        // quiet line while the registry doesn't list it yet.
-        const r = arts.get(x.id);
-        if (r) out.push({ kind: "artifact", id: x.id, art: r.id, title: r.title, text: r.title, version: r.version, v: r.v, line: !r.latest });
-        else if (Date.now() - (x.at ?? 0) < 180000) out.push({ kind: "artifact", id: x.id, pending: true, text: "" });
         continue;
       }
       // This chat started the agent from a template with the person's words as its task: the
@@ -2541,7 +2523,7 @@ export default class Chat extends View {
   // (tools, "Message from …", artifact lines) sitting tight together, a card. A band is always
   // ACT_ROW: BAND_IN of air, then the actions' row at its foot, shown or not.
   spaced(rows) {
-    const quiet = (r) => r.kind === "tools" || r.kind === "brief" || r.kind === "askend" || r.kind === "pilot" || r.kind === "tasknews" || (r.kind === "artifact" && (r.line || r.pending));
+    const quiet = (r) => r.kind === "tools" || r.kind === "brief" || r.kind === "askend" || r.kind === "pilot" || r.kind === "tasknews";
     const of = (r) => r.blk ?? (quiet(r) ? "quiet" : r.id);
     // How far a row's words sit inside its edge once its outer room is gone (a reply line's
     // small text sits in an 18 px line; it only ever starts a block).
@@ -2608,7 +2590,7 @@ export default class Chat extends View {
     const found = q && String(x.text ?? x.code ?? "").toLowerCase().includes(q.toLowerCase()) ? `|f:${q}` : "";
     const open = (x.kind === "tools" || x.kind === "brief") && this.opened.has(x.id);
     const shown = open && x.steps ? x.steps.filter((s) => this.results.get(s.id) != null).length : 0;
-    return `${x.id}|${x.kind}${x.closed ? `.${x.closed}` : ""}|${open ? `o${x.steps?.length ?? 1}.${shown}` : ""}|${x.text?.length ?? x.code?.length ?? 0}|${x.from ? 1 : 0}${x.failed ? 1 : 0}${x.late ? 1 : 0}${x.waiting ? 1 : 0}${x.images ? 1 : 0}${x.files?.length ?? 0}|${x.paths?.length ?? 0}${x.paths?.every((p) => this.views[p]) ? "v" : ""}|${(x.pills ?? []).map((p) => p.emoji + (p.you ? 1 : 0) + (p.agent ? 1 : 0)).join("")}|${x.bar ? "b" : ""}${x.kind === "artifact" ? `|a${x.version ?? ""}${x.line ? "l" : ""}${x.pending ? "p" : ""}` : ""}${x.kind === "cardstrip" ? `|cs${x.sig}${x.first ? "F" : ""}${x.last ? "L" : ""}` : ""}|${x.clip ? `c${x.clip}` : ""}${x.open ? "o" : ""}${x.kind === "day" ? x.text : ""}|${x.top0 ? "T" : ""}${x.bot0 ? "B" : ""}${x.h ?? ""}${found}`;
+    return `${x.id}|${x.kind}${x.closed ? `.${x.closed}` : ""}|${open ? `o${x.steps?.length ?? 1}.${shown}` : ""}|${x.text?.length ?? x.code?.length ?? 0}|${x.from ? 1 : 0}${x.failed ? 1 : 0}${x.late ? 1 : 0}${x.waiting ? 1 : 0}${x.images ? 1 : 0}${x.files?.length ?? 0}|${x.paths?.length ?? 0}${x.paths?.every((p) => this.views[p]) ? "v" : ""}|${(x.pills ?? []).map((p) => p.emoji + (p.you ? 1 : 0) + (p.agent ? 1 : 0)).join("")}|${x.bar ? "b" : ""}${x.kind === "cardstrip" ? `|cs${x.sig}${x.first ? "F" : ""}${x.last ? "L" : ""}` : ""}|${x.clip ? `c${x.clip}` : ""}${x.open ? "o" : ""}${x.kind === "day" ? x.text : ""}|${x.top0 ? "T" : ""}${x.bot0 ? "B" : ""}${x.h ?? ""}${found}`;
   }
 
   // A row's height before it is measured: bands and gaps are as tall as spaced() made them.
@@ -2821,22 +2803,6 @@ export default class Chat extends View {
         return col(h_flex().w_full().py(QUIET_PY).gap(6).items_center().text_size(12).text_color(t.dim)
           .child(svg("mods/collie-chat/check.svg").size(12).flex_none())
           .child(div().min_w(0).truncate().child(x.text)), 18, 0);
-      case "artifact": {
-        const icon = (n) => svg("mods/collie-artifacts/artifacts.svg").size(n).flex_none();
-        // A "Published" line opens its artifact (clickRow): the pointer and a hover say so.
-        if (x.pending || x.line) return col(h_flex().w_full().py(QUIET_PY).gap(6).items_center().text_size(12).text_color(t.dim).child(icon(12))
-          .when(Boolean(x.art) && !x.pending, (el) => el.rounded(8).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.muted)))
-          .child(div().min_w(0).truncate().child(x.pending ? WORDS.publishing : published(x.title, x.v))), 18, 0);
-        // The whole card opens it (rows take no handlers; clickRow).
-        return pad(h_flex().w_full().max_w(420).gap(10).items_center().px(10).py(8).rounded(10).cursor_pointer()
-          .bg(t.surface).border_1().border_color(t.border).hover((s) => s.bg(t.hover))
-          .child(div().size(32).flex_none().flex().items_center().justify_center().rounded(8).bg(t.raised).text_color(t.muted).child(icon(16)))
-          .child(v_flex().flex_1().min_w(0).gap(1)
-            .child(div().font_medium().text_color(t.foreground).truncate().child(x.title))
-            .child(div().text_size(12).text_color(t.dim).child(artifactLine(x.version))))
-          .child(h_flex().h(28).px(10).flex_none().items_center().rounded(7).border_1().border_color(t.input).bg(t.background)
-            .text_size(12.5).font_medium().text_color(t.foreground).child("Open")));
-      }
       case "tasknews": {
         // A task's news line (newsLines()): its mark, the id, what happened, then its words, dim;
         // a needs-you line still waiting in red. The whole line opens it in the Inbox (clickRow()).
@@ -2846,7 +2812,7 @@ export default class Chat extends View {
           .text_size(TEXT.label).text_color(t.dim).hover((s) => s.bg(t.hover))
           .child(h_flex().w(14).h(14).flex_none().items_center().justify_center().child(mark))
           .child(div().flex_none().font_medium().text_color(t.muted).child(x.ref))
-          .child(div().flex_none().text_color(x.live ? red() : t.muted).child(x.what))
+          .child(div().flex_none().text_color(t.muted).child(x.what))
           .when(Boolean(x.text), (el) => el.child(div().flex_none().child("·")).child(div().flex_1().min_w(0).truncate().child(x.text)))
           .when(!x.text, (el) => el.child(div().flex_1())), 12, 0);
       }
@@ -2896,12 +2862,7 @@ export default class Chat extends View {
     } else if (row.kind === "codehead") this.copy(row.code, row.id, cx);
     else if (row.kind === "queued" && this.kind === "claude" && !this.steering) this.sendQueuedNow(cx);
     else if (row.kind === "pending" && row.failed) { const p = this.pending.find((x) => x.id === row.id); if (p?.msg) this.retry(p, cx); }
-    else if (row.kind === "artifact" && row.art) this.openArtifact(row);
-    else if (row.kind === "tasknews") {
-      // Needs you with its card open just under it: the card takes the keys.
-      if (row.asks) { const a = (this.wasks ?? []).find((w) => w.ref === row.ref && !w.secret); if (a) this.workerCards.pressed(a); }
-      else this.openTask(row.taskId, row.task);
-    }
+    else if (row.kind === "tasknews") this.openTask(row.taskId, row.task);
     else if (row.kind === "cardstrip") {
       // Which of the strip's controls the press was on (rows take no handlers: strips.js hit()).
       const c = strips.hit(row.s, this.press?.x, strips.innerOf(this.edges()), this.cardW);
@@ -3179,15 +3140,23 @@ export default class Chat extends View {
         })()));
   }
 
+  // The persistent ingress Helper is part of the Coordinator, not a hidden process. Once it
+  // exists, give it a real pane (a kept terminal can run without one); a person can still park it.
+  autoHelper(cx) {
+    const live = terminals().find((k) => k.state === "live" && k.labels?.["herdr.role"] === "helper");
+    if (live && !panes().some((p) => p.terminal === live.address)) {
+      this.openHelperTab({ address: live.address, role: "helper", label: "Helper" }, cx);
+    }
+    cx.timer.after(5000, (cx) => this.autoHelper(cx));
+  }
+
   // Open the persistent ingress Helper in its own tab. It is a real terminal; closing that tab parks it
   // instead of killing it (collie-tabs closeTab), so the session and its queue survive.
   openHelperTab(h, cx) {
     const now = Date.now();
     if (now - (this.helperOpenAt ?? 0) < 600) return;
     this.helperOpenAt = now;
-    toast({ title: "Helper", body: "Opening the Helper tab…", level: "info" });
     let live = terminals().find((x) => x.address === h.address && x.state === "live");
-    // A finished row outlives its Helper; bind it to the live Helper in this space.
     if (!live && h.role === "helper") {
       const old = terminals().find((x) => x.address === h.address);
       const space = old?.labels?.["herdr.job.space"] ?? old?.labels?.["herdr.space"];
@@ -3195,30 +3164,10 @@ export default class Chat extends View {
         && (x.labels?.["herdr.job.space"] === space || x.labels?.["herdr.space"] === space)) ?? null;
     }
     if (!live) { toast({ title: "Helper isn't running", body: "Start the Coordinator first.", level: "info" }); return; }
-    const tabExists = (id) => Boolean(id) && spaces().some((sp) => sp.tabs.some((t) => t.id === id));
-    const existing = panes().find((p) => p.terminal === live.address);
-    // A pane record can outlive its tab; never select/rename a dead tab id.
-    if (existing && tabExists(existing.tab)) {
-      run("tab.rename", { id: existing.tab, name: "Helper" });
-      run("tab.select", { id: existing.tab });
-      toast({ title: "Helper", body: "Focused the Helper tab.", level: "info" });
-      return;
-    }
+    toast({ title: "Helper", body: "Opening the Helper tab…", level: "info" });
     cx.spawn(async (cx) => {
       try {
-        const r = await exec("herdr-app", ["do", "terminal.keep", "--terminal", live.address]);
-        let out = {};
-        try { out = JSON.parse(r.stdout || "{}"); } catch {}
-        let tab = out.tab;
-        // terminal.keep can return before the tab is in spaces(); wait, then trust the pane's tab.
-        for (let i = 0; (i < 20) && !tabExists(tab); i++) {
-          const p = panes().find((x) => x.terminal === live.address && tabExists(x.tab));
-          if (p) { tab = p.tab; break; }
-          await cx.sleep(50);
-        }
-        if (!tabExists(tab)) throw new Error(out.error || r.stderr || "Herdr didn't create a Helper tab");
-        run("tab.rename", { id: tab, name: "Helper" });
-        run("tab.select", { id: tab });
+        await ensureTerminalTab({ terminal: live.address, name: "Helper", focus: true, cx });
         toast({ title: "Helper", body: "Opened the Helper tab.", level: "info" });
       } catch (e) {
         toast({ title: "Helper didn't open", body: String(e?.message ?? e), level: "error" });
@@ -3226,7 +3175,6 @@ export default class Chat extends View {
     });
     cx.notify();
   }
-
   // A subagent's last two messages, from its own session log (core/chat-reader.js, as the web's service reads it).
   subagentWords(addr, cx) {
     this.subSaid ??= new Map(); this.subPulling ??= new Set(); this.subAt ??= new Map(); this.subReaders ??= new Map();
@@ -3586,41 +3534,6 @@ export default class Chat extends View {
   }
 
   // This chat's own pane: the agent's core label herdr.chat (set by the pane-chat switch).
-  // ---- artifacts (mods/collie-artifacts) -----------------------------------------------------------
-
-  // Which artifact each publish in the conversation made: the first version this agent
-  // published from a few seconds before the call to five minutes after, not already taken.
-  // Map item id -> { id, title, version (its latest), v (this publish's), latest }.
-  resolveArts(items) {
-    // core/chat-view.js: the web app's chat finds them the same way.
-    return resolveArtifacts(items, this.arts, String(this.addr ?? "").split("/").pop());
-  }
-
-  // Every artifact in Collie's store on the agent's machine (one registry per folder): read
-  // when the conversation has a publish, again every few seconds while one isn't listed yet.
-  loadArts(cx) {
-    if (this.artsLoading || Date.now() - (this.artsAt ?? 0) < 3000) return;
-    this.artsLoading = true;
-    cx.spawn(async (cx) => {
-      try {
-        const bin = `${appHome()}/mods/collie-artifacts/bin/collie-artifact`;
-        const r = await exec(bin, ["list", "--all", "--json"], this.machine ? { on: this.machine } : {});
-        const out = JSON.parse((r.stdout || "").trim().split("\n").pop() || "{}");
-        this.arts = Array.isArray(out.artifacts) ? out.artifacts : [];
-      } catch {}
-      this.artsAt = Date.now();
-      this.artsLoading = false;
-      cx.notify();
-    });
-  }
-
-  // An artifact over this chat pane, exactly like an opened image: the image viewer's shell (the
-  // person's decision; Ctrl+K opens the same, artview.js). A "Published X v2" line opens v2; the
-  // card, the latest.
-  openArtifact(row) {
-    openViewer({ id: row.art, title: row.title, version: row.line && row.v ? row.v : row.version, latest: row.version, machine: this.machine ?? null }, this.paneArea());
-  }
-
   myPane() {
     if (!this.addr && this.role) return this.slotPane();
     // A thread's pane is the one its opener recorded for this agent.
@@ -3752,11 +3665,9 @@ export default class Chat extends View {
     this.sizeBox();
     // An Assistant's chat: its tasks' workers' asks, before the rows (their live rows say so).
     this.wasks = this.workerAsks(cx);
-    // Secrets asked for: this agent's, and its workers' (shown with their asks); another machine's
-    // agents using one are answered from here (secrets.js serveRemote()).
+    // Secrets asked for: this agent's, and its workers' (shown with their asks).
     this.sasks = this.addr ? this.secretCards.items(this.addr) : [];
     this.secretCards.prepare([...this.sasks, ...this.wasks.filter((a) => a.secret).map((a) => a.secret)], cx);
-    secrets.serveRemote(terminals());
     if (this.focusSecret) {
       const ask = this.sasks.find((a) => !a.kept) ?? this.wasks.find((a) => a.secret)?.secret;
       if (Date.now() - this.focusSecret > 5000) this.focusSecret = null;
@@ -3771,11 +3682,6 @@ export default class Chat extends View {
         this.seenNew = null; this.seenFlush = false;
         setShared("collie-chat.cardseen", Object.fromEntries(Object.entries(all).sort((a, b) => b[1] - a[1]).slice(0, 60)));
       });
-    }
-    // A publish the registry doesn't list yet: read it again in a few seconds.
-    if (rows.some((r) => r.kind === "artifact" && r.pending) || (this.conv?.items ?? []).some((x) => x.kind === "artifact") && !this.arts) {
-      this.loadArts(cx);
-      if (!this.artsTick) { this.artsTick = true; cx.timer.after(3500, (cx) => { this.artsTick = false; cx.notify(); }); }
     }
     // Find: the current match's row comes into view once per step.
     const found = this.finding ? this.findMatches(rows) : [];

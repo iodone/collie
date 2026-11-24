@@ -46,44 +46,43 @@ export const STAGE_WORD = {
 export const ticketNeed = (decision) =>
   decision?.receipt_ref || decision?.card?.kind === "accept" ? "ready" : "needs";
 
-// Herdr-task's own states stay below Work: queue/scheduled are Todo's reasons.
+// Queue dependencies are metadata on a todo Task, never another Task state.
 export function todoReason(target, decision) {
-  const state = String(target?.state ?? "");
-  if (!state) return decision?.why ?? null;
-  if (state === "scheduled") return "scheduled";
-  if (state === "queued") {
-    const after = [...new Set([
-      ...(Array.isArray(target.after) ? target.after : []),
-      ...(Array.isArray(target.after_ext) ? target.after_ext : []),
-      ...(Array.isArray(target.waiting_for) ? target.waiting_for : []),
-      ...(Array.isArray(target.waiting_ext) ? target.waiting_ext : []),
-    ])];
-    return after.length ? `after ${after.join(", ")}` : "waiting for a slot";
-  }
-  if (state === "todo") return "not started";
+  const dependsOn = Array.isArray(target?.depends_on) ? target.depends_on : [];
+  if (dependsOn.length) return `after ${dependsOn.join(", ")}`;
+  if (target?.state === "todo") return "not started";
   return decision?.why ?? null;
 }
 
-// Working kind: build / review / merge. It is a label, not a state.
+// The only Task states visible to Collie.
+export function taskLifecycle(task) {
+  const state = String(task?.state ?? "");
+  return state === "running" || state === "ready" || state === "done" ? state : "todo";
+}
+
+// Working phase: build / review / verify. It is a live-agent label, not a Task state.
 export function workKind(decision, target, live = {}) {
-  if (live.reviewer || (decision?.run?.kind === "review" && live.worker)) return "review";
-  if (target?.state === "merging" || decision?.run?.phase === "merging") return "merge";
+  if (live.verifier) return "verify";
+  if (live.reviewer || (decision?.run?.kind === "review" && live.driver)) return "review";
   return decision?.run?.kind === "review" ? "review" : "build";
 }
 
-// live: { worker, reviewer, blocked } from the Work's live agents (mods/collie-inbox/main.js).
+// live: { driver, reviewer, verifier, blocked } from the Work's live agents.
+// Decision settled/waiting wins first, then live blocked/roles, then Task ready/done/running.
+// A running Task stays Working without a live terminal; done without a settled Decision is Settled.
+// An unreadable task_ref retains Working history; an unrelated open Decision is Todo.
 export function ticketStage(decision, target, live = {}) {
   const state = decision?.state;
   if (state === "settled" || decision?.settled) return "settled";
   if (state === "waiting") return "needs";
   if (live.blocked) return "needs";
-  if (live.reviewer || live.worker) return "working";
-  const task = String(target?.state ?? "");
-  // A readable queued/scheduled/todo task is still Todo, even though the Decision has a task_ref.
-  if (["queued", "scheduled", "todo"].includes(task)) return "todo";
+  if (live.driver || live.reviewer || live.verifier || live.other) return "working";
+  const lifecycle = taskLifecycle(target);
+  if (lifecycle === "ready") return "needs";
+  if (lifecycle === "done") return "settled";
+  if (lifecycle === "running") return "working";
   // A task_ref without a readable task (remote, ended, or a seeded ticket) still means a Work ran.
-  if (decision?.run?.task_ref) return "working";
-  if (["running", "ready", "merging", "done"].includes(task)) return "working";
+  if (decision?.run?.task_ref && (!target || !target.state)) return "working";
   return "todo";
 }
 
@@ -103,7 +102,7 @@ export function ticketGroup(items) {
   const rest = all.filter((x) => ["todo", "working"].includes(x.stage));
   const rank = (x) => GROUP_RANK[x.stage] ?? 99;
   const when = (x) => time(x.decision.decided_at);
-  // Working: newest first; Todo (queue/scheduled): the oldest first.
+  // Working: newest first; Todo: the oldest first.
   const sorted = (a, b) => rank(a) - rank(b)
     || (a.stage === "working" ? when(b) - when(a) : when(a) - when(b))
     || String(a.decision.id).localeCompare(String(b.decision.id));
@@ -132,16 +131,13 @@ function matchingTask(receipt, groups) {
   return matchingKey(String(id), groups);
 }
 
-// A Decision's run.task_ref is the task's key ("folder#id"), ref ("CEENF-1") or id. Open
-// Decisions have no receipt yet; the task list still links them.
+// Decision.run.task_ref and Receipt.task.id are the task's canonical ref (for example COLL-42).
 function matchingKey(id, groups) {
   if (!id) return null;
   const matches = [];
   for (const group of Array.isArray(groups) ? groups : []) {
     for (const task of group?.tasks ?? []) {
-      if ([task.ref, task.key, task.id].some((value) => value !== undefined && String(value) === id)) {
-        matches.push({ group, task });
-      }
+      if (task.ref !== undefined && String(task.ref) === id) matches.push({ group, task });
     }
   }
   return matches.length === 1 ? matches[0] : null;
@@ -159,13 +155,21 @@ export function taskTarget(decision, receipt, groups, detail = null) {
   const machine = group.machine ?? task.machine ?? null;
   const last = task.agents?.at(-1);
   const live = Array.isArray(task.live) ? task.live : [];
-  const agent = live.at(-1);
-  const address = typeof agent === "string" ? agent : agent?.address ?? last?.address;
+  const helper = (role) => ["reviewer", "verifier", "helper"].includes(role);
+  // The ticket's fixed terminal is the driver. Helpers are separate hc children; their
+  // tabs are opened from the live role list, not by stealing the driver's terminal block.
+  const driver = live.find((agent) => typeof agent === "string"
+    ? Boolean(agent)
+    : agent?.address && !helper(agent.role));
+  // With no live driver, only the driver's own history may supply the Terminal. A helper is
+  // always a separate role tab, never a fallback driver.
+  const address = typeof driver === "string" ? driver : driver?.address ?? last?.address;
   const spawn = decision.actions?.find((a) => a.kind === "spawn_task")?.spawn;
   return {
     decision: decision.id,
     project: spawn?.project ?? null,
-    ref: String(task.ref ?? task.key ?? task.id),
+    playbook: task.playbook ?? decision.playbook?.id ?? null,
+    ref: String(task.ref),
     title: task.title ?? spawn?.title ?? decision.card?.question ?? decision.why,
     state: task.state ?? null,
     folder: group.folder,
@@ -174,14 +178,10 @@ export function taskTarget(decision, receipt, groups, detail = null) {
     branch: task.branch ?? null,
     base: task.base ?? null,
     start: task.start ?? null,
-    pr: task.pr ?? null,
     base_set: task.base_set === true,
     agents: Array.isArray(task.agents) ? task.agents : [],
     live,
-    after: Array.isArray(task.after) ? task.after : [],
-    after_ext: Array.isArray(task.after_ext) ? task.after_ext : [],
-    waiting_for: Array.isArray(task.waiting_for) ? task.waiting_for : [],
-    waiting_ext: Array.isArray(task.waiting_ext) ? task.waiting_ext : [],
+    depends_on: Array.isArray(task.depends_on) ? task.depends_on : [],
     progress: task.progress ?? null,
     proof: task.proof ?? null,
     terminal: prefixed(machine, address),
@@ -193,10 +193,49 @@ export function taskTarget(decision, receipt, groups, detail = null) {
   };
 }
 
-export function diffTarget(target) {
-  const cwd = target?.worktree ?? target?.folder;
-  const start = target?.start ?? target?.base;
-  if (typeof cwd !== "string" || !cwd.startsWith("/")) return null;
-  if (typeof start !== "string" || !start || start.startsWith("-") || /\s/.test(start)) return null;
-  return { cwd, on: target.machine ?? undefined, range: `${start}...HEAD` };
+// Tasks without Decisions are synthetic Work. Canonical refs alone deduplicate the two sources.
+export function orphanTickets(decisions, groups) {
+  const linked = new Set(decisions.map((decision) => decision?.run?.task_ref).filter(Boolean).map(String));
+  const out = [];
+  for (const group of Array.isArray(groups) ? groups : []) {
+    for (const task of group?.tasks ?? []) {
+      if (!task.space || !task.ref || linked.has(String(task.ref))) continue;
+      const at = task.done_at ?? task.ready_at ?? task.started_at ?? task.created_at ?? task.agents?.at(-1)?.at ?? Date.now();
+      const done = task.state === "done";
+      const project = String(group.folder ?? "").split("/").filter(Boolean).pop() || null;
+      out.push({
+        id: `task:${task.ref}`,
+        ...(project ? { project } : {}),
+        state: done ? "settled" : "open",
+        decided_at: new Date(at).toISOString(),
+        ...(done ? { settled: { at: new Date(at).toISOString(), outcome: "done" } } : {}),
+        space: task.space,
+        title: task.title ?? task.ref,
+        why: task.why ?? null,
+        synthetic: true,
+        run: { task_ref: task.ref },
+      });
+    }
+  }
+  return out;
+}
+
+const driverRole = (role) => !role || role === "driver" || role === "worker";
+
+// Live helper roles, merging the task record with current terminal labels. Drivers stay in the
+// fixed Ticket Terminal; the returned agents are rendered as separate Herdr tabs.
+export function taskAgents(target, terms = []) {
+  const key = target?.key;
+  const label = key ? `${key.slug}#${key.id}` : null;
+  const byAddress = new Map();
+  for (const raw of Array.isArray(target?.live) ? target.live : []) {
+    const agent = typeof raw === "string" ? { address: raw, role: "worker" } : raw;
+    if (agent?.address) byAddress.set(agent.address, agent);
+  }
+  if (label) for (const term of terms) {
+    if (term.state !== "live" || term.labels?.["herdr.task"] !== label) continue;
+    const old = byAddress.get(term.address) ?? {};
+    byAddress.set(term.address, { ...old, address: term.address, role: old.role ?? term.labels?.["herdr.role"] ?? "worker", status: old.status ?? term.status });
+  }
+  return [...byAddress.values()].filter((agent) => agent.address && !driverRole(agent.role) && agent.status !== "done");
 }

@@ -1,14 +1,11 @@
 #!/usr/bin/env bun
-import { execFile } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { request } from "node:http";
-import { promisify } from "node:util";
-
-const execFileAsync = promisify(execFile);
+import { defaultHelperRunner, findCoordinator } from "../plugins/agent/helper.ts";
 const args = process.argv.slice(2);
-const value = (name: string) => args[args.indexOf(name) + 1];
+const value = (name: string) => args.includes(name) ? args[args.indexOf(name) + 1] : undefined;
 const stateDir = value("--state-dir") ?? join(homedir(), ".local", "state", "collie");
 const decisionId = value("--decision");
 const option = value("--option");
@@ -27,19 +24,19 @@ if (option === "rework") {
 if (option === "later") answer.snooze_until = value("--snooze") ?? null;
 
 let coordinatorAddress: string | undefined;
-if (option === "accept" || option === "rework") {
-  const queue = JSON.parse(readFileSync(join(stateDir, "queue.json"), "utf8"));
-  const decision = queue.decisions.find((item: any) => item.id === decisionId);
-  if (!decision) throw new Error(`unknown decision ${decisionId}`);
-  const workspacesPath = join(homedir(), ".config", "collie", "workspaces.json");
-  const workspaces = existsSync(workspacesPath) ? JSON.parse(readFileSync(workspacesPath, "utf8")) : {};
-  const folder = workspaces[decision.space]?.folder;
-  if (!folder) throw new Error(`no workspace configured for ${decision.space}`);
-  const { stdout } = await execFileAsync(process.env.COLLIE_TASK_CLI ?? "collie-task", ["assistants", "--json"]);
-  const assistants = JSON.parse(stdout);
-  const matches = assistants.filter((item: any) => item.folder === folder);
-  if (matches.length !== 1) throw new Error(`expected one coordinator for ${decision.space}, got ${matches.length}`);
-  coordinatorAddress = matches[0].address;
+const queue = JSON.parse(readFileSync(join(stateDir, "queue.json"), "utf8"));
+const decision = queue.decisions.find((item: any) => item.id === decisionId);
+if (!decision) throw new Error(`unknown decision ${decisionId}`);
+const needsResume = option === "rework" || (option === "accept" && !decision.receipt_ref);
+if (needsResume) {
+  // The Decision recorded the session that judged it. Prefer it over a space-wide lookup:
+  // a space can have several coordinators transiently, but the original one owns the context.
+  if (typeof decision.run?.coordinator_ref === "string" && decision.run.coordinator_ref.trim()) {
+    coordinatorAddress = decision.run.coordinator_ref;
+  } else {
+    const coordinator = await findCoordinator(defaultHelperRunner, decision.space);
+    coordinatorAddress = coordinator.address;
+  }
 }
 
 const result = await new Promise<string>((resolve, reject) => {

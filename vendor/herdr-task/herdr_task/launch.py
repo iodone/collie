@@ -16,10 +16,9 @@ import sys
 import time
 
 from .base import ENTRY, Fail, git, hc_json, now, run, WORKTREES
-from .settings import agent_key, ASSISTANT_TEMPLATES, bare, BRANCH_PATTERN, branch_pattern_problem, notes, notes_part, review_limits, settings_block, settings_for
+from .settings import agent_key, ASSISTANT_TEMPLATES, bare, BRANCH_PATTERN, branch_pattern_problem, notes, notes_part, settings_block, settings_for
 from .templates import instructions
 from .agents import detail, LINE_MAX, live_agents, SUMMARY_MAX
-from .github import finish, remote_of
 from .browsers import browser_line, browser_path
 
 
@@ -31,7 +30,7 @@ from .browsers import browser_line, browser_path
 
 # How long Codex waits on the permission hook: as the chat's card waits (ask-hook.sh).
 ASK_TIMEOUT = 1800
-OWN = ["ready", "reviewed", "status", "alert", "feedback", "show", "list", "where"]
+OWN = ["ready", "status", "alert", "feedback", "show", "list", "where"]
 # collie-secret's agent commands (~/.config/herdr-app/bin/collie-secret): asking for a secret and
 # using one by name never ask either. Written by its full path or its bare name. Reviewers get none.
 SECRET = ["ask", "run", "list"]
@@ -364,14 +363,10 @@ def closing_line(s, task, parent=None, argv=None):
     done = "finished and committed" if task.get("mode") == "worktree" else "finished"
     ht = own_path()
     text = (f"When the work is {done}, run `{ht} ready {s.ref(task)} --folder {shlex.quote(s.loc['folder'])} "
-            f"--summary \"<what the person now sees or can do, plain words, at most {SUMMARY_MAX} characters>\"` (optionally "
-            f"`--details \"<a few short bullets in plain words, one per line: what changed for the person first, then how it was checked>\"`; with `--agents-md \"<one line>\"` when you learned something "
-            f"about setting up or testing this repo that its AGENTS.md lacks). The person accepts it from there; never mark it done yourself.")
-    on, rounds = review_limits(s, task)
-    if on:
-        text += (f" Review is on: after each review round, record it on the commit it reviewed with `{ht} reviewed {s.ref(task)} "
-                 f"--folder {shlex.quote(s.loc['folder'])} --report \"<its findings in a line>\"` (at most {rounds} rounds); "
-                 f"ready refuses a final commit no round was recorded on.")
+            f"--summary \"<what the person now sees or can do, plain words, at most {SUMMARY_MAX} characters>\" "
+            f"--details \"<a few short bullets: what changed and how it was checked>\" --proof <proof artifact id>; "
+            f"all three are required. Optionally add `--agents-md \"<one line>\"` when you learned something "
+            f"about setting up or testing this repo that its AGENTS.md lacks. The person accepts it from there; never mark it done yourself.")
     text += (f" At the start and at each natural step, say how it's going: `{ht} status {s.ref(task)} --folder {shlex.quote(s.loc['folder'])} "
              f"\"<what you're doing now, at most {LINE_MAX} characters>\" --done <% of the whole task> --left <your best guess of how long is left, like 20m>`: "
              f"always give `--left`, from your very first status on, and update it at every step; a rough guess beats none.")
@@ -402,7 +397,6 @@ def where_line(task):
 
 
 def brief(s, task, parent=None, space=None, argv=None):
-    instructions("reviewer")  # the file its review's reviewer gets (WORKER_MD)
     start = notes_part("Before you start", notes(s, task, "start", space))
     if start and task.get("worktree"):
         start += f"\n(The main folder is {s.loc['folder']}.)"
@@ -425,6 +419,11 @@ def handoff(s, task, prev, parent=None, argv=None):
     lines.append(closing_line(s, task, parent, argv))
     lines.append(settings_block(s, task, None, argv))
     return "\n\n".join(x for x in lines if x)
+
+
+def remote_of(main):
+    names = git(main, "remote")[1].split()
+    return "origin" if "origin" in names else (names[0] if names else "origin")
 
 
 def current_base(main):
@@ -571,13 +570,13 @@ def folder_for(s, task):
     ok, _, err = git(main, *add)
     if not ok:
         raise Fail(err or "git worktree add failed")
-    # Where the branch starts: work past it that turns up in the base branch means merged.
+    # The commit the branch starts from anchors delivery evidence.
     start = git(path, "rev-parse", "HEAD")[1] if not exists else task.get("start")
     task.update(worktree=path, branch=branch, base=task.get("base") or base, start=start)
     return path
 
 
-def launch(s, task, argv, space, message=None, parent=None, resume=None, role=None):
+def launch(s, task, argv, space, message=None, parent=None, resume=None):
     """Starts one agent for the task with no tab or pane of its own (a space can hold thousands
     of tasks): an hc child of `parent`, which parent_for() makes the space's coordinator, reached
     through the Tasks panel. Labels: herdr.task (its task), herdr.task.space (its space; never
@@ -586,8 +585,7 @@ def launch(s, task, argv, space, message=None, parent=None, resume=None, role=No
     apart from the task's agents. Returns its record."""
     key = s.key(task)
     cmd = list(resume or argv)
-    if not role:
-        cmd = own_argv(cmd)
+    cmd = own_argv(cmd)
     if message:
         cmd = cmd + [message]
     labels = ["--label", f"herdr.task={key}", "--label", f"herdr.task.space={bare(space)}",
@@ -595,10 +593,8 @@ def launch(s, task, argv, space, message=None, parent=None, resume=None, role=No
     ctab = coordinator_tab(parent)
     if ctab:
         labels += ["--label", f"herdr.coordinator={ctab}"]
-    if role:
-        labels += ["--label", f"herdr.role={role}"]
     rel = ["--parent", parent, "--outlive-parent"] if parent else ["--no-parent"]
-    name = agent_name(s, task, "review" if role else None)
+    name = agent_name(s, task)
     # HERDR_BROWSER_TASK: which task's browser herdr-browser drives (HERD-57), for it and its children.
     r = run(["hc", "run", "--bg", "--json", "--keep", "--cwd", folder_for(s, task), "--name", name,
              *labels, *rel, "--", *low_priority(clean_env(["env", f"HERDR_BROWSER_TASK={key}", *in_shell(cmd)]), name)])
@@ -612,9 +608,6 @@ def launch(s, task, argv, space, message=None, parent=None, resume=None, role=No
     if parent:
         a["parent"] = parent
     s.dirty = True
-    if role:
-        task.setdefault("reviewers", []).append(a)
-        return a
     task["agents"].append(a)
     # A tab from before tasks had none stays with its old agent, not the task.
     task["space"] = bare(space)

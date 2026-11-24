@@ -165,6 +165,13 @@
                               "type": "stack",
                               "children": [
                                 {
+                                  "id": "collie-ticket-term",
+                                  "type": "block",
+                                  "content": {
+                                    "agent": "focused"
+                                  }
+                                },
+                                {
                                   "id": "collie-ticket-artifacts",
                                   "type": "block",
                                   "content": {
@@ -174,14 +181,7 @@
                               ],
                               "active": "collie-ticket-artifacts"
                             }
-                          ],
-                          "background": "background",
-                          "border": {
-                            "width": 1,
-                            "color": "border"
-                          },
-                          "radius": 10,
-                          "resizable": false
+                          ]
                         }
                       ],
                       "active": "collie-list"
@@ -194,19 +194,6 @@
                         "props": {
                           "view": "panel"
                         }
-                      }
-                    },
-                    {
-                      "id": "working",
-                      "type": "block",
-                      "content": {
-                        "mod": "collie-inbox",
-                        "props": {
-                          "view": "working"
-                        }
-                      },
-                      "size": {
-                        "px": 42
                       }
                     }
                   ],

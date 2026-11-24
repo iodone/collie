@@ -8,10 +8,8 @@ import os
 import re
 
 from .base import Fail, HOME, git
-from .github import BAD, PENDING, pr_view
 
-ARTIFACTS = os.environ.get("COLLIE_ARTIFACTS") or os.path.join(HOME, ".local/share/collie/artifacts")
-LEGACY_ARTIFACTS = os.path.join(HOME, ".herdr", "artifacts")
+ARTIFACTS = os.environ.get("COLLIE_ARTIFACTS_HOME") or os.path.join(HOME, ".local/share/collie/artifacts")
 # Files named on the card, and commits.
 FEW = 3
 
@@ -20,32 +18,29 @@ def artifacts_of(folder):
     """This folder's artifacts, newest first (collie-artifact's list for it; the same slug rule)."""
     rel = os.path.relpath(folder, HOME) if folder == HOME or folder.startswith(HOME + "/") else folder
     slug = re.sub(r"[^A-Za-z0-9._-]+", "-", "home" if rel == "." else rel.strip("/")).strip("-") or "root"
-    legacy = os.environ.get("COLLIE_ARTIFACTS_LEGACY", "").lower() in ("1", "true", "on")
-    for directory in ((ARTIFACTS, LEGACY_ARTIFACTS) if legacy else (ARTIFACTS,)):
-        for name in (slug, f"{slug}-{hashlib.sha1(folder.encode()).hexdigest()[:6]}"):
-            try:
-                with open(os.path.join(directory, name + ".json")) as f:
-                    d = json.load(f)
-            except (OSError, ValueError):
-                continue
-            if d.get("folder") in (None, folder):
-                return d.get("artifacts") or []
+    for name in (slug, f"{slug}-{hashlib.sha1(folder.encode()).hexdigest()[:6]}"):
+        try:
+            with open(os.path.join(ARTIFACTS, name + ".json")) as f:
+                d = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if d.get("folder") in (None, folder):
+            return d.get("artifacts") or []
     return []
 
 
 def find_proof(s, t, given=None):
-    """The task's proof artifact, {id, title}: the one given (ready --proof <id>), else its newest
-    artifact titled as a proof ("HAT-2: ... · Proof") since it started. None: it made none. A proof
-    is always a recipe (the person accepts from their phone too): a custom panel is refused."""
+    """The explicitly bound proof artifact, {id, title}: --proof selects it directly; otherwise
+    the newest artifact for this canonical task ref with Proof in its title. A proof is always a
+    recipe (the person accepts from their phone too): a custom panel is refused."""
     arts = artifacts_of(s.loc["folder"])
     if given:
         a = next((a for a in arts if a.get("id") == given.strip()), None)
         if not a:
             raise Fail(f"No artifact {given} in {s.loc['folder']} (collie-artifact list shows them).")
     else:
-        ref, since = s.ref(t).upper(), t.get("started") or 0
-        mine = [a for a in arts if (a.get("task") or "").upper() == ref and re.search(r"\bproof\b", a.get("title") or "", re.I)
-                and (a.get("at") or 0) >= since]
+        ref = s.ref(t).upper()
+        mine = [a for a in arts if (a.get("task") or "").upper() == ref and re.search(r"\bproof\b", a.get("title") or "", re.I)]
         a = mine[0] if mine else None
     if not a:
         return None
@@ -57,11 +52,10 @@ def find_proof(s, t, given=None):
 
 
 def task_artifacts(s, t, proof=None):
-    """The other artifacts its agent published for it since it started (a research task's report),
-    newest first, [{id, title}]: linked on its Accept card beside its proof (SHEP-96)."""
-    ref, since, skip = s.ref(t).upper(), t.get("started") or 0, (proof or {}).get("id")
+    """Other artifacts explicitly bound to this canonical task ref, newest first."""
+    ref, skip = s.ref(t).upper(), (proof or {}).get("id")
     return [{"id": a["id"], "title": a.get("title") or a["id"]} for a in artifacts_of(s.loc["folder"])
-            if a.get("id") and a["id"] != skip and (a.get("task") or "").upper() == ref and (a.get("at") or 0) >= since]
+            if a.get("id") and a["id"] != skip and (a.get("task") or "").upper() == ref]
 
 
 def numstat(out, files):
@@ -75,25 +69,7 @@ def numstat(out, files):
             cur[1] += int(r) if r.isdigit() else 0
 
 
-def checks_of(t):
-    """GitHub's checks on its pull request, in words: {state, text}; failed and running say so,
-    so a green one is never assumed."""
-    if not t.get("pr"):
-        return {"state": "none", "text": "No GitHub checks here"}
-    v = pr_view(t)
-    if not v:
-        return {"state": "unknown", "text": "Couldn't ask GitHub"}
-    rows = v.get("statusCheckRollup") or []
-    word = lambda c: (c.get("conclusion") or c.get("state") or "").upper()
-    bad = [c.get("name") or c.get("context") or "a check" for c in rows if word(c) in BAD]
-    running = [c for c in rows if (c.get("status") or c.get("state") or "").upper() in PENDING and not c.get("conclusion")]
-    if bad:
-        return {"state": "failed", "text": f"{len(bad)} failing: " + ", ".join(bad[:FEW])}
-    if running:
-        return {"state": "running", "text": f"{len(running)} of {len(rows)} still running"}
-    if not rows:
-        return {"state": "none", "text": "No checks on its pull request"}
-    return {"state": "passed", "text": f"All {len(rows)} passed"}
+
 
 
 def evidence(s, t):
@@ -104,7 +80,7 @@ def evidence(s, t):
     commits, files = [], {}
     fmt = "--format=%h%x09%s"
     if s.loc["kind"] != "repo":
-        out.update(git=False, commits={"count": 0, "list": []}, diff=None, checks=checks_of(t))
+        out.update(git=False, commits={"count": 0, "list": []}, diff=None)
         return out
     if t.get("mode") == "worktree" and t.get("branch"):
         # Its branch past where it meets its base: exactly what Accept merges.
@@ -124,7 +100,7 @@ def evidence(s, t):
     else:
         # In the folder itself: the commits made here while it worked (other work committed here
         # meanwhile counts too, so the card says "while it worked").
-        start, end = (t.get("started") or 0) // 1000, ((t.get("ready_at") or 0) // 1000 + 60) or None
+        start, end = (t.get("started_at") or 0) // 1000, ((t.get("ready_at") or 0) // 1000 + 60) or None
         rng = [f"--since=@{start}"] + ([f"--until=@{end}"] if end else [])
         ok, log, _ = git(main, "log", fmt, *rng)
         commits = [line.split("\t", 1) for line in log.splitlines() if "\t" in line] if ok else []
@@ -139,5 +115,4 @@ def evidence(s, t):
     out["diff"] = None if files is None else {
         "files": len(files), "added": sum(v[0] for v in files.values()), "removed": sum(v[1] for v in files.values()),
         "list": [{"path": p, "added": v[0], "removed": v[1]} for p, v in sorted(files.items(), key=lambda x: -(x[1][0] + x[1][1]))[:FEW]]}
-    out["checks"] = checks_of(t)
     return out

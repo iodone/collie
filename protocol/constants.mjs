@@ -30,50 +30,14 @@ export const ASK_FIRST = Object.freeze([
   "change_permission",  // 修改权限
 ]);
 
-/** DESIGN §3.3：Decision 状态机。Card = state=waiting 的 Decision。 */
-export const DECISION_STATES = Object.freeze(["open", "waiting", "settled"]);
-
 /** 终态：进入后不再派发。settled 必须有 settled 对象。 */
 export const TERMINAL_STATES = Object.freeze(["settled"]);
 
-/** DESIGN §4.1：卡片三态。decided 只说明人表过态，不等于执行过。 */
-export const CARD_STATES = Object.freeze(["open", "decided", "closed"]);
-
 /** DESIGN §4.1：人对卡片的四种回答。 */
 export const CARD_OPTIONS = Object.freeze(["accept", "rework", "drop", "later"]);
-
-/** 卡片用途。approval 只能由 guard 产生；alert 承载失败。 */
-export const CARD_KINDS = Object.freeze(["approval", "accept", "question", "alert"]);
-
-/** DESIGN §4.2：任务状态归 herdr-task，本设计一个字都不改。 */
-export const TASK_STATES = Object.freeze([
-  "todo",
-  "queued",
-  "working",
-  "ready",
-  "merging",
-  "done",
-]);
 
 /** DESIGN §3.2 / §9：交给 coordinator 的快照上限，内核拼，它不能自己扩大视野。 */
 export const SNAPSHOT_BYTES_MAX = 4096;
 
 /** DESIGN §3.2：喂给 coordinator 的最近决定条数（防抖 + 记忆外置）。 */
 export const RECENT_DECISIONS_MAX = 10;
-
-/** DESIGN §3.2：事件来源。四个都必须是可替换的缝。 */
-export const EVENT_SOURCES = Object.freeze(["gitlab", "github", "cron", "im"]);
-
-/** DESIGN §3.1：事件绑定的对象种类。none = 无对象（cron / im）。 */
-export const OBJECT_KINDS = Object.freeze(["mr", "issue", "pipeline", "none"]);
-
-/** Decision.actions[].kind：五种动作 + noop。**没有 chat_message 这一类。** */
-export const ACTION_KINDS = Object.freeze([
-  "spawn_task",
-  "emit_command",
-  "ask",
-  "hold",
-  "priority",
-  "propose_policy",
-  "noop",
-]);

@@ -10,7 +10,7 @@ import { CollieService } from "../service/main.ts";
 
 const event = await Bun.file(new URL("../protocol/fixtures/event.json", import.meta.url)).json();
 const ruleset = await Bun.file(new URL("../protocol/fixtures/ruleset.json", import.meta.url)).json();
-const rolePromptRef = resolve(new URL("../templates/collie-coordinator.md", import.meta.url).pathname);
+const rolePromptRef = resolve(new URL("../templates/coordinator.md", import.meta.url).pathname);
 const paths: string[] = [];
 const scratch = () => { const path = mkdtempSync(join(tmpdir(), "collie-helper-")); paths.push(path); return path; };
 afterEach(() => { while (paths.length) rmSync(paths.pop()!, { recursive: true, force: true }); });
@@ -75,7 +75,7 @@ describe("Coordinator helper terminal", () => {
     expect(helperCliArgs({ cli: "codex", model: "default" }, "/state"))
       .toContain("--add-dir");
     expect(helperCliArgs({ cli: "codex", model: "default" }, "/state").slice(-2)).toEqual(["--add-dir", "/state"]);
-    expect(helperCliArgs({ cli: "codex", args: ["exec"], helper_args: ["codex", "--custom"] }))
+    expect(helperCliArgs({ cli: "codex", helper_args: ["codex", "--custom"] }))
       .toEqual(["codex", "--custom"]);
   });
 
@@ -158,6 +158,10 @@ describe("helper job IPC", () => {
     expect(jobSend[2]).toContain(`Job JSON: ${join(jobsDir(opts.stateDir, "alpha"), jobs[0])}`);
     expect(jobSend[2]).toContain(`Decision output: ${job.instruction.output_path}`);
     expect(jobSend[2]).toContain("brief_ref to /pending/brief");
+    expect(jobSend[2]).toContain("playbook{name,version}");
+    expect(jobSend[2]).toContain("at most one spawn_task");
+    expect(jobSend[2]).toContain("spawn{title,brief_ref,base,access}");
+    expect(jobSend[2]).not.toContain("base,review,merge");
 
     await runHelperJob({ id: "ca_2", space: { primary: "alpha" } }, opts);
     expect(hc.calls.filter((call) => call[0] === "run")).toHaveLength(1);
@@ -190,6 +194,35 @@ describe("helper job IPC", () => {
       settled: { at: "2020-01-01T00:00:00Z", by: "human", outcome: "dropped" },
     }, { space: "alpha", at: "2026-11-18T00:00:00Z" });
     expect(settled.settled).toEqual({ at: "2026-11-18T00:00:00Z", by: "coordinator", outcome: "dropped" });
+
+    const selected = validateProposal({
+      state: "open", why: "派 feature", playbook: { name: "feature", version: 1 },
+      actions: [{ kind: "noop", risk_tags: [] }],
+    }, { space: "alpha", at: "2026-11-18T00:00:00Z" });
+    expect(selected.playbook).toEqual({ name: "feature", version: 1 });
+
+    const projected = validateProposal({
+      state: "open", why: "只从动作投影",
+      priority: { value: 9, set_at: "2020-01-01T00:00:00Z" },
+      hold: { until: null, reason: "legacy" }, proposal: { draft_ref: "/tmp/legacy.md", summary: "legacy" },
+      actions: [
+        { kind: "priority", risk_tags: [], priority: { target_task: "COLL-1", value: 2 } },
+        { kind: "hold", risk_tags: [], hold: { target_task: "COLL-1", until: null, reason: "action hold" } },
+        { kind: "propose_policy", risk_tags: [], rule: { draft_ref: "/tmp/action.md", summary: "action policy" } },
+      ],
+    }, { space: "alpha", at: "2026-11-18T00:00:00Z" });
+    expect(projected.priority).toEqual({ value: 2, set_at: "2026-11-18T00:00:00Z" });
+    expect(projected.hold).toEqual({ until: null, reason: "action hold" });
+    expect(projected.proposal).toEqual({ draft_ref: "/tmp/action.md", summary: "action policy" });
+
+    const legacyOnly = validateProposal({
+      state: "open", why: "旧顶层字段不生效", priority: { value: 0, set_at: "2020-01-01T00:00:00Z" },
+      hold: { until: null, reason: "legacy" }, proposal: { draft_ref: "/tmp/legacy.md", summary: "legacy" },
+      actions: [{ kind: "noop", risk_tags: [] }],
+    }, { space: "alpha", at: "2026-11-18T00:00:00Z" });
+    expect(legacyOnly).not.toHaveProperty("priority");
+    expect(legacyOnly).not.toHaveProperty("hold");
+    expect(legacyOnly).not.toHaveProperty("proposal");
   });
 
   test("同一 space 的 job 串行：后一个等前一个结束", async () => {
@@ -214,6 +247,7 @@ describe("service ingress uses the helper", () => {
     const hc = fakeHc();
     const service = new CollieService({
       stateDir: scratch(), ruleset: structuredClone(ruleset),
+      agent: { run: async () => ({ tasks: [] }) },
       workspaces: { collie: { folder: "/repo/collie" } },
       coordinator: { settings },
       helper: { run: hc.run, timeoutMs: 50, pollIntervalMs: 2, bootWaitMs: 0 },
@@ -227,15 +261,14 @@ describe("service ingress uses the helper", () => {
   test("事件经常驻 helper 判断，绝不启动一次性 codex/claude", async () => {
     const dir = scratch();
     const hc = fakeHc({ state: "open", why: "无需动作", actions: [{ kind: "noop", risk_tags: [] }] });
-    let oneShot = 0;
     const service = new CollieService({
       stateDir: dir, ruleset: structuredClone(ruleset),
+      agent: { run: async () => ({ tasks: [] }) },
       workspaces: { collie: { folder: "/repo/collie" } },
-      coordinator: { settings, run: async () => { oneShot += 1; throw new Error("one-shot CLI must not run"); } },
+      coordinator: { settings },
       helper: { run: hc.run, timeoutMs: 50, pollIntervalMs: 2, bootWaitMs: 0 },
     });
     const decisions = await service.process(event);
-    expect(oneShot).toBe(0);
     expect(hc.calls.filter((call) => call[0] === "run")).toHaveLength(1);
     expect(decisions[0].state).toBe("open");
     expect(decisions[0].run.coordinator_ref).toBe("h1");
@@ -245,11 +278,11 @@ describe("service ingress uses the helper", () => {
   test("helper 起不来时返回 waiting 卡，不偷偷跑一次性 CLI", async () => {
     const dir = scratch();
     const calls: string[][] = [];
-    let oneShot = 0;
     const service = new CollieService({
       stateDir: dir, ruleset: structuredClone(ruleset),
+      agent: { run: async () => ({ tasks: [] }) },
       workspaces: { collie: { folder: "/repo/collie" } },
-      coordinator: { settings, run: async () => { oneShot += 1; return ""; } },
+      coordinator: { settings },
       helper: {
         timeoutMs: 50, pollIntervalMs: 2, bootWaitMs: 0,
         run: async (args) => {
@@ -259,7 +292,6 @@ describe("service ingress uses the helper", () => {
       },
     });
     const decisions = await service.process(event);
-    expect(oneShot).toBe(0);
     expect(decisions[0].state).toBe("waiting");
     expect(decisions[0].card.kind).toBe("question");
     expect(decisions[0].card.question).toContain("Coordinator helper 未就绪");

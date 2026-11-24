@@ -27,9 +27,23 @@
     "collie-artifact"
   ],
   "templates": [
-    "collie-coordinator.md",
-    "collie-worker.md",
-    "collie-reviewer.md"
+    "roles/coordinator.md",
+    "roles/planner.md",
+    "roles/researcher.md",
+    "roles/reviewer.md",
+    "roles/verifier.md",
+    "roles/watcher.md",
+    "roles/worker.md",
+    "playbooks/bug-fix.md",
+    "playbooks/eval.md",
+    "playbooks/feature.md",
+    "playbooks/hillclimb.md",
+    "playbooks/investigation.md",
+    "playbooks/orchestrate.md",
+    "playbooks/prototype.md",
+    "playbooks/ratchet.md",
+    "playbooks/refactoring.md",
+    "playbooks/review.md"
   ],
   "keys": {},
   "switch": {

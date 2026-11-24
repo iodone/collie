@@ -6,6 +6,8 @@ inbox-queue.js: collie-inbox
 ticket-dot.js: collie-inbox
 artview.js: collie-inbox collie-artifacts
 inbox-settings.js: collie-settings
+definition-files.js: collie-settings
 ui.js: collie-inbox collie-tabs collie-chrome collie-settings collie-artifacts
 core/task-artifacts.js: collie-inbox collie-artifacts
 core/spaces.js: collie-inbox collie-tabs
+terminal-tab.js: collie-chat collie-pane-chat collie-inbox

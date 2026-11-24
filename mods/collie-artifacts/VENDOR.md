@@ -32,7 +32,6 @@ image viewer; collie has no artifacts sidebar.
 - Store: `$COLLIE_ARTIFACTS_HOME`, else `~/.local/share/collie/artifacts`. Collie reads and writes
   only its store; Shepherdr's old stores are not read.
 - `markup.js`: notes/screenshots and the CLI path point at the collie mod and store.
-- `sync-hold`: the shepherdr installer hold is a no-op; `~/.herdr/sync-hold` is never read or written.
 - `open`/`link`: keep Shepherdr's web app when one is linked, but a missing link is a message, not a
   failure. `open` exits 0 when the artifact exists.
 - New `export <id> [--version] [--out DIR]`: copies a version's files to `DIR/<id>-v<n>`, prints

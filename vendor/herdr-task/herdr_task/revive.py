@@ -195,7 +195,7 @@ def task_of(k):
 def task_record(k, t):
     """A task agent with no record of its own: the session its task recorded (sessions.refresh_sessions)."""
     from .launch import own_argv
-    a = next((a for a in (t.get("agents") or []) + (t.get("reviewers") or []) if a.get("address") == k["address"]), None)
+    a = next((a for a in (t.get("agents") or []) if a.get("address") == k["address"]), None)
     kind, argv = base_argv((a or {}).get("argv"))
     if not kind:
         return None
@@ -258,7 +258,7 @@ def plan(k, rec, running):
     if rec and rec.get("session") and rec.get("log") and os.path.isfile(rec["log"]):
         return ("resume", resume_argv(rec["kind"], rec["argv"], rec["session"], CUT if rec.get("working") else None), not rec.get("shell"))
     # Its session is gone: a new one, with the handover (and an Assistant's role, its template's words).
-    command, template = template_of("collie-coordinator") if assistant else (None, None)
+    command, template = template_of("coordinator") if assistant else (None, None)
     if assistant and not template:
         command, template = template_of()
     argv = (rec or {}).get("argv") or (shlex.split(command) if command else None)

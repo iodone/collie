@@ -1,5 +1,5 @@
-// A ticket's Artifacts (SHEP-60): what its agent and its helpers made or updated, its proof first (marked Proof), then
-// newest first; each with its title (without the ticket's id in front), how many versions and when. A click opens it in
+// A ticket's explicitly bound artifacts, proof first (marked Proof), then newest first; each with its title
+// (without the ticket's id in front), how many versions and when. A click opens it in
 // the artifact viewer (its versions, Mark up) over the ticket, or the whole window. A child of the ticket view beside
 // Terminal; the header finds them (mods/collie-inbox/main.js pollArts, core/task-artifacts.js) into shared
 // "tasks.thread.artifacts" and counts them on its switch. None: a quiet line.
@@ -141,7 +141,7 @@ export default class CollieArtifacts extends View {
     if (!w) return root.child(this.note(t, "No ticket open."));
     const a = mine();
     if (!a) return root.child(this.note(t, "Looking for its artifacts…"));
-    if (!a.list.length) return root.child(this.note(t, "No artifacts yet", "Reports and proofs this ticket's agent makes show here."));
+    if (!a.list.length) return root.child(this.note(t, "No artifacts yet", "Artifacts explicitly linked to this ticket show here."));
     return root.child(v_flex().id("ticket-artifacts-list").flex_1().min_h(0).overflow_y_scrollbar().p(6).gap(2)
       .children(a.list.map((x, i) => this.row(t, x, a.ref, a.machine, i))));
   }

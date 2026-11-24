@@ -17,25 +17,28 @@ const decision = (why = "低风险事件，无需行动") => ({ state: "open", w
 const dispatchFor = (n: number) => {
   const source = { ...clone(event), id: `ev_test${String(n).padStart(12, "0")}`, key: `mr!93@${n}` };
   const ingress = new Ingress();
-  ingress.completeLane;
   return ingress.ingest(source).dispatches[0];
 };
 
 afterEach(() => { while (temporary.length) rmSync(temporary.pop()!, { recursive: true, force: true }); });
 
 describe("M3 Coordinator + Ledger", () => {
-  test("job turn 生成有界 Case，Decision 带 why 落账且可回放", async () => {
+  test("event Message 生成有界 Case，Decision 带 why 落账且可回放", async () => {
     const path = join(scratch(), "ledger.json");
     const ledger = Ledger.open(path);
     const dispatch = dispatchFor(1);
     ledger.append("event", dispatch.event);
     let seen: any;
+    const catalog = {
+      playbooks: [{ name: "feature", description: "Feature", version: 4 }],
+    };
     const result = await coordinate(dispatch, {
-      ledger, ruleset, decide: (job) => { seen = job; return decision(); },
+      ledger, ruleset, catalog, decide: (job) => { seen = job; return decision(); },
       now: () => new Date("2026-11-13T10:00:00Z"),
     });
 
-    expect(seen.visibility).toBe("ledger_only");
+    expect(seen.origin).toBe("event");
+    expect(seen.catalog).toEqual(catalog);
     expect(seen.snapshot.bytes).toBeLessThanOrEqual(4096);
     expect(result.why).toBe("低风险事件，无需行动");
     expect(result.case_ref).toBe(seen.id);
@@ -74,11 +77,11 @@ describe("M3 Coordinator + Ledger", () => {
         state: "open", why: "试图放大跳数并提升权限",
         occurrence: { object_key: "mr:mr!93", kind: "mr", round: 1, hops: 99 },
         actions: [{ kind: "spawn_task", risk_tags: [], spawn: {
-          title: "test", brief_ref: "/tmp/brief.md", base: "main", review: true, merge: false, access: "full", tells: "never",
+          title: "test", brief_ref: "/tmp/brief.md", base: "main", access: "full",
         } }],
       }),
     });
-    expect(result.occurrence.hops).toBe(0);
+    expect(result.occurrence.hops).toBe(1);
     expect(result.state).toBe("waiting");
     expect(result.card.kind).toBe("approval");
     expect(result.risk.tags).toContain("change_permission");
@@ -99,5 +102,51 @@ describe("M3 Coordinator + Ledger", () => {
     ledger.append("event", event);
     expect(existsSync(path)).toBe(true);
     if (process.platform !== "win32") expect((await Bun.file(path).stat()).mode & 0o077).toBe(0);
+  });
+
+  test("priority/hold/propose_policy 投影到 Decision，第三 priority 出卡", async () => {
+    const ledger = Ledger.open(join(scratch(), "ledger.json"));
+    const first = await coordinate(dispatchFor(2), {
+      ledger, ruleset,
+      decide: () => ({ state: "open", why: "调序", actions: [
+        { kind: "priority", risk_tags: [], priority: { target_task: "t-1", value: 2 } },
+        { kind: "hold", risk_tags: [], hold: { target_task: "t-1", until: null, reason: "等人" } },
+        { kind: "propose_policy", risk_tags: [], rule: { draft_ref: "/tmp/policy.md", summary: "避免重复判断" } },
+      ] }),
+    });
+    expect(first.priority).toMatchObject({ value: 2 });
+    expect(first.hold).toMatchObject({ until: null, reason: "等人" });
+    expect(first.proposal).toMatchObject({ draft_ref: "/tmp/policy.md" });
+  });
+
+  test("同 object 第 3 次 priority 强制 waiting Card", async () => {
+    const ledger = Ledger.open(join(scratch(), "ledger.json"));
+    const decide = () => ({ state: "open", why: "调序", actions: [
+      { kind: "priority", risk_tags: [], priority: { target_task: "t-1", value: 1 } },
+    ] });
+    await coordinate(dispatchFor(30), { ledger, ruleset, decide });
+    await coordinate(dispatchFor(31), { ledger, ruleset, decide });
+    const third = await coordinate(dispatchFor(32), { ledger, ruleset, decide });
+    expect(third.state).toBe("waiting");
+    expect(third.card.kind).toBe("approval");
+  });
+
+  test("waiting 投影与 Inbox 一致：hold 沉底、priority/年龄/id 稳定排序", () => {
+    const ledger = Ledger.open(join(scratch(), "ledger.json"));
+    const waiting = (id: string, extra: Record<string, unknown> = {}) => ({
+      id, state: "waiting", why: id, decided_at: "2026-11-13T10:00:00Z",
+      priority: null, hold: null, card: { created_at: "2026-11-13T10:00:00Z" }, ...extra,
+    });
+    for (const decision of [
+      waiting("dc_held", { priority: { value: 0 }, hold: { until: null } }),
+      waiting("dc_second", { priority: { value: 2 }, decided_at: "2026-11-13T10:02:00Z" }),
+      waiting("dc_default", { decided_at: "2026-11-13T09:00:00Z" }),
+      waiting("dc_first", { priority: { value: 0 }, decided_at: "2026-11-13T10:01:00Z" }),
+      waiting("dc_earlier", { priority: { value: 2 }, decided_at: "2026-11-13T10:01:00Z" }),
+      waiting("dc_b"), waiting("dc_a"),
+    ]) ledger.append("decision", decision);
+    expect(ledger.waiting().map((decision) => decision.id)).toEqual([
+      "dc_first", "dc_earlier", "dc_second", "dc_default", "dc_a", "dc_b", "dc_held",
+    ]);
   });
 });

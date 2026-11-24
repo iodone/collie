@@ -37,9 +37,9 @@ from .takeover import cli_check_pass
 # herdr-core as herdr-automations) fires them, also while Herdr's window is closed.
 
 DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
-EVENTS = ["added", "ready", "failed", "needs-you", "merged", "stalled"]
+EVENTS = ["added", "ready", "failed", "needs-you", "stalled"]
 EVENT_WORDS = {"added": "a task is added", "ready": "a task is ready", "failed": "a task fails",
-               "needs-you": "a task needs the person", "merged": "a task is merged", "stalled": "a task stalls"}
+               "needs-you": "a task needs the person", "stalled": "a task stalls"}
 STALL_MS = 30 * 60000
 HOW = ('Write times like "weekdays 9:00", "daily 9:00,17:30", "mon,thu 8:15", "every 30 minutes", '
        '"every 2 hours on weekdays from 8:00 to 18:00", "hourly", "once 2026-11-05 9:00" or "once tomorrow 9:00" (this machine\'s time zone).')
@@ -257,9 +257,9 @@ def set_auto_fields(s, a, args, adding=False):
     if args.parent:
         a["parent"] = args.parent
     if not a.get("every") and not a.get("on"):
-        raise Fail("Say when it runs: --every \"weekdays 9:00\" and/or --on ready,merged. " + HOW)
+        raise Fail("Say when it runs: --every \"weekdays 9:00\" and/or --on ready,failed. " + HOW)
     if a.get("from") and not a.get("on"):
-        raise Fail("--from says whose task events set it off: give --on too (merged, ready, ...).")
+        raise Fail("--from says whose task events set it off: give --on too (ready, failed, ...).")
     if a.get("every") and a["every"]["kind"] == "once" and not a.get("next_run") and adding:
         raise Fail("That time has passed.")
 
@@ -343,7 +343,7 @@ def event_brief(ev, f, src=None):
     where = f"folder {src['folder']} on machine {src['machine']}" if src and src.get("machine") else \
         (f"folder {src['folder']} on this machine" if src else "this folder")
     words = {"added": "was added", "ready": "is ready", "failed": "failed", "needs-you": "needs the person",
-             "merged": "was merged", "stalled": "stalled"}[ev]
+             "stalled": "stalled"}[ev]
     return f"Set off by: task {f['ref']} ({' '.join(str(f['title']).split())}) {words}, in {where}."
 
 
@@ -369,7 +369,7 @@ def fire(s, a, why, brief=None):
         parent = a.get("parent")
         reason = queue_reason(s, t)
         if reason:
-            t["state"], t["queued_at"] = "queued", now()
+            t["queued_at"] = now()
             t["queue"] = {"argv": argv, "space": space, "parent": parent}
             run_rec["queued"] = reason
         else:
@@ -401,7 +401,7 @@ def task_facts(s, t):
     working_ones = [k for k in live if agent_running(k)]
     return {"id": t["id"], "ref": s.ref(t), "title": t["title"], "branch": t.get("branch"), "state": t["state"],
             "status": status_of(t, working_ones) if t["state"] == "running" else t["state"],
-            "needs": task_status(t, working_ones)[1], "attention": t.get("attention"), "merged": bool(t.get("merged")),
+            "needs": task_status(t, working_ones)[1], "attention": t.get("attention"),
             "automation": t.get("automation"), "starting": bool(t["state"] == "running" and starting(t))}
 
 
@@ -426,13 +426,9 @@ def diff_events(facts, seen):
             # missed while this side or the other was down).
             if not first and f["state"] == "ready":
                 out.append(("ready", f))
-            if not first and f["state"] == "done" and f.get("merged"):
-                out.append(("merged", f))
         else:
             if f["state"] == "ready" and prev["state"] != "ready":
                 out.append(("ready", f))
-            if f["state"] == "done" and prev["state"] != "done" and f.get("merged"):
-                out.append(("merged", f))
             if f.get("attention") and f.get("attention") != prev.get("attention"):
                 out.append(("failed", f))
             # Needs you: its agent asks something, or waits for a reply (the status people see).
@@ -630,7 +626,7 @@ def one_pass(report):
         feeds = feeds_for(lists)
         for d in lists:
             tasks = d.get("tasks") or []
-            busy = any(t.get("state") in ("queued", "scheduled") or (t.get("worktree") and t.get("state") in ("running", "ready")) for t in tasks)
+            busy = any(t.get("state") in ("running", "ready") or (t.get("state") == "todo" and (t.get("scheduled_for") or t.get("queued_at"))) for t in tasks)
             if not busy and not d.get("automations"):
                 continue
             with Store(locate(d["folder"])) as s:

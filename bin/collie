@@ -24,6 +24,7 @@ NAME = "collie"
 APP = Path(".config/herdr-app")
 CORE = Path(".config/herdr-core")
 STATE = Path(".local/state/collie")
+CONFIG = Path(".config/collie")
 RUNTIME = Path(".local/share/collie")
 HELPERS = Path(".local/bin")
 SOURCE = Path(__file__).resolve().parent.parent
@@ -105,15 +106,27 @@ def source_files(source: Path, root: Path) -> dict[str, Path]:
         add_tree(directory, APP / directory)
     for directory in ("kernel", "plugins", "service", "protocol", "vendor"):
         add_tree(directory, RUNTIME / directory)
-    add_tree("templates", CORE / "templates")
+    for name in ("coordinator.md", "driver.md"):
+        path = source / "templates" / name
+        if path.is_file():
+            files[(CORE / "templates" / name).as_posix()] = path
+    for name in ("reviewer.md", "verifier.md"):
+        path = source / "defaults/roles" / name
+        if path.is_file():
+            files[(CONFIG / "roles" / name).as_posix()] = path
+    for path in sorted((source / "defaults/playbooks").glob("*.md")):
+        files[(CONFIG / "playbooks" / path.name).as_posix()] = path
+    skill = source / "skills/cli/SKILL.md"
+    if skill.is_file():
+        files[(CONFIG / "skills/cli/SKILL.md").as_posix()] = skill
     ruleset = source / "protocol/fixtures/ruleset.json"
     if ruleset.is_file():
         files[(STATE / "ruleset.json").as_posix()] = ruleset
-    for name in ("collie", "collie-sync", "collie-answer", "collie-request", "collie-task", "collie-secret"):
+    for name in ("collie", "collie-sync", "collie-answer", "collie-task", "collie-secret"):
         path = source / "bin" / name
         if path.is_file():
             files[(APP / "bin" / name).as_posix()] = path
-    for name in ("collie-sync", "collie-task", "collie-secret"):
+    for name in ("collie", "collie-sync", "collie-task", "collie-secret"):
         helper = source / "bin" / name
         if helper.is_file():
             files[(HELPERS / name).as_posix()] = helper
@@ -463,7 +476,9 @@ def without_dynamic_terminals(value):
         return [without_dynamic_terminals(item) for item in value]
     if not isinstance(value, dict):
         return value
-    if isinstance(value.get("content"), dict) and "terminal" in value["content"]:
+    if isinstance(value.get("content"), dict) and (
+        "terminal" in value["content"] or value["content"].get("agent") == "focused"
+    ):
         return None
     out = {}
     for key, item in value.items():
@@ -832,16 +847,86 @@ def _service_post(root: Path, route: str, payload: dict, state_dir: Path | None 
     return data
 
 
+def _service_get(root: Path, route: str, state_dir: Path | None = None) -> dict:
+    state = Path(state_dir).expanduser().resolve() if state_dir else target_path(root, STATE)
+    socket_path = state / "service.sock"
+    if not socket_path.exists():
+        raise InstallError(f"collie service is not running (no socket at {socket_path})")
+    try:
+        connection = _UnixHTTPConnection(socket_path)
+        connection.request("GET", route, headers={"connection": "close"})
+        response = connection.getresponse()
+        raw = response.read()
+        status = response.status
+        connection.close()
+    except OSError as exc:
+        raise InstallError(f"can't reach collie service: {exc}") from exc
+    try:
+        data = json.loads(raw.decode("utf-8") or "{}")
+    except ValueError as exc:
+        raise InstallError("collie service returned invalid JSON") from exc
+    if status != 200:
+        raise InstallError(str(data.get("error") or f"collie service returned {status}"))
+    return data
+
+
+def task_command(args) -> int:
+    """Public atomic task surface; the vendored collie-task remains the internal adapter."""
+    public = {"add", "list", "show", "start", "status", "ready", "accept", "done"}
+    if not args.rest or args.rest[0] not in public:
+        raise InstallError("collie task supports only add/list/show/start/status/ready/accept/done")
+    helper = target_path(args.root, APP / "bin" / "collie-task")
+    if not helper.is_file():
+        found = shutil.which("collie-task")
+        helper = Path(found) if found else helper
+    if not helper.is_file():
+        raise InstallError("collie-task is not installed")
+    command = [str(helper), *args.rest]
+    return subprocess.run(command).returncode
+
+
+def roles_list(args) -> int:
+    print(json.dumps(_service_get(args.root, "/v1/collaboration", args.state_dir), ensure_ascii=False))
+    return 0
+
+
+def roles_reload(args) -> int:
+    print(json.dumps(_service_post(args.root, "/v1/collaboration/reload", {}, args.state_dir), ensure_ascii=False))
+    return 0
+
+
 def ticket_create(args) -> int:
     space, title, source = args.space, args.title, args.brief
     if source == "-":
         brief = sys.stdin.read()
     else:
-        brief = Path(source).read_text()
+        path = Path(source)
+        brief = path.read_text() if path.is_file() else source
     payload = {"space": space, "title": title, "brief": brief, "kind": args.kind}
     if args.project:
         payload["project"] = args.project
+    if args.playbook:
+        payload["playbook"] = args.playbook
     result = _service_post(args.root, "/ticket", payload, args.state_dir)
+    print(json.dumps(result, ensure_ascii=False))
+    return 0
+
+
+def decision_commit(args) -> int:
+    raw = sys.stdin.read() if args.file == "-" else Path(args.file).read_text(encoding="utf-8")
+    try:
+        decision = json.loads(raw)
+    except ValueError as exc:
+        raise InstallError(f"invalid decision JSON: {exc}") from exc
+    result = _service_post(args.root, "/decision", {
+        "space": args.space, "project": args.project, "decision": decision, "turn_id": args.turn_id,
+    }, args.state_dir)
+    print(json.dumps(result, ensure_ascii=False))
+    return 0
+
+
+def decision_deliver(args) -> int:
+    result = _service_post(args.root, "/deliver", {"decisionId": args.decision}, args.state_dir)
     print(json.dumps(result, ensure_ascii=False))
     return 0
 
@@ -860,9 +945,9 @@ def ticket_adopt(args) -> int:
         task = json.loads(shown.stdout)
     except ValueError as exc:
         raise InstallError(f"collie-task returned invalid JSON") from exc
-    task_ref = task.get("key") or task.get("ref")
+    task_ref = task.get("ref")
     if not task_ref:
-        raise InstallError(f"task {args.task} has no key/ref")
+        raise InstallError(f"task {args.task} has no canonical ref")
     result = _service_post(args.root, "/ticket/adopt", {
         "space": args.space, "task_ref": task_ref, "title": task.get("title") or args.task,
         "brief": task.get("prompt"), "kind": args.kind,
@@ -883,7 +968,8 @@ def ticket_show(args) -> int:
         raise InstallError(f"no decision for {args.decision or args.ticket}")
     print(json.dumps({
         "decision_id": decision.get("id"), "state": decision.get("state"), "space": decision.get("space"),
-        "ticket_ref": decision.get("run", {}).get("task_ref"), "project": decision.get("project"), "kind": decision.get("run", {}).get("kind", "build"),
+        "ticket_ref": decision.get("run", {}).get("task_ref"), "project": decision.get("project"),
+        "playbook": (decision.get("playbook") or {}).get("name"), "kind": decision.get("run", {}).get("kind", "build"),
         "why": decision.get("why"),
     }, ensure_ascii=False))
     return 0
@@ -1063,7 +1149,7 @@ def coordinator_restart(args) -> int:
         if role == "coordinator":
             new_labels += ["--label", "herdr.role=coordinator"]
 
-    tpl = home / ".config" / "herdr-core" / "templates" / "collie-coordinator.md"
+    tpl = home / ".config" / "herdr-core" / "templates" / "coordinator.md"
     parsed = _template(tpl) or ("", "")
     own_command, body = parsed
     body = body.strip()
@@ -1077,7 +1163,7 @@ def coordinator_restart(args) -> int:
         out = json.loads(run.stdout or "{}")
         new = out.get("address")
     elif not argv and role == "coordinator" and not own_command:
-        run = _hc("run", "--bg", "--json", "--no-parent", *(["--cwd", cwd] if cwd else []), *new_labels, "collie-coordinator", handoff)
+        run = _hc("run", "--bg", "--json", "--no-parent", *(["--cwd", cwd] if cwd else []), *new_labels, "coordinator", handoff)
         new = (json.loads(run.stdout or "{}")).get("address")
     else:
         if not argv and not (role == "coordinator" and own_command):
@@ -1173,6 +1259,23 @@ def parser() -> argparse.ArgumentParser:
         command.add_argument("--root", type=Path, default=Path.home())
         command.add_argument("--dry-run", action="store_true")
         command.set_defaults(function=function)
+    task = sub.add_parser("task", help="atomic task commands (add, list, show, start, status, ready, accept, done)")
+    task.add_argument("--root", type=Path, default=Path.home())
+    task.add_argument("--state-dir", type=Path)
+    task.add_argument("rest", nargs=argparse.REMAINDER)
+    task.set_defaults(function=task_command)
+
+    roles = sub.add_parser("roles")
+    roles_sub = roles.add_subparsers(dest="roles_command", required=True)
+    roles_list_command = roles_sub.add_parser("list")
+    roles_list_command.add_argument("--root", type=Path, default=Path.home())
+    roles_list_command.add_argument("--state-dir", type=Path)
+    roles_list_command.set_defaults(function=roles_list)
+    roles_reload_command = roles_sub.add_parser("reload")
+    roles_reload_command.add_argument("--root", type=Path, default=Path.home())
+    roles_reload_command.add_argument("--state-dir", type=Path)
+    roles_reload_command.set_defaults(function=roles_reload)
+
     ticket = sub.add_parser("ticket")
     ticket_sub = ticket.add_subparsers(dest="ticket_command", required=True)
     create = ticket_sub.add_parser("create")
@@ -1180,6 +1283,7 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("--state-dir", type=Path)
     create.add_argument("--space", required=True)
     create.add_argument("--project", help="project folder under the space's projects directory")
+    create.add_argument("--playbook", help="playbook name from the role/playbook registry")
     create.add_argument("--title", required=True)
     create.add_argument("--brief", required=True)
     create.add_argument("--kind", choices=("build", "review"), default="build")
@@ -1209,6 +1313,22 @@ def parser() -> argparse.ArgumentParser:
     intake_event_command.add_argument("--token", help="native ingress bearer token")
     intake_event_command.add_argument("--token-env", help="environment variable holding the ingress token")
     intake_event_command.set_defaults(function=intake_event)
+
+    decision = sub.add_parser("decision")
+    decision_sub = decision.add_subparsers(dest="decision_command", required=True)
+    commit = decision_sub.add_parser("commit")
+    commit.add_argument("--root", type=Path, default=Path.home())
+    commit.add_argument("--state-dir", type=Path)
+    commit.add_argument("--space", required=True)
+    commit.add_argument("--project")
+    commit.add_argument("--file", default="-")
+    commit.add_argument("--turn-id")
+    commit.set_defaults(function=decision_commit)
+    deliver = decision_sub.add_parser("deliver")
+    deliver.add_argument("--root", type=Path, default=Path.home())
+    deliver.add_argument("--state-dir", type=Path)
+    deliver.add_argument("--decision", required=True)
+    deliver.set_defaults(function=decision_deliver)
 
     coordinator = sub.add_parser("coordinator")
     coordinator_sub = coordinator.add_subparsers(dest="coordinator_command", required=True)

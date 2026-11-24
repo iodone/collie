@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { loadProtocol } from "../../protocol/validate.mjs";
+import { settle } from "../../protocol/invariants.mjs";
 import type { CoordinatorConfig } from "./coordinator.ts";
 
 type Json = Record<string, any>;
@@ -165,7 +166,8 @@ function jobPrompt(options: HelperJobOptions, jobPath: string, outputPath: strin
     `Decision output: ${outputPath}`,
     `Role: ${options.rolePromptRef}`,
     "Read the job, follow the role prompt and the job snapshot/policy, and write one Decision JSON to the output path.",
-    "Every action needs kind and risk_tags ([] when none). spawn_task needs spawn{title,brief_ref,base,review,merge,access,tells}; ask needs ask{kind,question,options}; waiting needs a card.",
+    "Every action needs kind and risk_tags ([] when none). spawn_task needs spawn{title,brief_ref,base,access}; ask needs ask{kind,question,options}; waiting needs a card.",
+    "Include playbook{name,version} when the Decision selects one; at most one spawn_task per Decision.",
     "For spawn_task set brief_ref to /pending/brief; the service renders the trusted brief.",
     "Do not write the Ledger or policy and do not spawn anything yourself. Reply DONE.",
   ].join("\n");
@@ -261,28 +263,39 @@ export function validateProposal(value: unknown, options: { space: string; at: s
   }
   if (!Array.isArray(proposal.actions)) throw new Error("helper Decision needs an actions array");
 
-  const run: Json = { claimed_until: null, unknown_policy: "normal", task_ref: null, coordinator_ref: null };
+  const run: Json = { task_ref: null, coordinator_ref: null };
   if (proposal.run && typeof proposal.run === "object" && proposal.run.kind) run.kind = proposal.run.kind;
+  const playbook = proposal.playbook ?? null;
   const waiting = proposal.state === "waiting";
+  const priorityAction = proposal.actions.find((action: Json) => action.kind === "priority");
+  const holdAction = proposal.actions.find((action: Json) => action.kind === "hold");
+  const policyAction = proposal.actions.find((action: Json) => action.kind === "propose_policy");
+  const priority = priorityAction?.priority ? { value: priorityAction.priority.value, set_at: options.at } : null;
+  const hold = holdAction?.hold ? { until: holdAction.hold.until ?? null, reason: holdAction.hold.reason } : null;
+  const policy = policyAction?.rule ? { ...policyAction.rule } : null;
   const candidate = {
     id: "dc_00000000", key: "helper:validate", space: options.space,
     space_candidates: [options.space], event_ref: null, case_ref: null,
     state: proposal.state, why: proposal.why, decided_by: "coordinator", decided_at: options.at,
+    playbook,
     occurrence: { object_key: "none:helper", kind: "none", round: 1, hops: 0 },
     actions: proposal.actions,
     risk: { tags: [], forced_waiting: false },
     run,
     human_boundary: { form: waiting ? "card" : "none", chat_injection: false },
-    priority: proposal.priority ?? null,
-    hold: proposal.hold ?? null,
+    priority,
+    hold,
     card: waiting ? proposal.card ?? null : null,
     receipt_ref: null,
-    proposal: proposal.proposal ?? null,
+    proposal: policy,
     ack: null,
-    settled: proposal.state === "settled"
-      ? { at: options.at, by: "coordinator", outcome: proposal.settled?.outcome ?? "dropped" }
-      : null,
+    settled: null,
   };
+  if (proposal.state === "settled") {
+    Object.assign(candidate, settle(candidate, {
+      at: options.at, by: "coordinator", outcome: proposal.settled?.outcome ?? "dropped",
+    }));
+  }
   const result = protocol.validate(candidate, "urn:collie:decision:v1");
   if (!result.valid) {
     throw new Error(`helper Decision is invalid: ${result.errors.map((error: Json) => `${error.path || "/"} ${error.message}`).join("; ")}`);
@@ -291,11 +304,12 @@ export function validateProposal(value: unknown, options: { space: string; at: s
     state: proposal.state,
     why: proposal.why,
     actions: proposal.actions,
+    ...(playbook ? { playbook } : {}),
     ...(run.kind ? { run: { kind: run.kind } } : {}),
-    ...(proposal.priority ? { priority: proposal.priority } : {}),
-    ...(proposal.hold ? { hold: proposal.hold } : {}),
+    ...(priority ? { priority } : {}),
+    ...(hold ? { hold } : {}),
     ...(waiting ? { card: proposal.card } : {}),
-    ...(proposal.proposal ? { proposal: proposal.proposal } : {}),
+    ...(policy ? { proposal: policy } : {}),
     ...(candidate.settled ? { settled: candidate.settled } : {}),
   };
 }

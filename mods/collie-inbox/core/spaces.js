@@ -13,13 +13,13 @@ export const machineOf = (address) => (String(address).includes("/") ? String(ad
 export const CHAT = "herdr.chat";
 // What goes in herdr.chat for a chat pane (an app id: "<machine>/<pane>" for another machine's).
 export const chatLabel = (pane) => (pane ? String(pane).split("/").pop() : "");
-// The chat pane a terminal is parked behind, as this window's app id (null: none). A label an earlier version
-// wrote with a machine in front reads the same.
+// The chat pane a terminal is parked behind, as this window's app id (null: none). Current
+// labels hold a local pane id; the terminal's machine supplies the remote prefix.
 export function chatPane(k) {
   const c = k?.labels?.[CHAT];
   if (!c) return null;
-  const m = machineOf(k.address ?? ""), id = chatLabel(c);
-  return m ? `${m}/${id}` : id;
+  const m = machineOf(k.address ?? "");
+  return m ? `${m}/${c}` : c;
 }
 
 // The slot an agent was started for (a coordinator chat's, before it had an agent): herdr.chat.slot. The chat finds

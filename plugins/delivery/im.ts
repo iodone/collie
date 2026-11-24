@@ -29,5 +29,3 @@ export async function deliverIm(decision: Json, options: DeliveryOptions = {}): 
     "--text", data.text, "--as", data.as,
   ]);
 }
-
-export const deliverIM = deliverIm;

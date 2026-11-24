@@ -84,6 +84,3 @@ export async function keep(name, _scope, value) {
 export async function remove(name) {
   await change((data) => { delete data.secrets[name]; });
 }
-
-// Collie keeps secrets here, so there is no remote keeper to serve.
-export function serveRemote(_ts = terminals()) {}

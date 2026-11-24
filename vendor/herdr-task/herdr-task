@@ -7,14 +7,11 @@ one JSON file on the machine where the folder lives, ~/.herdr/tasks/<slug>.json,
 repo. Every write takes the file's lock and replaces it atomically, so the Tasks panel, agents and
 coordinators never clash.
 
-States: todo -> (queued ->) running -> ready (its agent said it's finished, with a summary: "looks
-done, your call"; a worktree task's work waits to merge, in a GitHub repo as a pull request) -> done,
-which only the person decides (Accept in the Tasks panel: `herdr-task accept`, merging first when
-there is something to merge). A started task waits as "queued" while the tasks
-it comes after aren't done or the folder already runs its maximum; `tick` starts it later.
-"Stopped" is not stored: a running task whose agents are all gone. Every agent started for a task
-carries the hc label herdr.task=<key> (key: <slug>#<id>), which is how it is found. A worktree
-task becomes done by itself once its branch or pull request is merged, wherever that happened.
+States: todo -> running -> ready -> done. Queue waits and future starts are metadata on todo, not
+Task states. A driver reports progress and delivers summary, details and a proof object at ready;
+accept (ready only) or done (drop/finalization) records done_at and done_by. Rework uses start to
+move ready back to running. Merge, comment and close are playbook delivery, never Task transitions.
+Every agent started for a task carries the hc label herdr.task=<key> (key: <slug>#<id>).
 """
 
 import os

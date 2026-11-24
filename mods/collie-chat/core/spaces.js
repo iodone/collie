@@ -23,17 +23,3 @@ export function isUnread(k, seen = {}, asked = 0) {
   if (!k || k.labels?.["herdr.role"] !== "coordinator") return false;
   return (k.turn ?? 0) > Math.max(readTurn(k, seen), asked);
 }
-
-// The chat pane an agent is parked behind: its core label herdr.chat.
-export const CHAT = "herdr.chat";
-export const chatLabel = (pane) => (pane ? String(pane).split("/").pop() : "");
-export function chatPane(k) {
-  const c = k?.labels?.[CHAT];
-  if (!c) return null;
-  const m = machineOf(k.address ?? ""), id = chatLabel(c);
-  return m ? `${m}/${id}` : id;
-}
-
-// The slot an agent was started for, before it had an agent: herdr.chat.slot.
-export const SLOT = "herdr.chat.slot";
-export const slotOf = (k) => k?.labels?.[SLOT] ?? null;

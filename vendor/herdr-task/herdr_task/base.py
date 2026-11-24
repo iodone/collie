@@ -12,36 +12,16 @@ import zipfile
 
 VERSION = "1"
 HOME = os.path.expanduser("~")
-# HERDR_TASK_STORE: another task list (a test's own), as HERDR_TASK_SETTINGS for settings.
-STORE = os.environ.get("COLLIE_TASK_STORE") or os.environ.get("HERDR_TASK_STORE") or os.path.join(HOME, ".local", "share", "collie", "tasks")
+STORE = os.environ.get("COLLIE_TASK_STORE") or os.path.join(HOME, ".local", "share", "collie", "tasks")
 WORKTREES = os.environ.get("COLLIE_WORKTREES") or os.path.join(HOME, ".local", "share", "collie", "worktrees")
-LEGACY = os.path.join(HOME, ".config", "herdr-app", "data", "tasks")
 SHELLS = {"bash", "zsh", "fish", "sh", "dash", "ksh", "tcsh", "csh", "nu", "xonsh", "pwsh", "powershell", "elvish"}
 RANK = {"blocked": 4, "done": 3, "working": 2, "idle": 1}
 MAX_RUNNING = 10
 GH = os.environ.get("HERDR_TASK_GH") or "gh"
-# How often tick asks GitHub about a pull request (ms).
-PR_EVERY = 60000
 
 
 class Fail(Exception):
     pass
-
-
-# Shepherdr's installer (bin/shepherdr) puts this file here while it replaces helpers or templates,
-# and removes it once `shepherdr doctor` finds the install whole. Until then nothing copies a helper
-# to another machine: not the sync, not a command's self-copy (cli.remote, herdr-artifact's,
-# collie-secret's install), so a half-done or wrong copy never reaches every machine.
-SYNC_HOLD = os.path.join(HOME, ".local", "state", "collie", "sync-hold")
-
-
-def sync_held():
-    """Why copies to other machines wait now (the hold's first line), or None."""
-    try:
-        with open(SYNC_HOLD) as f:
-            return f.readline().strip() or "held by Shepherdr's installer"
-    except OSError:
-        return None
 
 
 # Collie has no Shepherdr add-on switches: optional work stays on.

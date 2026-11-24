@@ -38,7 +38,7 @@ QUIET_MS = 20 * 60000          # Working with nothing happening this long: stall
 
 def activity(task, live):
     """When its agent last did something: its session log written, its status changed, a report."""
-    times = [task.get("started") or 0, ((task.get("agents") or [{}])[-1] or {}).get("at") or 0,
+    times = [task.get("started_at") or 0, ((task.get("agents") or [{}])[-1] or {}).get("at") or 0,
              (task.get("progress") or {}).get("at") or 0]
     times += [k.get("status_ms") or 0 for k in live]
     log = agent_log(task)
@@ -78,8 +78,7 @@ def news_line(s, t, v, event, words=None):
             "stalled": f"{ref} {words} ({title})",
             "working-again": f"{ref} is working again: {(t.get('back') or {}).get('why') or 'its agent is at work again'} ({title})",
             "backup": f"{ref} backup: {words} ({title})",
-            "done": f"{ref} is done" + (": merged" if t.get("merged") else ": nothing to merge" if t.get("nothing_to_merge")
-                                        else ": accepted" if t.get("accepted_at") else "") + f" ({title})"}[event]
+            "done": f"{ref} is done ({title})"}[event]
     return f'<herdr-news task="{attr(ref)}" event="{event}">{text.replace("<", "‹").replace(">", "›")}</herdr-news>'
 
 
@@ -152,7 +151,7 @@ def news_pass(report, folder=None):
                 lines = [("backup", news_line(s, t, v, "backup", backup_news(t)))] if backup else []
                 # Taken back to work after it said ready (back_to_work(), busy_again()): told as it happens.
                 # Its agent took up what needed the person (failing checks: on_it()) too.
-                if v["status"] == "working" and ((prev or {}).get("status") in ("ready", "merging")
+                if v["status"] == "working" and ((prev or {}).get("status") == "ready"
                                                  or (prev or {}).get("needs") == "attention" and t.get("attention")):
                     event = "working-again"
                 if event and (prev or {}).get("status") != v["status"]:

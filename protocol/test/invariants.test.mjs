@@ -128,16 +128,15 @@ test("卡片回答的合法性：rework 必须带批注，drop 才落 settled", 
 
 // ── 每小时唤醒预算：全局一份 ─────────────────────────────────
 
-const wakeCase = (createdAt, space = "collie", stream = "job_turn") => ({
+const messageCase = (createdAt, space = "collie", origin = "event") => ({
   created_at: createdAt,
   space: { primary: space },
-  stream,
-  wake: stream === "job_turn",
+  origin,
 });
 
 test("全局预算默认 6/小时：第 7 次唤醒被拦，降级为卡", () => {
   assert.equal(BUDGET_PER_HOUR, 6);
-  const cases = Array.from({ length: 6 }, (_, i) => wakeCase(minutesAgo(50 - i * 5)));
+  const cases = Array.from({ length: 6 }, (_, i) => messageCase(minutesAgo(50 - i * 5)));
   const before = checkBudget(cases, NOW);
   assert.equal(before.used, 6);
   assert.equal(before.allowed, false);
@@ -152,20 +151,20 @@ test("全局预算默认 6/小时：第 7 次唤醒被拦，降级为卡", () =>
 
 test("预算按全局算，不按 space 算：三个 space 各 2 次就已经用完", () => {
   const cases = [
-    wakeCase(minutesAgo(40), "collie"),
-    wakeCase(minutesAgo(38), "collie"),
-    wakeCase(minutesAgo(30), "blog"),
-    wakeCase(minutesAgo(28), "blog"),
-    wakeCase(minutesAgo(20), "slide"),
-    wakeCase(minutesAgo(18), "slide"),
+    messageCase(minutesAgo(40), "collie"),
+    messageCase(minutesAgo(38), "collie"),
+    messageCase(minutesAgo(30), "blog"),
+    messageCase(minutesAgo(28), "blog"),
+    messageCase(minutesAgo(20), "slide"),
+    messageCase(minutesAgo(18), "slide"),
   ];
   const budget = checkBudget(cases, NOW);
   assert.equal(budget.used, 6);
   assert.equal(budget.allowed, false, "若按 space 算，这里每 space 只用了 2 次，会误判为放行");
 });
 
-test("chat turn 不吃预算（人自己说话不该消耗自己的唤醒额度）", () => {
-  const humans = Array.from({ length: 10 }, (_, i) => wakeCase(minutesAgo(30 - i), "collie", "chat_turn"));
+test("人的消息不吃事件预算", () => {
+  const humans = Array.from({ length: 10 }, (_, i) => messageCase(minutesAgo(30 - i), "collie", "human"));
   const budget = checkBudget(humans, NOW);
   assert.equal(budget.used, 0);
   assert.equal(budget.allowed, true);
@@ -173,7 +172,7 @@ test("chat turn 不吃预算（人自己说话不该消耗自己的唤醒额度�
 });
 
 test("窗口滑动：61 分钟前的唤醒不计入", () => {
-  const cases = [wakeCase(minutesAgo(61)), wakeCase(minutesAgo(59))];
+  const cases = [messageCase(minutesAgo(61)), messageCase(minutesAgo(59))];
   assert.equal(usedBudget(cases, NOW).length, 1);
   const budget = checkBudget(cases, NOW);
   assert.equal(budget.used, 1);
@@ -268,10 +267,7 @@ test("命中任一条护栏都必须落到 waiting + approval 卡，规则说 ne
             title: "cleanup",
             brief_ref: "/tmp/brief.md",
             base: "main",
-            review: true,
-            merge: true,
             access: "full",
-            tells: "never",
           },
         },
       ],
@@ -326,10 +322,7 @@ test("护栏不可绕过的结构性一层：schema 不接受 guard 旁路字段
           title: "rm -rf",
           brief_ref: "/tmp/b.md",
           base: "main",
-          review: false,
-          merge: true,
           access: "full",
-          tells: "never",
         },
       },
     ],
@@ -409,7 +402,7 @@ test("长任务没进展 ≠ 失败：状态没前进且未超阈值时判 idle_
   const rc = await fixture("receipt");
   const calm = {
     ...rc,
-    task: { ...rc.task, previous_state: "working", state_changed_at: minutesAgo(45) },
+    task: { ...rc.task, previous_state: "running", state_changed_at: minutesAgo(45) },
     progress: { basis: "task_state_advance", advanced: false, verdict: "idle_normal" },
   };
   const verdict = judgeProgress(calm, NOW);
@@ -439,15 +432,6 @@ test("快照上限是常量 4KB；Case 允许非 git 的 state 目录", async ()
   assert.equal(SNAPSHOT_BYTES_MAX, 4096);
   const ca = await fixture("case");
   assert.equal(ca.space.resolution, "single");
-});
-
-test("回执是 ready 三件套，不是最后一条消息", async () => {
-  const rc = await fixture("receipt");
-  assert.equal(rc.origin, "herdr-task ready");
-  assert.equal(rc.last_message_used, false);
-  assert.ok(rc.proof.refs.length >= 1);
-  assert.equal(validate(rc, "urn:collie:receipt:v1").valid, true);
-  assert.equal(validate({ ...rc, last_message_used: true }, "urn:collie:receipt:v1").valid, false);
 });
 
 // ── §7.2 指令数据分离 ───────────────────────────────────────

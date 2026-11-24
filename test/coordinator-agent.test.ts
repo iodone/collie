@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { coordinatorConfig, runCoordinator } from "../plugins/agent/coordinator.ts";
+import { coordinatorConfig } from "../plugins/agent/coordinator.ts";
 import { CollieService } from "../service/main.ts";
 import { mergeCoordinator } from "../lib/inbox-settings.js";
 
@@ -10,18 +10,17 @@ const ruleset = await Bun.file(new URL("../protocol/fixtures/ruleset.json", impo
 const paths: string[] = [];
 const scratch = () => { const path = mkdtempSync(join(tmpdir(), "collie-host-")); paths.push(path); return path; };
 afterEach(() => { while (paths.length) rmSync(paths.pop()!, { recursive: true, force: true }); });
-const rolePromptRef = resolve(new URL("../templates/collie-coordinator.md", import.meta.url).pathname);
+const rolePromptRef = resolve(new URL("../templates/coordinator.md", import.meta.url).pathname);
 
 function agent() {
   const calls: string[][] = [];
   return { calls, run: async (args: string[]) => {
-    calls.push(args);
-    if (args[0] === "add") return { id: 42, key: "HAT-42" };
+    if (args[0] !== "list") calls.push(args);
+    if (args[0] === "add") return { id: 42, ref: "HAT-42" };
     if (args[0] === "start") return { id: 42, state: "running" };
     return {
-      id: 42, key: "HAT-42", state: "ready", started: 1_763_664_030_000, ready_at: 1_763_666_480_000,
+      id: 42, key: "HAT-42", state: "ready", started_at: 1_763_664_030_000, ready_at: 1_763_666_480_000,
       evidence: { summary: "完成", details: "- 已复核", commits: { list: [["abc1234", "build"]] }, proof: { id: "proof-1", title: "tests passed" } },
-      reviews: [{ result: "report", by: "t99", head: "abc1234" }],
     };
   } };
 }
@@ -45,40 +44,22 @@ describe("Coordinator Host", () => {
     expect(() => mergeCoordinator({}, { cli: "codex", model: "default", effort: "extreme" })).toThrow("invalid effort");
   });
 
-
-  test("headless 输出 Decision 与 session，resume 使用原 session", async () => {
-    const calls: any[] = [];
-    const result = await runCoordinator({
-      instruction: { role_prompt_ref: rolePromptRef, output_contract: "urn:collie:decision:v1" },
-    }, { cli: "codex" }, {
-      session: "session-1",
-      run: async (input) => {
-        calls.push(input);
-        return JSON.stringify({ session_id: "session-1", result: JSON.stringify({ state: "open", why: "构建", actions: [{ kind: "noop", risk_tags: [] }] }) });
-      },
-    });
-    expect(calls[0].command).toBe("codex");
-    expect(calls[0].args.slice(0, 4)).toEqual(["exec", "resume", "session-1", "--json"]);
-    expect(result.session).toBe("session-1");
-    expect(result.decision.why).toBe("构建");
-  });
-
-  test("New / Build 走 chat_turn，不占 job 预算，并实际 spawn", async () => {
+  test("New / Build 是 human Message，不占事件预算，并实际 spawn", async () => {
     const dir = scratch();
     const worker = agent();
     const service = new CollieService({
       stateDir: dir, ruleset, rolePromptRef,
       workspaces: { "collie": { folder: "/repo/collie", cli: "codex" } },
       agent: { run: worker.run },
-      decide: () => ({ state: "open", why: "人主动发起构建", actions: [{ kind: "spawn_task", risk_tags: [], spawn: {
-        title: "Build request", brief_ref: "/tmp/brief.md", base: "current", review: true, merge: false, access: "edit", tells: "needed",
-      } }] }),
     });
-    const decision = await service.request("collie", "实现 New Build", ["COLLIE-42"]);
-    expect(service.ledger.cases[0].snapshot.space_note).toContain("COLLIE-42");
-    expect(decision.run.task_ref).toBe("HAT-42");
-    expect(service.ledger.cases[0]).toMatchObject({ stream: "chat_turn", wake: false, visibility: "chat" });
+    const created = await service.createTicket({
+      space: "collie", title: "Build request", brief: "实现 New Build", kind: "build",
+    });
+    expect(service.ledger.cases[0]).toMatchObject({ origin: "human" });
     expect(service.ledger.cases[0].snapshot.budget.used).toBe(0);
+    expect(service.ledger.cases[0].catalog.playbooks.some((book: any) => book.name === "feature")).toBe(true);
+    expect(service.ledger.cases[0].instruction.role_prompt_ref).toBe(rolePromptRef);
+    expect(created.ticket_ref).toBe("HAT-42");
     expect(worker.calls.map((call) => call[0])).toEqual(["add", "start", "show"]);
   });
 });

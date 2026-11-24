@@ -19,8 +19,9 @@ def ensure_scheduler(quiet=False):
     """Keeps one scheduler on this machine while any folder has automations or tasks at work (it
     runs the queue and tells Assistants their tasks' news): herdr-core runs it (hc run --keep) as
     herdr-automations, outside Herdr's spaces."""
-    need = any((d := read_list(p) or {}).get("automations") or any(t.get("state") in ("scheduled", "queued", "running", "ready") for t in d.get("tasks") or [])
-               for p in store_files())
+    need = any((d := read_list(p) or {}).get("automations") or any(
+        t.get("state") in ("running", "ready") or (t.get("state") == "todo" and (t.get("scheduled_for") or t.get("queued_at")))
+        for t in d.get("tasks") or []) for p in store_files())
     # A space on Autopilot (STORE/.autopilot.json) is woken by it too.
     need = need or any((v or {}).get("on") for v in ((read_list(os.path.join(STORE, ".autopilot.json")) or {}).get("spaces") or {}).values())
     # Where the window lives it also saves the backups (backup_pass), so it always runs there.
