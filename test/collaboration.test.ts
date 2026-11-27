@@ -35,6 +35,7 @@ describe("collaboration registry", () => {
       expect(registry.roleCatalog().roles.some((role) => role.name === "reviewer")).toBe(true);
       expect(registry.defaultPlaybook("review")).toBe("review");
       expect(registry.defaultPlaybook("build")).toBe("feature");
+      expect(registry.defaultPlaybook("verify")).toBe("investigation");
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 

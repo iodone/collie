@@ -120,6 +120,8 @@ class InstallTest(unittest.TestCase):
         self.assertTrue((self.root / ".config/herdr-app/bin/collie-secret").is_file())
         self.assertTrue((self.root / ".local/share/collie/service/main.ts").is_file())
         self.assertTrue((self.root / ".local/share/collie/protocol/invariants.mjs").is_file())
+        self.assertTrue((self.root / ".local/bin/collie-receipts").is_file())
+        self.assertTrue(os.access(self.root / ".local/bin/collie-receipts", os.X_OK))
         task = self.root / ".local/bin/collie-task"
         self.assertTrue(task.is_file())
         self.assertTrue(os.access(task, os.X_OK))
@@ -151,6 +153,19 @@ class InstallTest(unittest.TestCase):
                 capture_output=True, text=True, env=environment, timeout=20, check=False,
             )
             self.assertEqual(result.returncode, 2, msg=f"removed command {command} is still registered")
+
+    @unittest.skipUnless(BUN, "bun is required for the answer CLI smoke test")
+    def test_installed_answer_cli_loads_without_source_tree(self):
+        self.install()
+        answer = self.root / ".config/herdr-app/bin/collie-answer"
+        environment = os.environ.copy()
+        environment.update({"HOME": str(self.root), "PATH": f"{self.fake_bin}:/usr/bin:/bin"})
+        result = subprocess.run(
+            [BUN, str(answer)], capture_output=True, text=True, env=environment, timeout=20, check=False,
+        )
+        self.assertEqual(result.returncode, 2, msg=f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}")
+        self.assertIn("usage: collie-answer", result.stderr)
+        self.assertNotIn("Cannot find module", result.stderr)
 
     @unittest.skipUnless(BUN, "bun is required for the runtime smoke test")
     def test_installed_background_service_starts(self):

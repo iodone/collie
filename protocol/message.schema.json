@@ -48,7 +48,7 @@
     },
     "object_key": {
       "type": "string",
-      "pattern": "^(mr|issue|pipeline|none):.+$",
+      "pattern": "^[a-z0-9][a-z0-9_-]*:.+$",
       "description": "绑定对象键，priority 计数与卡片合并的单位。"
     },
     "occurrences": {

@@ -136,6 +136,40 @@ describe("collie ticket create", () => {
     expect(JSON.parse(readFileSync(join(dir, "queue.json"), "utf8"))).toEqual({ decisions: [] });
   });
 
+  test("chat decision_ref 续接同一 Task，turn_id 重试不新增 revision", async () => {
+    const dir = scratch();
+    const agent = fakeAgent();
+    const service = new CollieService({
+      stateDir: dir, ruleset, agent: { run: agent.run },
+      workspaces: { collie: { folder: "/repo/collie" } },
+    });
+    const created = await service.createTicket({ space: "collie", title: "交付发布方案", brief: "完成发布方案" });
+    const input = {
+      space: "collie", turn_id: "turn-verify-1",
+      decision: {
+        decision_ref: created.decision_id, state: "open", why: "核验同一交付",
+        actions: [], run: { kind: "verify" },
+      },
+    };
+    const continued = await service.commitDecision(input);
+    expect(continued.id).toBe(created.decision_id);
+    expect(continued.run).toMatchObject({ task_ref: "HAT-42", kind: "verify" });
+    const revisions = service.ledger.history("decision").length;
+    const retried = await service.commitDecision(input);
+    expect(retried.id).toBe(created.decision_id);
+    expect(service.ledger.history("decision")).toHaveLength(revisions);
+
+    await expect(service.commitDecision({
+      space: "collie", turn_id: "turn-duplicate-spawn",
+      decision: {
+        decision_ref: created.decision_id, state: "open", why: "重复派工",
+        actions: [{ kind: "spawn_task", risk_tags: [], spawn: {
+          title: "重复任务", brief_ref: "/tmp/duplicate.md", base: "current", access: "edit",
+        } }],
+      },
+    })).rejects.toThrow("continuation cannot spawn_task");
+  });
+
   test("collie ticket CLI accepts an inline brief, not only a file path", async () => {
     const dir = scratch();
     const agent = fakeAgent();
@@ -233,7 +267,7 @@ describe("collie ticket adopt", () => {
   });
 
   test("adopted tasks recover folder through show before accept/done/start without workspace config", async () => {
-    for (const option of ["accept", "drop"]) {
+    for (const option of ["accept", "archive"]) {
       const dir = scratch();
       const calls: string[][] = [];
       const service = new CollieService({

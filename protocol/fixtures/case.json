@@ -37,12 +37,13 @@
         "why": "低风险文档改动，直派 worker 不出卡"
       }
     ],
+    "active": [],
     "rules_version": 7,
     "budget": {
       "scope": "global",
-      "limit": 6,
+      "limit": 100,
       "used": 2,
-      "remaining": 4,
+      "remaining": 98,
       "window_start": "2026-11-13T09:30:00Z",
       "reset_at": "2026-11-13T10:30:00Z"
     }

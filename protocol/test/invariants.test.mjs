@@ -126,6 +126,18 @@ test("卡片回答的合法性：rework 必须带批注，drop 才落 settled", 
   assert.throws(() => answerCard({ ...card, state: "open" }, { option: "accept", at: NOW, by: "mi" }), /只有 waiting/);
 });
 
+test("accept Card：Archive 独立结算并迁移旧 drop 选项", async () => {
+  const base = await fixture("card");
+  const legacy = { ...base, card: { ...base.card, kind: "accept", options: ["accept", "rework", "drop"] } };
+  const archived = answerCard(legacy, { option: "archive", at: NOW, by: "mi" });
+  assert.equal(archived.state, "settled");
+  assert.equal(archived.settled.outcome, "archived");
+  assert.equal(archived.card.state, "closed");
+  assert.equal(archived.card.answer.option, "archive");
+  assert.deepEqual(archived.card.options, ["accept", "rework", "archive"]);
+  assert.throws(() => answerCard(legacy, { option: "drop", at: NOW, by: "mi" }), /未提供选项 drop/);
+});
+
 // ── 每小时唤醒预算：全局一份 ─────────────────────────────────
 
 const messageCase = (createdAt, space = "collie", origin = "event") => ({
@@ -134,33 +146,27 @@ const messageCase = (createdAt, space = "collie", origin = "event") => ({
   origin,
 });
 
-test("全局预算默认 6/小时：第 7 次唤醒被拦，降级为卡", () => {
-  assert.equal(BUDGET_PER_HOUR, 6);
-  const cases = Array.from({ length: 6 }, (_, i) => messageCase(minutesAgo(50 - i * 5)));
+test("全局预算默认 100/小时：第 101 次唤醒被拦，降级为 Todo", () => {
+  assert.equal(BUDGET_PER_HOUR, 100);
+  const cases = Array.from({ length: 100 }, (_, i) => messageCase(minutesAgo(59 - i * 0.5)));
   const before = checkBudget(cases, NOW);
-  assert.equal(before.used, 6);
+  assert.equal(before.used, 100);
   assert.equal(before.allowed, false);
   assert.equal(before.remaining, 0);
-  assert.equal(before.degrade_to_card, true);
+  assert.equal(before.degrade_to_todo, true);
   assert.equal(before.scope, "global");
 
-  const five = checkBudget(cases.slice(0, 5), NOW);
-  assert.equal(five.allowed, true);
-  assert.equal(five.remaining, 1);
+  const ninetyNine = checkBudget(cases.slice(0, 99), NOW);
+  assert.equal(ninetyNine.allowed, true);
+  assert.equal(ninetyNine.remaining, 1);
 });
 
-test("预算按全局算，不按 space 算：三个 space 各 2 次就已经用完", () => {
-  const cases = [
-    messageCase(minutesAgo(40), "collie"),
-    messageCase(minutesAgo(38), "collie"),
-    messageCase(minutesAgo(30), "blog"),
-    messageCase(minutesAgo(28), "blog"),
-    messageCase(minutesAgo(20), "slide"),
-    messageCase(minutesAgo(18), "slide"),
-  ];
+test("预算按全局算，不按 space 算：三个 space 合计 100 次就已用完", () => {
+  const spaces = ["collie", "blog", "slide"];
+  const cases = Array.from({ length: 100 }, (_, i) => messageCase(minutesAgo(59 - i * 0.5), spaces[i % 3]));
   const budget = checkBudget(cases, NOW);
-  assert.equal(budget.used, 6);
-  assert.equal(budget.allowed, false, "若按 space 算，这里每 space 只用了 2 次，会误判为放行");
+  assert.equal(budget.used, 100);
+  assert.equal(budget.allowed, false, "若按 space 算，这里每 space 只用了约 33 次，会误判为放行");
 });
 
 test("人的消息不吃事件预算", () => {

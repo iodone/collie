@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:collie:ruleset:v1",
   "title": "Ruleset",
-  "description": "路由表的落盘形态（mods/collie-rules 编辑的那份文件）。它同时承载三样不可下放的东西：护栏七条、全局预算、跳数/调序上限——这三样是 Everywhere only，不允许 per-space 覆盖（DESIGN §5.3）。",
+  "description": "路由表的落盘形态（mods/collie-rules 编辑的那份文件）。它承载不可下放的护栏、唤醒预算、跳数和调序上限——Everywhere only，不允许 per-space 覆盖。预算耗尽进入 Todo，不生成 Needs you 卡。",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -44,14 +44,14 @@
         "window_minutes",
         "scope"
       ],
-      "description": "唤醒预算。DESIGN §3.2：必须是全局的——按 space 算，10 个 space 就是 60 次/小时。",
+      "description": "唤醒预算。耗尽时进入 Todo 队列，可 Run now，不生成 Needs you 卡。",
       "properties": {
         "per_hour": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 60,
-          "default": 6,
-          "description": "每窗口允许唤醒 coordinator 的次数，默认 6（DESIGN §9 的缓解措施）。"
+          "maximum": 100,
+          "default": 100,
+          "description": "每窗口允许唤醒 coordinator 的次数，默认 100（DESIGN §9 的缓解措施）。"
         },
         "window_minutes": {
           "const": 60,

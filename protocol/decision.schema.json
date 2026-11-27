@@ -27,6 +27,11 @@
       "pattern": "^dc_[0-9a-z]{8,32}$",
       "description": "决定标识，dc_ 前缀加 8–32 位小写字母数字。只追加，不修改。"
     },
+    "decision_ref": {
+      "type": ["string", "null"],
+      "pattern": "^dc_[0-9a-z]{8,32}$",
+      "description": "续接的活跃 Decision。由 Coordinator 从 Case.snapshot.active 选择，service 校验后写同一 Decision 的新 revision；它不是新的实体或 Task 身份。"
+    },
     "key": {
       "type": "string",
       "minLength": 1,
@@ -107,12 +112,15 @@
       "properties": {
         "object_key": {
           "type": "string",
-          "pattern": "^(mr|issue|pipeline|none):.+$",
+          "pattern": "^[a-z0-9][a-z0-9_-]*:.+$",
           "description": "绑定对象键（与 Event.merge.object_key 同构）。priority 变更计数、卡片合并都以它为单位。"
         },
         "kind": {
-          "enum": ["mr", "issue", "pipeline", "none"],
-          "description": "对象种类，冗余一份以便索引不必回查 Event。"
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]*$",
+          "minLength": 1,
+          "maxLength": 40,
+          "description": "外部对象的原始类型，不参与任务目标或动作判断。"
         },
         "round": {
           "type": "integer",
@@ -166,9 +174,9 @@
       "description": "运行关联。Task 的持久状态是唯一执行进度事实；长任务没有回执不是失败信号。",
       "properties": {
         "kind": {
-          "enum": ["build", "review"],
+          "enum": ["build", "review", "verify"],
           "default": "build",
-          "description": "任务类型。build = 写代码；review = 审（review 事件派出的只读任务）。未写按 build。它是审阅工作的判据：review 任务的 agent 一启动就按审阅工作运行。"
+          "description": "Task 的当前执行动作：build = 产出或修改交付物；review = 评审质量与风险；verify = 按明确判据核验事实。未写按 build。动作不是 Task 状态，也不是去重身份。"
         },
         "task_ref": {
           "type": ["string", "null"],
@@ -301,8 +309,8 @@
           "description": "谁结的。expiry = 超时自动终结（必须有 why 说明）。"
         },
         "outcome": {
-          "enum": ["accepted", "merged", "commented", "superseded", "dropped", "expired", "failed"],
-          "description": "怎么结的。superseded = 被后来的决定覆盖；dropped = 明确不做；expired = 过期。"
+          "enum": ["accepted", "archived", "merged", "commented", "superseded", "dropped", "expired", "failed"],
+          "description": "怎么结的。archived = 归档并保留交付证据；superseded = 被后来的决定覆盖；dropped = 明确不做；expired = 过期。"
         }
       }
     }
@@ -438,7 +446,7 @@
             },
             "options": {
               "type": "array",
-              "items": { "enum": ["accept", "rework", "drop", "later"] },
+              "items": { "enum": ["accept", "rework", "archive", "drop", "later"] },
               "uniqueItems": true,
               "minItems": 1,
               "maxItems": 4,
@@ -556,7 +564,7 @@
         },
         "options": {
           "type": "array",
-          "items": { "enum": ["accept", "rework", "drop", "later"] },
+          "items": { "enum": ["accept", "rework", "archive", "drop", "later"] },
           "uniqueItems": true,
           "minItems": 1,
           "maxItems": 4,
@@ -583,7 +591,7 @@
           "description": "人的回答。null = 还没答。回答会推进 decision.state（waiting→open/settled），但**不推进 hops**。",
           "properties": {
             "option": {
-              "enum": ["accept", "rework", "drop", "later"],
+              "enum": ["accept", "rework", "archive", "drop", "later"],
               "description": "选了哪一项。rework 必须带 annotations，否则 worker 拿不到改动点。"
             },
             "at": {

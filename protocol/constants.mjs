@@ -11,8 +11,8 @@ export const MAX_HOPS = 8;
  */
 export const HOPS_RESET_ON_CARD = false;
 
-/** DESIGN §3.2 / §9：每小时唤醒预算，**全局**一份（不按 space 切）。 */
-export const BUDGET_PER_HOUR = 6;
+/** DESIGN §3.2 / §9：每小时唤醒预算，**全局**一份（不按 space 切）。耗尽进入 Todo。 */
+export const BUDGET_PER_HOUR = 100;
 export const BUDGET_WINDOW_MINUTES = 60;
 
 /** DESIGN §9：同一 object 24h 内 priority 最多改 2 次，第 3 次必须出卡。 */
@@ -33,8 +33,8 @@ export const ASK_FIRST = Object.freeze([
 /** 终态：进入后不再派发。settled 必须有 settled 对象。 */
 export const TERMINAL_STATES = Object.freeze(["settled"]);
 
-/** DESIGN §4.1：人对卡片的四种回答。 */
-export const CARD_OPTIONS = Object.freeze(["accept", "rework", "drop", "later"]);
+/** DESIGN §4.1：Card answers. Archive preserves delivery evidence; drop means do not proceed. */
+export const CARD_OPTIONS = Object.freeze(["accept", "rework", "archive", "drop", "later"]);
 
 /** DESIGN §3.2 / §9：交给 coordinator 的快照上限，内核拼，它不能自己扩大视野。 */
 export const SNAPSHOT_BYTES_MAX = 4096;

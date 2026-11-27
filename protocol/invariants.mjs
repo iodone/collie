@@ -97,7 +97,10 @@ export function answerCard(decision, answer) {
   assert(decision && decision.card, "answerCard 需要 state=waiting 且带 card 的 Decision");
   assert(decision.state === "waiting", `只有 waiting 的决定能回答，实际 ${decision.state}`);
   assert(answer && CARD_OPTIONS.includes(answer.option), `非法选项 ${String(answer && answer.option)}`);
-  assert(!decision.card.options || decision.card.options.includes(answer.option),
+  const cardOptions = decision.card.kind === "accept" && Array.isArray(decision.card.options)
+    ? decision.card.options.map((option) => option === "drop" ? "archive" : option)
+    : decision.card.options;
+  assert(!cardOptions || cardOptions.includes(answer.option),
     `该卡片未提供选项 ${answer.option}`);
   if (answer.option === "rework") {
     assert(Array.isArray(answer.annotations) && answer.annotations.length > 0,
@@ -107,7 +110,7 @@ export function answerCard(decision, answer) {
   const hopsBefore = decision.occurrence.hops;
   const nextState = answer.option === "later" ? "waiting" : "open";
 
-  const cardState = answer.option === "drop" ? "closed" : answer.option === "later" ? "open" : "decided";
+  const cardState = ["drop", "archive"].includes(answer.option) ? "closed" : answer.option === "later" ? "open" : "decided";
 
   const next = {
     ...decision,
@@ -115,6 +118,7 @@ export function answerCard(decision, answer) {
     occurrence: { ...decision.occurrence, hops: hopsBefore }, // ← 不清零，也不推进
     card: {
       ...decision.card,
+      options: cardOptions,
       state: cardState,
       answer: {
         option: answer.option,
@@ -122,7 +126,7 @@ export function answerCard(decision, answer) {
         by: answer.by,
         ...(answer.annotations ? { annotations: answer.annotations } : {}),
       },
-      closed_at: answer.option === "drop" ? answer.at : decision.card.closed_at ?? null,
+      closed_at: ["drop", "archive"].includes(answer.option) ? answer.at : decision.card.closed_at ?? null,
       snooze_until: answer.option === "later" ? answer.snooze_until ?? null : decision.card.snooze_until ?? null,
     },
   };
@@ -130,11 +134,12 @@ export function answerCard(decision, answer) {
   assert(next.occurrence.hops === hopsBefore,
     `卡片回答不得改变 hops（${hopsBefore} → ${next.occurrence.hops}）`);
   assert(HOPS_RESET_ON_CARD === false, "常量 HOPS_RESET_ON_CARD 被改成了非 false，与 DESIGN §3.2 冲突");
+  if (answer.option === "archive") return settle(next, { at: answer.at, by: "human", outcome: "archived" });
   return answer.option === "drop" ? settle(next, { at: answer.at, by: "human", outcome: "dropped" }) : next;
 }
 
 // ─────────────────────────────────────────────────────────────
-// §3.2 / §9 唤醒预算：全局一份，默认 6 次/小时
+// §3.2 / §9 唤醒预算：全局一份，默认 100 次/小时；耗尽进入 Todo
 // ─────────────────────────────────────────────────────────────
 
 /**
@@ -152,8 +157,7 @@ export function usedBudget(cases, now, { window_minutes = BUDGET_WINDOW_MINUTES 
 }
 
 /**
- * 还能不能唤醒 coordinator。
- * 预算耗尽时唯一合法降级是「出卡等人」（DESIGN §9：超出降级为卡）。
+ * 还能不能唤醒 coordinator。耗尽进入 Todo，可 Run now。
  */
 export function checkBudget(cases, now, { limit = BUDGET_PER_HOUR, window_minutes = BUDGET_WINDOW_MINUTES } = {}) {
   const end = ms(now);
@@ -170,7 +174,7 @@ export function checkBudget(cases, now, { limit = BUDGET_PER_HOUR, window_minute
     used,
     remaining,
     allowed,
-    degrade_to_card: !allowed,
+    degrade_to_todo: !allowed,
     window_minutes,
     window_start: new Date(end - window_minutes * 60 * 1000).toISOString(),
     window_end: new Date(end).toISOString(),
@@ -364,7 +368,7 @@ export function settle(decision, { at, by, outcome }) {
   assert(decision, "settle 需要 Decision");
   assert(["coordinator", "human", "expiry"].includes(by), `非法 settle.by: ${String(by)}`);
   assert(
-    ["accepted", "merged", "commented", "superseded", "dropped", "expired", "failed"].includes(outcome),
+    ["accepted", "archived", "merged", "commented", "superseded", "dropped", "expired", "failed"].includes(outcome),
     `非法 settle.outcome: ${String(outcome)}`,
   );
   return {

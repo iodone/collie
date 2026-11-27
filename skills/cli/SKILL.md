@@ -37,6 +37,17 @@ collie decision commit --space <space> --file <path|-> [--project <project>] [--
 
 The file or stdin is a `urn:collie:decision:v1` JSON Decision. Use the same `--turn-id` when retrying.
 
+To continue an existing target, set `decision_ref` to a `decision_id` from the current Case `snapshot.active`. The service writes a new revision of that Decision and preserves its Task. Never combine `decision_ref` with `spawn_task`; only a genuinely separate goal may spawn. Use `run.kind = build | review | verify` for the current Task action.
+
+## Operate a Budget-deferred Todo
+
+```sh
+collie decision run --decision <decision_id>
+collie decision archive --decision <decision_id>
+```
+
+Run now accepts an open Todo. With an existing Task it starts that same Task directly, without waking the Coordinator or spawning again. Without a Task it supports only a budget-deferred Decision and re-enters the Coordinator. Archive completes any existing Task with `done`, then settles the real Decision as `archived`; orphan Tasks use the Task command directly.
+
 ## Read State
 
 ```sh
@@ -61,7 +72,7 @@ Public task commands are exactly `add / list / show / start / status / ready / a
 | `collie task accept <task>` | Service finalization after accept: only `ready → done`; no merge, PR, review, or verification behavior. |
 | `collie task done <task>` | Service finalization after drop. `drop` is a Card option, not a task subcommand. |
 
-Drivers record `status` and finish at `ready`; they never mark a Task `done`. Review and verification are playbook helper activities, and merge / comment / close are playbook / Decision delivery: none is a Task command, field, state, or accept gate. Artifacts join a Ticket only through `artifact.task` or `Task.proof`.
+Drivers record `status` and finish at `ready`; they never mark a Task `done`. Review and verification are playbook helper activities, and merge / comment / close are playbook / Decision delivery: none is a Task command, field, state, or accept gate. Receipts join a Ticket through their Task ref; proof refs open the existing evidence viewer.
 
 ## Retry Delivery
 

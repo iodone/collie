@@ -6,7 +6,7 @@ import { sourceEvent, verifySource } from "./sources.ts";
 import { intakeEvent } from "./intake.ts";
 
 const MAX_BODY = 1_048_576;
-const routes = ["/answer", "/ticket", "/ticket/adopt", "/decision", "/deliver", "/v1/ingress", "/v1/collaboration/reload"];
+const routes = ["/answer", "/ticket", "/ticket/adopt", "/decision", "/decision/run", "/decision/archive", "/deliver", "/v1/ingress", "/v1/collaboration/reload"];
 
 function send(response: ServerResponse, status: number, value: unknown): void {
   if (response.headersSent) return response.end();
@@ -105,15 +105,19 @@ export function serviceHandler(service: CollieService, { requireClientAuth = fal
 
       const result = url === "/v1/collaboration/reload"
         ? service.reloadCollaboration()
-        : url === "/decision"
-          ? await service.commitDecision({ space: input.space, project: input.project, decision: input.decision, turn_id: input.turn_id })
+        : url === "/decision/run"
+          ? await service.runDecision(input.decisionId)
+          : url === "/decision/archive"
+            ? await service.archiveDecision(input.decisionId)
+          : url === "/decision"
+              ? await service.commitDecision({ space: input.space, project: input.project, decision: input.decision, turn_id: input.turn_id })
         : url === "/ticket"
           ? await service.createTicket({ space: input.space, project: input.project, title: input.title, brief: input.brief, kind: input.kind, playbook: input.playbook })
           : url === "/ticket/adopt"
             ? await service.adoptTicket({ space: input.space, task_ref: input.task_ref, title: input.title, brief: input.brief, kind: input.kind })
             : url === "/deliver"
               ? await service.deliver(input.decisionId)
-              : await service.answerCard(input.decisionId, input.answer, input.coordinatorAddress);
+              : await service.answerCard(input.decisionId, input.answer);
       send(response, 200, result);
     } catch (error) {
       if (url === "/decision") {

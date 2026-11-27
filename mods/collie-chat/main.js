@@ -216,6 +216,7 @@ export default class Chat extends View {
     this.taskKey = this.thread ? P?.key ?? null : null;
     // Its task's id (HERD-12), for the box's "Message HERD-12".
     this.taskRef = P?.task ?? null;
+    this.tasks = [];
     if (!this.addr && this.role && this.slot) this.addr = this.slotAgent();
     this.machine = this.addr?.includes("/") ? this.addr.split("/")[0] : null;
     this.phase = "finding";

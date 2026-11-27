@@ -10,6 +10,7 @@ import { answerCard as authorizeCard } from "../protocol/invariants.mjs";
 
 const event = await Bun.file(new URL("../protocol/fixtures/event.json", import.meta.url)).json();
 const ruleset = await Bun.file(new URL("../protocol/fixtures/ruleset.json", import.meta.url)).json();
+const decisionFixture = await Bun.file(new URL("../protocol/fixtures/decision.json", import.meta.url)).json();
 const emptyTaskStore = async () => ({ tasks: [] });
 const paths: string[] = [];
 const servers: any[] = [];
@@ -49,9 +50,40 @@ describe("Inbox detail answer socket", () => {
     expect(response.body.decision.state).toBe("settled");
     expect(response.body.decision.settled.outcome).toBe("dropped");
     expect(response.body.decision.card.answer.by).toBe("human");
-    expect(response.body.resumed).toBe(false);
     expect(service.ledger.waiting()).toEqual([]);
     expect(service.ledger.decisions[0].occurrence.hops).toBe(0);
+  });
+
+  test("accept/archive 在 Task 已不存在时仍结算 Decision", async () => {
+    for (const option of ["accept", "archive"]) {
+      const dir = mkdtempSync(join(tmpdir(), "collie-answer-missing-task-"));
+      paths.push(dir);
+      const run = async (args: string[]) => {
+        if (args[0] === "accept" || args[0] === "done") throw new Error(`Command failed: collie-task ${args[0]} COLL-915`);
+        if (args[0] === "show") throw new Error(`No task COLL-915 in /tmp`);
+        if (args[0] === "list") return [{ folder: "/tmp", tasks: [] }];
+        throw new Error(`unexpected task command: ${args.join(" ")}`);
+      };
+      const service = new CollieService({
+        stateDir: dir, ruleset, workspaces: { collie: { folder: "/tmp", projects: { collie: "/tmp" } } }, agent: { run },
+      });
+      const decision = await service.commitDecision({
+        space: "collie", project: "collie", turn_id: `missing-task-${option}`,
+        decision: {
+          ...decisionFixture,
+          state: "waiting", run: { task_ref: "COLL-915", coordinator_ref: null }, receipt_ref: "rc_missing",
+          actions: [{ kind: "noop", risk_tags: [] }],
+          card: {
+            kind: "accept", question: "Task already missing", options: ["accept", "rework", "archive"],
+            state: "open", created_at: "2026-11-13T10:00:00Z", acked_at: null, answer: null,
+            snooze_until: null, closed_at: null,
+          },
+        },
+      });
+      const result = await service.answerCard(decision.id, { option, at: "2026-11-13T11:00:00Z", by: "human" });
+      expect(result.decision.state).toBe("settled");
+      expect(result.decision.settled.outcome).toBe(option === "accept" ? "accepted" : "archived");
+    }
   });
 });
 

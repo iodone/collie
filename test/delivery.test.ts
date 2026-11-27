@@ -132,48 +132,33 @@ describe("plugins/delivery", () => {
 });
 
 describe("plugins/channel/herdr", () => {
-  test("accept 续接明确 coordinator address，hops 不变且回答随命令回传", async () => {
+  test("accept 只提交 Card answer，不续接 Coordinator", async () => {
     const decision = structuredClone(fixture);
     decision.occurrence.hops = 6;
-    const fake = mockRunner();
-    const result = await answerHerdrCard(decision, acceptedBy, "laptop>vm-1/t23", { run: fake.run });
+    const result = await answerHerdrCard(decision, acceptedBy);
 
-    expect(result.resumed).toBe(true);
+    expect(Object.keys(result)).toEqual(["decision"]);
     expect(result.decision.occurrence.hops).toBe(6);
-    expect(fake.calls).toHaveLength(1);
-    expect(fake.calls[0].slice(0, 2)).toEqual(["send", "laptop>vm-1/t23"]);
-    expect(fake.calls[0][3]).toBe("--json");
-    const message = JSON.parse(fake.calls[0][2]);
-    expect(message).toMatchObject({ type: "card.answer", decision_ref: decision.id, hops: 6 });
-    expect(message.answer).toMatchObject(acceptedBy);
+    expect(result.decision.card.answer).toMatchObject(acceptedBy);
   });
 
-  test("rework 续接同一显式地址并携带结构化批注", async () => {
-    const fake = mockRunner();
+  test("rework 保留结构化批注，但不续接 Coordinator", async () => {
     const answer = {
       option: "rework", at: "2026-11-13T10:03:00Z", by: "mi",
       annotations: [{ file: "plugins/delivery/gitlab.ts", line: 10, note: "保留 head sha 校验" }],
     };
-    const result = await answerHerdrCard(fixture, answer, "t23", { run: fake.run });
+    const result = await answerHerdrCard(fixture, answer);
+    expect(Object.keys(result)).toEqual(["decision"]);
     expect(result.decision.state).toBe("open");
-    expect(JSON.parse(fake.calls[0][2]).answer.annotations).toEqual(answer.annotations);
+    expect(result.decision.card.answer.annotations).toEqual(answer.annotations);
   });
 
-  test("drop/later 只回答卡片，不发任何命令", async () => {
+  test("drop/later 只回答卡片，不产生 resumed 字段", async () => {
     for (const option of ["drop", "later"]) {
-      const fake = mockRunner();
       const answer = { ...acceptedBy, option, ...(option === "later" ? { snooze_until: "2026-11-13T12:00:00Z" } : {}) };
-      const result = await answerHerdrCard(fixture, answer, undefined, { run: fake.run });
-      expect(result.resumed).toBe(false);
+      const result = await answerHerdrCard(fixture, answer);
+      expect(Object.keys(result)).toEqual(["decision"]);
       expect(result.decision.occurrence.hops).toBe(fixture.occurrence.hops);
-      expect(fake.calls).toEqual([]);
     }
-  });
-
-  test("accept 缺地址时拒绝，绝不拿 space 猜 coordinator", async () => {
-    const fake = mockRunner();
-    await expect(answerHerdrCard(fixture, acceptedBy, undefined, { run: fake.run }))
-      .rejects.toThrow("explicit coordinator address");
-    expect(fake.calls).toEqual([]);
   });
 });

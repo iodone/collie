@@ -34,15 +34,16 @@ version: 7
    三轴（Spec / Standards / 结构）、findings、unproven 写在同一份正文里；  
    正文必须可独立阅读，不含本地临时路径。
 
-7. **贴到 PR。**  
-   每个 head sha 只保留一条评论；修订时编辑已有评论，不新发。  
-   把评论位置（note id 或 URL）和 unproven 交回发起方。  
-   是否接受或合并由人决定；Verdict 不是合并放行。
+7. **直接贴到 PR。**
+   评论是评审任务的交付物，不是需要再次授权的独立 delivery。评论定稿后直接发布到 MR，**不得为了发评论再出一次 accept 卡，也不得等到 Ticket accept 后才发布**。
+   每个 head sha 只保留一条评论；修订时编辑已有评论，不新发。
+   评论发布后，把 note id 或 URL 和 unproven 交回发起方。Ticket accept 只负责人验收并结束当前 Ticket，与评论发布分开。
+   是否 approve、merge 或 push 仍需单独的 Decision 授权，不在本 playbook 范围内；Verdict 不是合并放行。
 
 ## 交付
 
-- 一条整合后的评审评论（含 Verdict、三轴、findings、unproven）
-- 评论所在的 PR / 评审位置（note id 或 URL）
+- 已发布到 MR 的评审评论（含 Verdict、三轴、findings、unproven）
+- 评论的 note id 或 URL；发布失败时，记录失败原因，不能宣称评论已交付
 - unproven 清单
 - 你与 reviewer 结论不一致处及理由（若有）
 

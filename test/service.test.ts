@@ -3,6 +3,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CollieService } from "../service/main.ts";
+import { coordinate } from "../kernel/coordinator.ts";
+import { Ingress } from "../kernel/ingress.ts";
 
 const event = await Bun.file(new URL("../protocol/fixtures/event.json", import.meta.url)).json();
 const baseRules = await Bun.file(new URL("../protocol/fixtures/ruleset.json", import.meta.url)).json();
@@ -81,7 +83,6 @@ describe("M6 后台双循环", () => {
     expect(answered.decision.state).toBe("settled");
     expect(answered.decision.settled.outcome).toBe("accepted");
     expect(answered.decision.occurrence.hops).toBe(1);
-    expect(answered.resumed).toBe(false);
     expect(service.ledger.waiting()).toEqual([]);
 
     const next = await service.process({ ...event, id: "ev_nextcommit01", key: "mr!93@next" });
@@ -364,8 +365,8 @@ describe("M6 后台双循环", () => {
     expect(service.ledger.decisions).toHaveLength(1);
   });
 
-  test("真人 accept/drop 命令失败不落 answered/settled，重试只有一个终态 revision", async () => {
-    for (const option of ["accept", "drop"] as const) {
+  test("真人 accept/archive 命令失败不落 answered/settled，重试只有一个终态 revision", async () => {
+    for (const option of ["accept", "archive"] as const) {
       const dir = scratch();
       const agent = fakeAgent();
       let terminalAttempts = 0;
@@ -397,7 +398,7 @@ describe("M6 后台双循环", () => {
       const retried = await service.answerCard(created.decision_id, answer);
       expect(terminalAttempts).toBe(2);
       expect(retried.decision).toMatchObject({
-        state: "settled", settled: { outcome: option === "accept" ? "accepted" : "dropped", by: "human" },
+        state: "settled", settled: { outcome: option === "accept" ? "accepted" : "archived", by: "human" },
       });
       expect(service.ledger.history("decision").filter((item) => item.id === created.decision_id && item.state === "settled")).toHaveLength(1);
     }
@@ -431,21 +432,81 @@ describe("M6 后台双循环", () => {
     expect(JSON.parse(readFileSync(join(dir, "queue.json"), "utf8")).decisions[0].card.kind).toBe("accept");
   });
 
-  test("人 drop ready Card 调 task done，并与 Decision 同时终结", async () => {
+  test("人 archive ready Card 调 task done，并与 Decision 同时终结", async () => {
     const dir = scratch();
     const agent = fakeAgent();
     const service = new CollieService({
       stateDir: dir, ruleset: structuredClone(baseRules), agent: { run: agent.run },
       workspaces: { collie: { folder: "/repo/collie" } },
     });
-    const created = await service.createTicket({ space: "collie", title: "drop ready", brief: "stop", kind: "build" });
+    const created = await service.createTicket({ space: "collie", title: "archive ready", brief: "stop", kind: "build" });
     const answered = await service.answerCard(created.decision_id, {
-      option: "drop", at: "2026-11-13T11:00:00Z", by: "human",
+      option: "archive", at: "2026-11-13T11:00:00Z", by: "human",
     });
     expect(agent.calls.map((call) => call[0])).toEqual(["add", "start", "show", "done"]);
     expect(agent.calls.at(-1)).toContain("human");
-    expect(answered.decision).toMatchObject({ state: "settled", settled: { outcome: "dropped", by: "human" } });
-    expect(answered.resumed).toBe(false);
+    expect(answered.decision).toMatchObject({ state: "settled", settled: { outcome: "archived", by: "human" } });
+  });
+
+  test("预算耗尽进入 Todo，保留当前 Task 并可立即执行", async () => {
+    const dir = scratch();
+    const ruleset = structuredClone(baseRules);
+    ruleset.budget.per_hour = 2;
+    let calls = 0;
+    const taskCalls: string[][] = [];
+    const service = new CollieService({
+      stateDir: dir, ruleset,
+      decide: () => { calls += 1; return { state: "open", why: `noop ${calls}`, actions: [{ kind: "noop", risk_tags: [] }] }; },
+      agent: { run: async (args: string[]) => {
+        taskCalls.push(args);
+        return args[0] === "show" ? { ref: "COLL-42", folder: "/repo" } : { ref: "COLL-42", state: "running" };
+      } },
+    });
+    for (let n = 1; n <= 3; n += 1) {
+      const dispatch = new Ingress().ingest({
+        ...event,
+        id: `ev_budget${String(n).padStart(10, "0")}`,
+        key: `mr!${n}@head`,
+        object: { ...event.object, id: `mr!${n}` },
+        merge: { ...event.merge, lane_key: `mr-review:mr:mr!${n}`, object_key: `mr:mr!${n}` },
+      }).dispatches[0];
+      service.ledger.append("message", dispatch.event);
+      await coordinate(dispatch, {
+        ledger: service.ledger, ruleset,
+        decide: () => { calls += 1; return { state: "open", why: `noop ${n}`, actions: [{ kind: "noop", risk_tags: [] }] }; },
+        now: () => new Date("2026-11-13T10:00:00Z"),
+      });
+    }
+    const deferred = service.ledger.decisions.at(-1);
+    expect(calls).toBe(2);
+    expect(deferred.state).toBe("open");
+    expect(deferred.card).toBeNull();
+    const archived = await service.archiveDecision(deferred.id);
+    expect(archived.state).toBe("settled");
+    expect(archived.settled.outcome).toBe("archived");
+
+    const current = service.ledger.append("decision", {
+      ...deferred, id: "dc_budgetcurrent", why: "继续当前任务", run: { task_ref: "COLL-42", coordinator_ref: null },
+    });
+    const message = service.ledger.messages.at(-1);
+    const dispatch = { kind: "coordinator", laneKey: message.merge.lane_key, space: current.space, message };
+    const held = await coordinate(dispatch, {
+      ledger: service.ledger, ruleset, decisionId: current.id,
+      decide: () => { calls += 1; return { state: "open", why: "should not run", actions: [{ kind: "noop", risk_tags: [] }] }; },
+      now: () => new Date("2026-11-13T10:00:00Z"),
+    });
+    expect(held.state).toBe("open");
+    expect(held.card).toBeNull();
+    expect(held.run.task_ref).toBe("COLL-42");
+
+    const result = await service.runDecision(current.id);
+    expect(calls).toBe(2);
+    expect(taskCalls).toEqual([
+      ["show", "COLL-42", "--json"],
+      ["start", "COLL-42", "--folder", "/repo", "--space", "collie", "--json"],
+    ]);
+    expect(result.state).toBe("open");
+    expect(result.run.task_ref).toBe("COLL-42");
   });
 
   test("helper job 在 service 重启后无结果时转 waiting Card", async () => {
@@ -526,6 +587,23 @@ describe("M6 后台双循环", () => {
     expect(malformed[0]).toMatchObject({ id: "dc_badoutput1", state: "waiting", card: { kind: "alert" } });
     expect(await bad.recoverHelperJobs()).toEqual([]);
     expect(bad.ledger.decisions.find((item) => item.id === "dc_settled01")?.state).toBe("settled");
+  });
+
+  test("settled/noop 关闭 lane，下一次同对象事件重新判断", async () => {
+    const dir = scratch();
+    const noop = () => ({
+      state: "settled", why: "无需处理", actions: [{ kind: "noop", risk_tags: [] }],
+      settled: { at: "2026-11-13T10:00:00Z", by: "coordinator", outcome: "dropped" },
+    });
+    const service = new CollieService({ stateDir: dir, ruleset: structuredClone(baseRules), decide: noop });
+    await service.process({ ...event, id: "ev_nooplane01", key: "mr!nooplane@1" });
+    const snapshot = service.ingress.snapshot();
+    expect(snapshot.lanes).toHaveLength(1);
+    expect(snapshot.lanes[0][1].open).toBe(false);
+    const next = await service.process({ ...event, id: "ev_nooplane02", key: "mr!nooplane@2" });
+    expect(next).toHaveLength(1);
+    expect(next[0].state).toBe("settled");
+    expect(service.ingress.snapshot().lanes[0][1].open).toBe(false);
   });
 
   test("多 space 事件不静默选边：生成 waiting Card", async () => {

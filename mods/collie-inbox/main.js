@@ -1,34 +1,48 @@
-// One Inbox workbench: waiting decisions, working dispatches and settled history.
+// One Inbox workbench: canonical Decision and Task refs, live roles, and settled history.
 // All rows come from the Ledger projection; collie-task is read only for navigation.
-// A ticket opens in its own page: collie's task view with only Terminal and Artifacts.
+// A ticket opens on Detail, with Terminal and task-local Role / Agent views.
 import { View, div, svg } from "gpui-kit";
+import { TextView } from "gpui-base";
 import {
-  appHome, exec, focused, home, layout, panes, props, readTextFile, run,
+  appHome, closeOverlay, exec, focused, home, layout, openOverlay, panes, props, readTextFile, run,
   setShared, shared, spaces, terminals, theme, writeTextFile,
 } from "herdr";
 import {
   parseQueue, queuePath, receiptPath, STAGE_WORD, taskTarget, orphanTickets, taskAgents,
-  ticketGroup, ticketNeed, ticketStage, todoReason, waitingQueue, workKind, workingCount,
+  ticketGroup, ticketNeed, ticketRef, ticketStage, todoReason, waitingQueue, workKind, workingCount,
 } from "./lib/inbox-queue.js";
 import { ownProgress, taskDot } from "./lib/ticket-dot.js";
-import { artifactCli } from "./lib/artview.js";
-import { ensureTerminalTab } from "./lib/terminal-tab.js";
+import { openViewer } from "./lib/artview.js";
 import { SLOT, chatPane } from "./core/spaces.js";
-import { taskArtifacts } from "./core/task-artifacts.js";
+import { taskReceipts, sortReceipts, receiptTitle, receiptProofRefs } from "./core/task-receipts.js";
 import { RADIUS, TEXT, plainError, segmented, toast } from "./lib/ui.js";
 
 const v = () => div().flex().flex_col();
 const h = () => div().flex().flex_row();
 const CLI = () => (globalThis.process?.env?.COLLIE_TASK_CLI) ?? `${appHome()}/bin/collie-task`;
+const COLLIE_CLI = () => `${appHome()}/bin/collie`;
+const RECEIPTS_CLI = () => (globalThis.process?.env?.COLLIE_RECEIPTS_CLI) ?? `${appHome()}/bin/collie-receipts`;
+const ANSWER_CLI = () => (globalThis.process?.env?.COLLIE_ANSWER_CLI) ?? `${appHome()}/bin/collie-answer`;
 const ticket = () => shared("collie.ticket") ?? null;
+const actionTicket = () => shared("collie.action") ?? ticket() ?? {};
+function closeActionOverlay() {
+  const id = shared("collie.actionOverlay");
+  if (id) closeOverlay(id);
+  setShared("collie.actionOverlay", null);
+}
+function closeAcceptOverlay() {
+  const id = shared("collie.acceptOverlay");
+  if (id) closeOverlay(id);
+  setShared("collie.acceptOverlay", null);
+}
 
 // The ticket page: collie's task view nodes (the same ids in layouts/collie.json).
 const STACK = "collie", LIST = "collie-list", TICKET = "collie-ticket";
 const HEAD = "collie-ticket-head", BODY = "collie-ticket-body";
-const TERM = "collie-ticket-term", ARTIFACTS = "collie-ticket-artifacts";
+const TERM = "collie-ticket-term", DETAIL = "collie-ticket-detail", RECEIPTS = "collie-ticket-receipts";
 const EDGE = 12;
 const ID_FONT = "JetBrains Mono";
-const ARTS_EVERY = 15000;
+const RECEIPTS_EVERY = 15000;
 
 function find(node, id) {
   if (!node || typeof node !== "object") return null;
@@ -38,7 +52,7 @@ function find(node, id) {
 }
 
 const isLive = (address) => Boolean(address) && terminals().some((k) => k.address === address && k.state === "live");
-const artsKeyOf = (target) => `${target?.machine ?? ""}|${target?.folder ?? ""}|${target?.ref ?? ""}`;
+const receiptsKeyOf = (target) => `${target?.machine ?? ""}|${target?.folder ?? ""}|${target?.ref ?? ""}`;
 
 // The % done a working ticket shows: its agent's own report first (as the agent reports), else collie-task's.
 function pctOf(target) {
@@ -55,6 +69,12 @@ function minutesLeft(progress) {
 }
 
 const shortLeft = (minutes) => minutes == null ? null : minutes < 1 ? "<1m" : minutes < 60 ? `${minutes}m` : `${Math.round(minutes / 60)}h`;
+const selectableText = (id, text) => TextView.markdown(id, String(text ?? " ")).raw_html(false).selectable(true);
+
+function copyTaskTitle(title, cx) {
+  cx.write_to_clipboard(String(title));
+  toast({ title: "Task name copied", body: String(title), level: "success" });
+}
 
 // Who is at work on the ticket: the task's live agents, by herdr.role. A build's reviewer is a
 // helper agent (never in the task's agents), so its terminal's label is the authority.
@@ -81,23 +101,22 @@ const roleTabName = (agent, agents) => {
   return same.length <= 1 ? base : `${base} ${same.findIndex((item) => item.address === agent.address) + 1}`;
 };
 
-async function showAgentTab(agent, cx, focus = true, name = roleName(agent.role)) {
+function agentHistoryLog(agent) {
+  if (agent?.log?.path && agent.log.kind) return agent.log;
   try {
-    return await ensureTerminalTab({ terminal: agent.address, name, focus, cx });
-  } catch (error) {
-    if (focus) toast({ title: "Agent pane didn't open", body: plainError(error), level: "error" });
-    return null;
-  }
+    const saved = JSON.parse(agent?.labels?.["herdr.resume"] ?? "null");
+    return saved?.log && saved?.kind ? { path: saved.log, kind: saved.kind } : null;
+  } catch { return null; }
 }
 
 const stageOf = (decision, target) => ticketStage(decision, target, liveRoles(target));
 const kindOf = (decision, target) => workKind(decision, target, liveRoles(target));
 
-// What the artifacts view and the header read (shared "tasks.thread" / "tasks.thread.artifacts").
+// What the Receipts view and the header read (shared "tasks.thread" / "tasks.thread.receipts").
 function threadOf(target, decision) {
   return {
     terminal: target?.terminal ?? null,
-    task: target?.ref ?? decision?.id ?? null,
+    task: target?.ref ?? decision?.run?.task_ref ?? decision?.id ?? null,
     title: target?.title ?? null,
     key: target?.key ?? null,
     log: target?.log ?? null,
@@ -117,50 +136,62 @@ function backToInbox() {
   run("layout.select", { stack: STACK, child: LIST });
 }
 
-// The terminal block shows the agent: an edit of that one block in the layout's file, as
-// collie does (a mod can't draw a terminal, and a layout block shows any core terminal
-// without giving it a pane). Only if the file is unchanged since it was read; else read again.
-async function pointTerm(address, cx) {
+// One layout block shows the selected driver or Role agent, including read-only history.
+// Writes are optimistic-concurrency checked so a concurrent layout edit is never overwritten.
+async function pointContent(content, cx) {
   const path = `${appHome()}/layouts/${shared("layout")}.json`;
   for (let i = 0; ; i++) {
     const text = await readTextFile(path);
     const tree = JSON.parse(text ?? "null"), body = find(tree, BODY);
     if (!body) throw new Error("This layout has no ticket terminal.");
-    const node = { id: TERM, type: "block", content: { terminal: address } };
+    const node = { id: TERM, type: "block", content };
     const at = body.children.findIndex((child) => child.id === TERM);
     if (at < 0) body.children.push(node); else body.children[at] = node;
     try { await writeTextFile(path, JSON.stringify(tree, null, 2), text); break; }
     catch (e) { if (i >= 2) throw e; }
   }
-  for (let i = 0; i < 30 && find(layout(), TERM)?.content?.terminal !== address; i++) {
+  const loaded = () => JSON.stringify(find(layout(), TERM)?.content) === JSON.stringify(content);
+  for (let i = 0; i < 30 && !loaded(); i++) {
     await new Promise((done) => cx.timer.after(100, () => done()));
   }
-  if (find(layout(), TERM)?.content?.terminal !== address) throw new Error("Herdr didn't load the layout with this terminal.");
+  if (!loaded()) throw new Error("Herdr didn't load the selected agent.");
 }
 
-async function showTerminal(cx) {
-  const address = ticket()?.target?.terminal ?? null;
-  if (!address || !isLive(address)) return;
+async function showTerminal(cx, agent = null, name = "Terminal") {
+  const address = agent?.address ?? ticket()?.target?.terminal ?? null;
+  const finished = agent?.state === "finished";
+  if (!address || (!finished && !isLive(address))) return;
   try {
-    if (find(layout(), TERM)?.content?.terminal !== address) await pointTerm(address, cx);
+    const content = finished
+      ? { mod: "collie-chat", props: { terminal: address, thread: true, title: name, log: agentHistoryLog(agent) } }
+      : { terminal: address };
+    if (finished && !content.props.log) throw new Error("This terminal has no readable session history.");
+    setShared("collie.ticket.agent", agent?.address ?? null);
+    if (JSON.stringify(find(layout(), TERM)?.content) !== JSON.stringify(content)) await pointContent(content, cx);
     selectPage(TERM);
-    run("pane.focus", { terminal: address });
+    if (!finished) run("pane.focus", { terminal: address });
   } catch (e) {
-    toast({ title: "Terminal didn't open", body: plainError(e), level: "error" });
+    toast({ title: "Agent view didn't open", body: plainError(e), level: "error" });
   }
 }
 
-const showArtifacts = () => selectPage(ARTIFACTS);
+function showDetail() {
+  setShared("collie.ticket.agent", null);
+  selectPage(DETAIL);
+}
 
-// A click on a ticket: its page, on its live terminal when one runs, else its artifacts.
-function openTicket(decision, target, receipt, cx) {
+// A ticket always opens on Detail; Terminal and Role views are explicit choices.
+function openTicket(decision, target, receipt, _cx, showReceipt = false) {
   setShared("collie.ticket", { decision, target, receipt, at: Date.now() });
+  setShared("collie.ticket.agent", null);
+  setShared("tasks.thread.receipt", showReceipt ? receipt : null);
   setShared("tasks.thread", threadOf(target, decision));
-  if (!target?.ref) setShared("tasks.thread.artifacts", { terminal: null, ref: decision.id, machine: null, list: [] });
-  const live = isLive(target?.terminal);
-  const ready = live && find(layout(), TERM)?.content?.terminal === target.terminal;
-  selectPage(ready ? TERM : ARTIFACTS);
-  if (live && !ready) cx.spawn(async (cx) => { await showTerminal(cx); cx.notify(); });
+  if (!target?.ref) setShared("tasks.thread.receipts", {
+    ref: decision.run?.task_ref ?? decision.id,
+    machine: target?.machine ?? null,
+    list: receipt ? [receipt] : [],
+  });
+  selectPage(showReceipt ? RECEIPTS : DETAIL);
 }
 
 async function loadTasks() {
@@ -206,14 +237,6 @@ function filterAction(id, label, selected, onClick, t) {
     .child(label);
 }
 
-function ticketRef(decision, target = null) {
-  if (target?.ref) return String(target.ref).toUpperCase();
-  const taskRef = decision.run?.task_ref;
-  if (taskRef && /-\d+$/.test(taskRef)) return taskRef.toUpperCase();
-  const numeric = Number(String(decision.id).replace(/\D/g, "")) || 0;
-  return `COLLIE-${numeric}`;
-}
-
 // Work state chips: semantic color, not a gray label. Accept cards keep the green tick's color.
 function stateColor(t, stage, need = null) {
   if (stage === "needs") return need === "ready" ? t.ansi2 : t.ansi1;
@@ -235,9 +258,18 @@ function stateChip(t, stage, need = null, kind = null, outcome = null) {
 // focus it, and let the LLM explain the evidence and suggest options. The person decides there.
 function coordinatorChat() {
   const here = focused();
-  const chat = panes().find((p) => p.mod === "collie-chat" && p.tab === here?.tab) ?? panes().find((p) => p.mod === "collie-chat");
-  if (!chat) return null;
-  return chat;
+  const ps = panes();
+  const chat = ps.find((p) => p.mod === "collie-chat" && p.tab === here?.tab) ?? ps.find((p) => p.mod === "collie-chat");
+  if (chat) return chat;
+  // A closed chat leaves its Coordinator terminal in the same tab. Quote must still reach it.
+  const space = spaces().find((item) => item.id === here?.space) ?? spaces().find((item) => item.active);
+  const agent = terminals().find((k) => k.state === "live"
+    && (k.labels?.["herdr.role"] === "coordinator" || ["assistant", "coordinator"].includes(k.template))
+    && k.labels?.["herdr.space"] === space?.id);
+  if (!agent) return null;
+  const tab = space?.tabs.find((item) => item.id === agent.labels?.["herdr.tab"]);
+  if (!tab) return null;
+  return { pane: ps.find((p) => p.terminal === agent.address)?.pane ?? null, tab: tab.id, terminal: agent.address };
 }
 
 // The agent a coordinator chat holds: the one parked behind its pane (herdr.chat), else the one its slot started
@@ -245,6 +277,7 @@ function coordinatorChat() {
 // so the old reply, sent to the pane's terminal, was always dropped.
 function coordinatorAgent(chat) {
   if (!chat) return null;
+  if (chat.terminal) return chat.terminal;
   const parked = terminals().find((k) => k.state === "live" && chatPane(k) === chat.pane);
   if (parked) return parked.address;
   const slot = Object.entries(shared("coordinator.slots") ?? {}).find(([, s]) => s?.pane === chat.pane)?.[0] ?? null;
@@ -253,24 +286,50 @@ function coordinatorAgent(chat) {
 }
 
 function replyContext(decision, target, receipt) {
+  const title = receipt?.summary ?? target?.title ?? decision.card?.question ?? decision.why;
   const lines = [
-    `我想处理这张 Ticket：${ticketRef(decision)} · ${decision.card?.question ?? target?.title ?? decision.why}`,
-    `Decision ${decision.id} · ${decision.why}`,
+    `我想处理这张 Ticket：${ticketRef(decision, target)} · ${title}`,
+    `Decision ${decision.id}`,
   ];
-  if (decision.card?.question) lines.push(`问题：${decision.card.question}`);
-  if (receipt?.summary) lines.push(`回执摘要：${receipt.summary}`);
+  if (receipt?.id) lines.push(`Receipt ${receipt.id}`);
+  if (receipt?.details) lines.push(`交付细节：${receipt.details}`);
+  const refs = receiptProofRefs(receipt);
+  if (refs.length) lines.push(`可复核证据：${refs.join("、")}`);
+  if (decision.why && decision.why !== title) lines.push(`Decision 背景：${decision.why}`);
+  if (decision.card?.question && decision.card.question !== title && decision.card.question !== decision.why) {
+    lines.push(`问题：${decision.card.question}`);
+  }
   lines.push("请先只解读依据并给出建议，不要执行任何动作；等我在 chat 里确认。");
   return lines.join("\n");
 }
 
 async function replyToCoordinator(decision, target, receipt) {
   const chat = coordinatorChat();
-  if (!chat) return;
-  const addr = coordinatorAgent(chat);
-  if (addr) {
-    try { await exec("hc", ["send", addr, replyContext(decision, target, receipt)]); } catch {}
+  if (!chat) {
+    toast({ title: "Coordinator unavailable", body: "Open the Coordinator chat before quoting this Receipt.", level: "error" });
+    return false;
   }
+  const addr = coordinatorAgent(chat);
+  if (!addr) {
+    toast({ title: "Coordinator unavailable", body: "The Coordinator chat has no live agent to receive this Quote.", level: "error" });
+    return false;
+  }
+  try {
+    const result = await exec("hc", ["send", addr, replyContext(decision, target, receipt)]);
+    if (result.code !== 0) throw new Error(result.stderr?.trim() || result.stdout?.trim() || "hc send failed");
+  } catch (error) {
+    toast({ title: "Quote failed", body: plainError(error), level: "error" });
+    return false;
+  }
+  const space = spaces().find((item) => item.tabs.some((tab) => tab.id === chat.tab));
+  if (space && !space.active) run("space.select", { id: space.id });
+  run("tab.select", { id: chat.tab });
   run("pane.focus", { pane: chat.pane });
+  if (shared("collie.action")) {
+    closeActionOverlay();
+    closeAcceptOverlay();
+  }
+  return true;
 }
 
 function action(id, label, enabled, onClick, t) {
@@ -289,7 +348,7 @@ export default class Inbox extends View {
     this.filter = kept.includes(saved) ? saved : "all";
     this.rows = [];
     this.staged = [];
-    this.groups = { top: [], projects: [], settled: [] };
+    this.groups = { needs: [], todo: [], working: [], settled: [] };
     this.decisions = [];
     this.targets = new Map();
     this.receipts = new Map();
@@ -297,21 +356,26 @@ export default class Inbox extends View {
     this.loading = false;
     if (this.view === "queue") {
       try {
-        this.settledOpen = localStorage.getItem("collie.settledOpen") === "1";
+        this.settledOpen = localStorage.getItem("collie.settledOpen.v2") === "1";
       } catch { this.settledOpen = false; }
       try { this.folded = new Set(JSON.parse(localStorage.getItem("collie.folded") ?? "[]")); } catch { this.folded = new Set(); }
       this.refresh(cx);
       cx.timer.every(3000, (cx) => this.refresh(cx));
     } else if (this.view === "head") {
-      // The header keeps the live terminal and the shown ticket's artifacts current.
-      this.artsBusy = false;
-      this.artsKey = null;
-      this.artsAt = 0;
-      this.agentTabs = new Map();
-      this.agentPending = new Set();
-      this.pollArts(cx);
-      this.syncAgentTabs(cx);
-      cx.timer.every(3000, (cx) => { this.pollArts(cx); this.syncAgentTabs(cx); cx.notify(); });
+      // The header keeps the live terminal and the shown ticket's Receipts current.
+      this.receiptsBusy = false;
+      this.receiptsKey = null;
+      this.receiptsAt = 0;
+      this.agentTerms = [];
+      this.agentTermsBusy = false;
+      this.pollReceipts(cx);
+      this.syncAgents(cx);
+      cx.timer.every(3000, (cx) => { this.pollReceipts(cx); this.syncAgents(cx); cx.notify(); });
+    } else if (this.view === "receipts-panel") {
+      this.panel = { list: [], loading: true, error: null };
+      this.panelBusy = false;
+      this.loadReceiptPanel(cx);
+      cx.timer.every(15000, (cx) => this.loadReceiptPanel(cx));
     }
   }
 
@@ -322,8 +386,9 @@ export default class Inbox extends View {
       try {
         const parsed = parseQueue(await readTextFile(queuePath(home())));
         const groups = await loadTasks();
-        this.decisions = [...parsed, ...orphanTickets(parsed, groups)];
-        const links = await navigation(this.decisions, groups);
+        const decisions = [...parsed, ...orphanTickets(parsed, groups)];
+        const links = await navigation(decisions, groups);
+        this.decisions = decisions;
         this.targets = new Map([...links].map(([id, value]) => [id, value.target]));
         this.receipts = new Map([...links].map(([id, value]) => [id, value.receipt]));
         this.staged = this.decisions.map((decision) => ({
@@ -354,44 +419,92 @@ export default class Inbox extends View {
     });
   }
 
-  // The shown ticket's explicitly bound artifacts from its folder and machine.
-  pollArts(cx) {
-    if (this.view !== "head") return;
-    const target = ticket()?.target;
-    if (!target?.ref || typeof target.folder !== "string" || !target.folder) return;
-    const key = artsKeyOf(target);
-    if (this.artsBusy || (this.artsKey === key && Date.now() - this.artsAt < ARTS_EVERY)) return;
-    this.artsBusy = true;
-    const proof = target.proof?.id ?? null;
+  loadReceiptPanel(cx) {
+    if (this.panelBusy) return;
+    this.panelBusy = true;
     cx.spawn(async (cx) => {
       try {
-        const on = target.machine ?? null;
-        const out = await artifactCli(on, ["list", "--folder", target.folder]).catch(() => null);
-        const arts = Array.isArray(out?.artifacts) ? out.artifacts : [];
-        const ids = taskArtifacts(arts, {
-          ref: target.ref, folder: target.folder, machine: on, proof: target.proof ?? null,
-        });
-        const list = ids.map((id) => arts.find((art) => art.id === id)).filter(Boolean)
-          .map((art) => ({ id: art.id, title: art.title, v: art.version, at: art.at, proof: art.id === proof }));
-        const value = { terminal: target.terminal ?? null, ref: target.ref, machine: on, list };
-        if (ticket()?.target?.ref === target.ref && JSON.stringify(value) !== JSON.stringify(shared("tasks.thread.artifacts") ?? null)) {
-          setShared("tasks.thread.artifacts", value);
-        }
+        const parsed = parseQueue(await readTextFile(queuePath(home())));
+        const groups = await loadTasks();
+        const links = await navigation(parsed, groups);
+        this.decisions = parsed;
+        this.targets = new Map([...links].map(([id, value]) => [id, value.target]));
+        this.receipts = new Map([...links].map(([id, value]) => [id, value.receipt]));
+        const result = await exec(RECEIPTS_CLI(), ["list", "--json"]);
+        const out = result.code === 0 ? JSON.parse(result.stdout || "{}") : {};
+        this.panel = { list: sortReceipts(out.receipts), loading: false, error: null };
+      } catch (error) {
+        this.panel = { list: [], loading: false, error: String(error?.message ?? error) };
       } finally {
-        // Even a failed look waits its turn (a tight loop would ask collie-artifact again and again).
-        this.artsKey = key;
-        this.artsAt = Date.now();
-        this.artsBusy = false;
+        this.panelBusy = false;
         cx.notify();
       }
     });
   }
 
-  // "Artifacts", with how many once the shown ticket has some ("Artifacts 3").
-  artsLabel() {
-    const a = shared("tasks.thread.artifacts"), w = shared("tasks.thread");
-    const n = a && w && a.terminal === (w.terminal ?? null) && (w.terminal || a.ref === w.task) ? a.list.length : 0;
-    return n ? `Artifacts ${n}` : "Artifacts";
+  receiptPanelRow(t, receipt, index) {
+    return h().id(`panel-receipt-${receipt.id}`).w_full().min_w(0).px(10).py(9).gap(10).items_start().rounded(RADIUS.control).cursor_pointer()
+      .hover((s) => s.bg(t.hover))
+      .on_click((e, cx) => {
+        cx.stop_propagation();
+        const decision = this.decisions.find((d) => d.id === receipt.decision_ref);
+        if (decision) openTicket(decision, this.targets.get(decision.id), receipt, cx, true);
+      })
+      .child(v().flex_1().min_w(0).gap(3)
+        .child(div().min_w(0).truncate().text_size(13).font_medium().child(receiptTitle(receipt)))
+        .child(div().min_w(0).truncate().text_size(TEXT.label).text_color(t.muted).child(receipt.task?.id ?? receipt.decision_ref))
+        .child(h().gap(8).items_center().text_size(TEXT.label)
+          .child(div().text_color(t.dim).child(this.receiptTime(receipt)))
+          .when(Boolean(receiptProofRefs(receipt).length), (el) => el.child(div().text_color(t.accent).child("Proof")))))
+      .child(div().flex_none().font_family(ID_FONT).text_size(TEXT.label).text_color(t.dim).child(`#${index + 1}`));
+  }
+
+  receiptsPanelView(t) {
+    const p = this.panel ?? { list: [], loading: true, error: null };
+    return v().id("receipts-panel").size_full().min_h(0).bg(t.background).text_color(t.foreground).text_size(13)
+      .child(v().flex_1().min_h(0).overflow_y_scrollbar().p(6).gap(2)
+        .children((p.list ?? []).map((r, i) => this.receiptPanelRow(t, r, i)))
+        .when(p.loading, (el) => el.child(div().p(18).text_center().text_color(t.dim).child("Looking for receipts…")))
+        .when(p.error, (el) => el.child(div().p(18).text_color(t.ansi1).child(p.error)))
+        .when(!p.loading && !p.error && !(p.list ?? []).length, (el) => el.child(v().items_center().justify_center().p(24).gap(6)
+          .child(div().text_size(TEXT.title).text_color(t.muted).child("No receipts yet"))
+          .child(div().text_size(TEXT.label).text_color(t.dim).child("Task delivery records appear here after ready.")))));
+  }
+
+  // The shown ticket's durable Receipts; no terminal logs or helper output are inferred.
+  pollReceipts(cx) {
+    if (this.view !== "head") return;
+    const current = ticket();
+    const target = current?.target;
+    const ref = target?.ref ?? current?.decision?.run?.task_ref;
+    if (!ref) return;
+    const key = receiptsKeyOf({ ...target, ref });
+    if (this.receiptsBusy || (this.receiptsKey === key && Date.now() - this.receiptsAt < RECEIPTS_EVERY)) return;
+    this.receiptsBusy = true;
+    cx.spawn(async (cx) => {
+      try {
+        const result = await exec(RECEIPTS_CLI(), ["list", "--task", ref, "--json"]);
+        const out = result.code === 0 ? JSON.parse(result.stdout || "{}") : {};
+        const list = taskReceipts(out.receipts, { ref });
+        const value = { ref, machine: target?.machine ?? null, list };
+        const active = ticket();
+        const activeRef = active?.target?.ref ?? active?.decision?.run?.task_ref;
+        if (activeRef === ref && JSON.stringify(value) !== JSON.stringify(shared("tasks.thread.receipts") ?? null)) {
+          setShared("tasks.thread.receipts", value);
+        }
+      } finally {
+        this.receiptsKey = key;
+        this.receiptsAt = Date.now();
+        this.receiptsBusy = false;
+        cx.notify();
+      }
+    });
+  }
+
+  receiptsLabel() {
+    const a = shared("tasks.thread.receipts"), w = shared("tasks.thread");
+    const n = a && w && a.ref === w.task ? a.list.length : 0;
+    return n ? `Receipts ${n}` : "Receipts";
   }
 
   rowsFor() {
@@ -405,13 +518,52 @@ export default class Inbox extends View {
     cx.notify();
   }
 
-  // bare: under a space's heading, which already says where it is.
-  row(decision, t, bare = false) {
+  menuItem(id, label, onClick, t) {
+    return h().id(id).h(28).px(8).flex_none().items_center().rounded(5).cursor_pointer()
+      .text_size(TEXT.label).text_color(t.foreground).hover((s) => s.bg(t.hover))
+      .on_click((e, cx) => { cx.stop_propagation(); onClick(cx); cx.notify(); })
+      .child(label);
+  }
+
+  actionMenuView(t) {
+    const { decision, target, receipt } = actionTicket();
+    const stage = stageOf(decision, target);
+    const budgetTodo = stage === "todo" && String(decision.why ?? "").startsWith("全局预算 ");
+    const items = stage === "todo" ? [
+      ...((budgetTodo || target?.ref) ? [["run", "Run now", (cx) => this.runDecision(cx)]] : []),
+      ["archive", "Archive", (cx) => this.answerReady("archive", cx)],
+      ["quote", "Quote", () => replyToCoordinator(decision, target, receipt)],
+    ] : stage === "needs" && ticketNeed(decision, target) === "ready" ? [
+      ["accept", "Accept", () => this.openAccept(decision, target, receipt)],
+      ["archive", "Archive", (cx) => this.answerReady("archive", cx)],
+      ["quote", "Quote", () => replyToCoordinator(decision, target, receipt)],
+    ] : [["quote", "Quote", () => replyToCoordinator(decision, target, receipt)]];
+    return v().id("inbox-action-menu").size_full().p(4).bg(t.popover).text_color(t.foreground)
+      .children(items.map(([id, label, onClick]) => this.menuItem(`inbox-${id}-${decision.id}`, label, onClick, t)));
+  }
+
+  openActionMenu(decision, target, receipt) {
+    setShared("collie.action", { decision, target, receipt });
+    const budgetTodo = stageOf(decision, target) === "todo" && String(decision.why ?? "").startsWith("全局预算 ");
+    const count = stageOf(decision, target) === "todo" ? (budgetTodo || target?.ref ? 3 : 2)
+      : stageOf(decision, target) === "needs" && ticketNeed(decision, target) === "ready" ? 3 : 1;
+    const id = openOverlay({ mod: "collie-inbox", kind: "popup", frame: "none", width: 150, height: count * 32 + 8, at: "pointer", props: { view: "action-menu", decisionId: decision.id } });
+    setShared("collie.actionOverlay", id);
+  }
+
+  rowMenu(decision, target, receipt, t) {
+    return h().id(`inbox-actions-${decision.id}`).size(26).flex_none().items_center().justify_center().rounded(6).cursor_pointer()
+      .text_color(t.muted).hover((s) => s.bg(t.hover).text_color(t.foreground))
+      .on_click((e, cx) => { cx.stop_propagation(); this.openActionMenu(decision, target, receipt); cx.notify(); })
+      .child(svg("mods/collie-chrome/more.svg").size(15));
+  }
+
+  row(decision, t) {
     const target = this.targets.get(decision.id);
     const receipt = this.receipts.get(decision.id);
     const title = decision.card?.question ?? target?.title ?? decision.why;
     const stage = stageOf(decision, target);
-    const need = stage === "needs" ? ticketNeed(decision) : null;
+    const need = stage === "needs" ? ticketNeed(decision, target) : null;
     const kind = stage === "working" ? kindOf(decision, target) : null;
     const pct = stage === "working" ? pctOf(target) : null;
     const left = stage === "working" ? shortLeft(minutesLeft(target?.progress)) : null;
@@ -431,18 +583,19 @@ export default class Inbox extends View {
       .child(v().flex_1().min_w(0).gap(2)
         .child(h().h(20).min_w(0).items_center()
           .child(div().flex_1().min_w(0).truncate().text_color(stage === "settled" ? t.muted : t.foreground).child(title)))
-        .child(h().h(16).min_w(0).gap(6).items_center().text_size(12)
+        .child(h().h(18).min_w(0).gap(6).items_center().text_size(12)
           .child(div().flex_none().font_family(ID_FONT).text_size(11).text_color(t.dim).child(ticketRef(decision, target)))
           .child(stateChip(t, stage, need, kind, decision.settled?.outcome))
           .when(Boolean(target?.playbook), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(target.playbook)))
-          .child(div().flex_shrink_1().min_w(0).truncate().text_color(t.muted).child(reason ?? ""))
-          .when(!bare, (el) => el.child(div().flex_shrink(1000).min_w(0).truncate().text_color(t.dim).child(`· ${decision.space}`)))))
-      .child(action(`collie-reply-${decision.id}`, "回复", true, () => replyToCoordinator(decision, target, receipt), t));
+          .when(Boolean(reason), (el) => el.child(div().id(`inbox-reason-${decision.id}`).h(18).flex_shrink_1().min_w(0).overflow_hidden()
+            .text_color(t.muted).child(selectableText(`inbox-reason-text-${decision.id}`, reason))))
+          .child(div().flex_shrink(1000).min_w(0).truncate().text_color(t.dim).child(`· ${decision.space}`))))
+      .child(this.rowMenu(decision, target, receipt, t));
   }
 
   saveUi() {
     try {
-      localStorage.setItem("collie.settledOpen", this.settledOpen ? "1" : "0");
+      localStorage.setItem("collie.settledOpen.v2", this.settledOpen ? "1" : "0");
       localStorage.setItem("collie.folded", JSON.stringify([...this.folded]));
     } catch {}
   }
@@ -461,56 +614,26 @@ export default class Inbox extends View {
         .when(count > 0, (el) => el.child(div().flex_none().text_color(t.dim).child(String(count)))));
   }
 
-  // A project heading: the execution grouping inside the one collaboration space.
-  projectHead(t, key, count) {
-    const label = String(key).split("/").filter(Boolean).pop() || key || "No project";
-    const id = String(key).replace(/[^A-Za-z0-9_-]+/g, "-") || "none";
-    return h().id(`collie-group-project-${id}`).h(28).flex_none().px(8).gap(12).items_center().rounded(RADIUS.card).text_size(TEXT.label)
-      .child(h().w(14).h(14).flex_none().items_center().justify_center()
-        .child(div().text_size(12).text_color(t.dim).child("#")))
-      .child(h().flex_1().min_w(0).gap(6).items_center()
-        .child(div().min_w(0).truncate().font_medium().text_color(t.muted).child(label))
-        .child(div().flex_none().text_color(t.dim).child(String(count))));
-  }
-
-  // Settled, shut: one quiet line, "Settled 12"; a click shows the terminal records.
-  settledLine(t) {
-    return h().id("collie-settled-line").flex_none().mt(6).h(28).px(8).gap(12).items_center().rounded(RADIUS.card).cursor_pointer()
-      .text_size(TEXT.label).text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.muted))
-      .on_click((e, cx) => { cx.stop_propagation(); this.settledOpen = true; this.saveUi(); cx.notify(); })
-      .child(h().w(14).h(14).flex_none().items_center().justify_center()
-        .child(svg("mods/collie-chrome/chevron-right.svg").size(12).flex_none()))
-      .child(`${STAGE_WORD.settled} ${this.groups.settled.length}`);
-  }
-
-  // All: Needs you on top, each space's Todo → Working under its name, Settled last.
-  // A state chip is that state flat.
+  // All: four state groups; Settled has its own persisted, default-closed state.
   listBody(t) {
     if (this.filter !== "all") return this.rows.map((decision) => this.row(decision, t));
     const body = [];
-    const { top, projects: places = [], settled = [] } = this.groups;
-    const shut = this.folded.has("needs");
-    if (top.length) {
-      body.push(this.groupHead(t, { id: "collie-group-needs", label: STAGE_WORD.needs, count: top.length, top: true, shut,
-        onFold: (cx) => {
+    for (const stage of ["needs", "todo", "working"]) {
+      const rows = this.groups[stage] ?? [];
+      const shut = this.folded.has(stage);
+      body.push(this.groupHead(t, { id: `collie-group-${stage}`, label: STAGE_WORD[stage], count: rows.length, top: stage === "needs", shut,
+        onFold: () => {
           const folded = new Set(this.folded);
-          if (folded.has("needs")) folded.delete("needs"); else folded.add("needs");
+          if (shut) folded.delete(stage); else folded.add(stage);
           this.folded = folded;
           this.saveUi();
         } }));
-      if (!shut) body.push(...top.map((x) => this.row(x.decision, t)));
+      if (!shut) body.push(...rows.map((x) => this.row(x.decision, t)));
     }
-    for (const group of places) {
-      body.push(this.projectHead(t, group.key, group.rows.length));
-      body.push(...group.rows.map((x) => this.row(x.decision, t, true)));
-    }
-    if (settled.length) {
-      if (this.settledOpen) {
-        body.push(this.groupHead(t, { id: "collie-group-settled", label: STAGE_WORD.settled, count: settled.length,
-          onFold: () => { this.settledOpen = false; this.saveUi(); } }));
-        body.push(...settled.map((x) => this.row(x.decision, t)));
-      } else body.push(this.settledLine(t));
-    }
+    const settled = this.groups.settled ?? [];
+    body.push(this.groupHead(t, { id: "collie-group-settled", label: STAGE_WORD.settled, count: settled.length, shut: !this.settledOpen,
+      onFold: () => { this.settledOpen = !this.settledOpen; this.saveUi(); } }));
+    if (this.settledOpen) body.push(...settled.map((x) => this.row(x.decision, t)));
     return body;
   }
 
@@ -518,6 +641,7 @@ export default class Inbox extends View {
     const tabs = [["all", "All"], ["needs", "Needs you"], ["todo", "Todo"], ["working", "Working"], ["settled", "Settled"]];
     const body = this.listBody(t);
     return v().id("collie").size_full().min_h(0).bg(t.background).text_color(t.foreground).text_size(13)
+      .on_click((_e, cx) => { cx.notify(); })
       .child(h().h(46).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
         .children(tabs.map(([id, label]) => filterAction(`inbox-${id}`, label, this.filter === id, (cx) => this.setFilter(id, cx), t))))
       .child(v().flex_1().min_h(0).overflow_y_scrollbar().p(6).gap(1)
@@ -528,8 +652,7 @@ export default class Inbox extends View {
       .when(this.error, (el) => el.child(div().px(12).py(6).text_color(t.ansi1).child(this.error)));
   }
 
-  barRow(t, target, cx) {
-    const helpers = taskAgents(target, terminals());
+  barRow(t, target) {
     return h().id("collie-thread-bar").h(24).flex_none().pl(EDGE - 6).pr(EDGE).gap(4).items_center()
       .child(h().id("collie-thread-back").h(24).pl(2).pr(8).gap(2).flex_none().items_center().rounded(RADIUS.control).cursor_pointer()
         .text_size(TEXT.label).text_color(t.muted).hover((s) => s.bg(t.hover).text_color(t.foreground))
@@ -537,10 +660,6 @@ export default class Inbox extends View {
         .child(svg("mods/collie-chrome/chevron-left.svg").size(14).flex_none())
         .child("Inbox"))
       .child(div().flex_1())
-      .children(helpers.map((agent) => h().id(`collie-thread-agent-${agent.address}`).h(22).px(7).flex_none().items_center().rounded(6).cursor_pointer()
-        .text_size(TEXT.label).text_color(t.muted).hover((s) => s.bg(t.hover).text_color(t.foreground))
-        .on_click((_e, cx) => { cx.stop_propagation(); cx.spawn(async (cx) => { await showAgentTab(agent, cx, true, roleTabName(agent, helpers)); }); })
-        .child(roleTabName(agent, helpers))))
       .when(Boolean(target?.base_set && target?.base), (el) => el.child(div().id("collie-thread-base").flex_none().max_w(160).truncate().pr(4)
         .text_size(TEXT.label).text_color(t.muted).child(`→ ${target.base}`)));
   }
@@ -574,7 +693,7 @@ export default class Inbox extends View {
   taskBlock(t, { decision, target, receipt }) {
     const title = receipt?.summary ?? decision.card?.question ?? target?.title ?? decision.why;
     const stage = stageOf(decision, target);
-    const need = stage === "needs" ? ticketNeed(decision) : null;
+    const need = stage === "needs" ? ticketNeed(decision, target) : null;
     const pct = pctOf(target);
     const report = this.reportLine(t, stage, target, decision);
     return h().id("collie-thread-task").flex_none().px(EDGE).gap(8).items_start().text_color(t.foreground)
@@ -583,38 +702,225 @@ export default class Inbox extends View {
       .child(v().flex_1().min_w(0).gap(2)
         .child(h().h(22).min_w(0).gap(8).items_center()
           .child(div().flex_none().font_family(ID_FONT).text_size(TEXT.label).text_color(t.dim).child(ticketRef(decision, target)))
-          .child(div().id("collie-thread-title").flex_1().min_w(0).truncate().text_size(TEXT.title).font_medium().child(title)))
+          .child(div().id("collie-thread-title").flex_1().min_w(0).truncate().text_size(TEXT.title).font_medium().cursor_pointer()
+            .on_click((e, cx) => { cx.stop_propagation(); copyTaskTitle(title, cx); cx.notify(); }).child(title)))
         .child(h().h(16).min_w(0).items_center()
           .child(div().flex_1().min_w(0).when(Boolean(report), (el) => el.child(report)))));
   }
 
-  // Every live task-local role gets a tab automatically. The driver stays in the fixed
-  // Terminal block; this only creates/focuses helper tabs and never steals the view.
-  syncAgentTabs(cx) {
+  // Discover task-local roles for the detail tabs; never create or focus a global Herdr tab.
+  syncAgents(cx) {
     const target = ticket()?.target;
-    if (!target?.ref) return;
-    const agents = taskAgents(target, terminals());
-    for (const agent of agents) {
-      const existing = panes().find((pane) => pane.terminal === agent.address && pane.tab);
-      if (existing) {
-        if (this.agentTabs.get(agent.address) !== existing.tab) {
-          run("tab.rename", { id: existing.tab, name: roleTabName(agent, agents) });
-          this.agentTabs.set(agent.address, existing.tab);
+    if (!target?.ref || this.agentTermsBusy) return;
+    this.agentTermsBusy = true;
+    cx.spawn(async (cx) => {
+      try {
+        const label = target.key ? `${target.key.slug}#${target.key.id}` : null;
+        if (!label) {
+          this.agentTerms = terminals();
+          this.agentTermsBusy = false;
+          return;
         }
-        continue;
-      }
-      // Once we opened a tab for this address, a closed tab means "park it": do not reopen
-      // automatically. The role button can still ask for it explicitly.
-      if (this.agentTabs.has(agent.address)) continue;
-      if (this.agentPending.has(agent.address)) continue;
-      this.agentPending.add(agent.address);
-      cx.spawn(async (cx) => {
-        const tab = await showAgentTab(agent, cx, false, roleTabName(agent, agents));
-        this.agentPending.delete(agent.address);
-        if (tab) this.agentTabs.set(agent.address, tab);
+        const result = await exec("hc", ["ls", "--all", "--label", `herdr.task=${label}`, "--json"]);
+        const out = JSON.parse(result.stdout || "{}");
+        const listed = Array.isArray(out.terminals) ? out.terminals : [];
+        this.agentTerms = await Promise.all(listed.map(async (term) => {
+          const detail = await exec("hc", ["get", term.address, "--json"]);
+          const full = JSON.parse(detail.stdout || "{}");
+          return { ...term, status: term.status ?? full.status ?? null, labels: full.labels ?? null };
+        }));
+      } catch { this.agentTerms = terminals(); }
+      this.agentTermsBusy = false;
+      cx.notify();
+    });
+  }
+
+  receiptTime(receipt) {
+    const at = Date.parse(receipt?.received_at ?? receipt?.task?.ready_at ?? "");
+    return Number.isFinite(at) ? new Date(at).toLocaleString() : "";
+  }
+
+  openProof(receipt) {
+    const proof = receipt?.proof;
+    if (!proof?.id) return;
+    openViewer({ id: proof.id, title: proof.title ?? proof.id, machine: ticket()?.target?.machine ?? null });
+  }
+
+  receiptRow(t, receipt, index) {
+    const refs = receiptProofRefs(receipt);
+    return h().id(`ticket-receipt-${receipt.id}`).w_full().min_w(0).px(12).py(10).gap(10).items_start()
+      .rounded(RADIUS.control).cursor_pointer().hover((s) => s.bg(t.hover))
+      .on_click((e, cx) => { cx.stop_propagation(); setShared("tasks.thread.receipt", receipt); cx.notify(); })
+      .child(v().flex_1().min_w(0).gap(4)
+        .child(div().min_w(0).text_size(14).font_medium().text_color(t.foreground).child(receiptTitle(receipt)))
+        .when(Boolean(receipt.details), (el) => el.child(div().min_w(0).text_size(TEXT.label).text_color(t.muted).child(receipt.details)))
+        .child(h().min_w(0).gap(8).items_center().text_size(TEXT.label)
+          .child(div().flex_none().text_color(t.dim).child(this.receiptTime(receipt)))
+          .when(Boolean(refs.length), (el) => el.child(div().flex_none().text_color(t.accent).child("Proof")))))
+      .child(div().flex_none().font_family(ID_FONT).text_size(TEXT.label).text_color(t.dim).child(`#${index + 1}`));
+  }
+
+  runDecision(cx) {
+    if (this.actionBusy) return;
+    const { decision, target } = actionTicket();
+    if (!decision?.id) return;
+    this.actionBusy = true;
+    cx.spawn(async (cx) => {
+      try {
+        const result = decision.synthetic && target?.ref && target.folder
+          ? await exec(CLI(), ["start", target.ref, "--folder", target.folder, "--space", decision.space, "--json"])
+          : await exec(COLLIE_CLI(), ["decision", "run", "--decision", decision.id]);
+        if (result.code !== 0) throw new Error(result.stderr?.trim() || result.stdout?.trim() || "Decision run failed");
+        backToInbox();
+        toast({ title: "Running now", body: "The current Task was started.", level: "success" });
+      } catch (error) {
+        toast({ title: "Run now failed", body: plainError(error), level: "error" });
+      } finally {
+        this.actionBusy = false;
+        closeActionOverlay();
         cx.notify();
-      });
-    }
+      }
+    });
+  }
+
+  answerReady(option, cx) {
+    if (this.actionBusy) return;
+    const current = actionTicket();
+    const decision = current?.decision, target = current?.target;
+    this.actionBusy = true;
+    cx.notify();
+    cx.spawn(async (cx) => {
+      try {
+        let result;
+        if (decision?.id && decision.state === "waiting") {
+          result = await exec(ANSWER_CLI(), ["--decision", decision.id, "--option", option]);
+        } else if (option === "archive" && decision?.id && decision.state === "open" && !decision.synthetic) {
+          result = await exec(COLLIE_CLI(), ["decision", "archive", "--decision", decision.id]);
+        } else if (target?.ref && target.folder) {
+          result = await exec(CLI(), [option === "accept" ? "accept" : "done", target.ref, "--folder", target.folder, "--json", "--done-by", "human"]);
+        } else {
+          throw new Error("This ready Ticket has no Decision or Task target.");
+        }
+        if (result.code !== 0) throw new Error(result.stderr?.trim() || result.stdout?.trim() || `Task ${option} failed`);
+        backToInbox();
+        toast({ title: option === "accept" ? "Accepted" : "Archived", body: "Receipt and proof remain available.", level: "success" });
+      } catch (error) {
+        toast({ title: option === "accept" ? "Accept failed" : "Archive failed", body: plainError(error), level: "error" });
+      } finally {
+        this.actionBusy = false;
+        cx.notify();
+        if (this.view === "action-menu") closeActionOverlay();
+        if (this.view === "accept-confirm") closeAcceptOverlay();
+      }
+    });
+  }
+
+  openAccept(decision, target, receipt) {
+    setShared("collie.action", { decision, target, receipt });
+    closeActionOverlay();
+    const id = openOverlay({ mod: "collie-inbox", kind: "dialog", frame: "none", width: 680, height: 520, props: { view: "accept-confirm", decisionId: decision.id } });
+    setShared("collie.acceptOverlay", id);
+  }
+
+  acceptConfirmView(t, cx) {
+    const { decision, target, receipt } = actionTicket();
+    const refs = receiptProofRefs(receipt);
+    return v().id("accept-confirm").size_full().bg(t.popover).p(20).gap(14).text_color(t.foreground)
+      .child(v().flex_none().gap(4)
+        .child(div().text_size(TEXT.title).font_semibold().child("Review the latest Receipt"))
+        .child(div().text_size(TEXT.label).text_color(t.dim).child(decision?.id ?? "")))
+      .child(v().flex_1().min_h(0).overflow_y_scrollbar().gap(12)
+        .child(v().flex_none().gap(5)
+          .child(div().text_size(TEXT.label).font_semibold().text_color(t.muted).child("Summary"))
+          .child(div().text_size(14).child(receipt?.summary ?? target?.summary ?? "No summary")))
+        .child(v().flex_none().gap(5)
+          .child(div().text_size(TEXT.label).font_semibold().text_color(t.muted).child("Details"))
+          .child(div().text_size(13).child(receipt?.details ?? target?.details ?? "No details")))
+        .child(v().flex_none().gap(6)
+          .child(h().items_center().gap(8)
+            .child(div().text_size(TEXT.label).font_semibold().text_color(t.muted).child("Proof"))
+            .when(Boolean(receipt?.proof?.id), (el) => el.child(action("accept-open-proof", "Open proof", true, () => this.openProof(receipt), t))))
+          .when(Boolean(receipt?.proof?.title), (el) => el.child(div().text_size(13).child(receipt.proof.title)))
+          .children(refs.map((ref, index) => div().id(`accept-proof-ref-${index}`).text_size(TEXT.label).text_color(t.muted).child(ref)))
+          .when(!refs.length, (el) => el.child(div().text_size(TEXT.label).text_color(t.dim).child("No proof refs.")))))
+      .child(h().flex_none().gap(8).justify_end()
+        .child(action("accept-confirm-cancel", "Cancel", !this.actionBusy, () => closeAcceptOverlay(), t))
+        .child(action("accept-confirm-yes", "Accept", !this.actionBusy, (cx) => this.answerReady("accept", cx), t)));
+  }
+
+  receiptDetail(t, receipt) {
+    const refs = receiptProofRefs(receipt);
+    const target = ticket()?.target;
+    return v().id("ticket-receipt-detail").size_full().min_h(0).bg(t.background).text_color(t.foreground)
+      .child(h().h(42).flex_none().px(12).items_center().border_b(1).border_color(t.border)
+        .child(action("ticket-receipt-back", "← Detail", true, (cx) => { setShared("tasks.thread.receipt", null); cx.notify(); }, t)))
+      .child(v().flex_1().min_h(0).overflow_y_scrollbar().p(16).gap(16)
+        .child(v().flex_none().gap(6)
+          .child(div().text_size(18).font_semibold().child(selectableText("ticket-receipt-title", receiptTitle(receipt))))
+          .child(div().text_size(TEXT.label).text_color(t.dim).child(this.receiptTime(receipt))))
+        .child(v().flex_none().gap(6)
+          .child(div().text_size(TEXT.label).font_semibold().text_color(t.muted).child("Details"))
+          .child(div().text_size(13).child(selectableText("ticket-receipt-details", receipt.details ?? ""))))
+        .child(v().flex_none().gap(8)
+          .child(h().items_center().gap(8)
+            .child(div().text_size(TEXT.label).font_semibold().text_color(t.muted).child("Proof"))
+            .when(Boolean(receipt.proof?.id), (el) => el.child(action("ticket-open-proof", "Open proof", true, () => this.openProof(receipt), t))))
+          .when(Boolean(receipt.proof?.title), (el) => el.child(div().text_size(13).child(receipt.proof.title)))
+          .children(refs.map((ref, index) => {
+            const artifact = ref.startsWith("artifact:") ? ref.slice("artifact:".length) : null;
+            return h().id(`ticket-proof-ref-${index}`).min_w(0).px(9).py(6).rounded(6).bg(t.chrome)
+              .text_size(TEXT.label).text_color(artifact ? t.accent : t.muted)
+              .when(Boolean(artifact), (el) => el.cursor_pointer().hover((s) => s.bg(t.hover))
+                .on_click((e, cx) => { cx.stop_propagation(); openViewer({ id: artifact, title: receipt.proof?.title ?? artifact, machine: target?.machine ?? null }); }))
+              .child(div().min_w(0).truncate().child(ref));
+          })))
+        .when(!refs.length && !receipt.proof?.id, (el) => el.child(div().text_size(TEXT.label).text_color(t.dim).child("No proof refs."))));
+  }
+
+  detailRow(t, id, label, value) {
+    if (value === null || value === undefined || value === "") return null;
+    return h().id(`ticket-detail-${id}`).w_full().min_w(0).gap(12).items_start()
+      .child(div().w(88).flex_none().text_size(TEXT.label).text_color(t.dim).child(label))
+      .child(div().flex_1().min_w(0).text_size(13).text_color(t.foreground)
+        .child(selectableText(`ticket-detail-text-${id}`, value)));
+  }
+
+  detailView(t) {
+    const currentTicket = ticket();
+    const decision = currentTicket?.decision ?? {};
+    const target = currentTicket?.target ?? null;
+    const stage = stageOf(decision, target);
+    const rows = [
+      ["task", "Task", ticketRef(decision, target)],
+      ["status", "Status", STAGE_WORD[stage] ?? stage],
+      ["description", "Description", target?.title ?? decision.why],
+      ["waiting", "Waiting", stage === "todo" ? todoReason(target, decision) : null],
+      ["dependencies", "Depends on", target?.depends_on?.length ? target.depends_on.join(", ") : null],
+      ["project", "Project", decision.project ?? target?.project],
+      ["space", "Space", decision.space],
+      ["playbook", "Playbook", target?.playbook ?? decision.playbook?.id],
+      ["branch", "Branch", target?.branch],
+      ["base", "Base", target?.base],
+      ["worktree", "Worktree", target?.worktree],
+      ["decided", "Decided", decision.decided_at],
+    ];
+    return v().id("ticket-detail").size_full().min_h(0).bg(t.background).text_color(t.foreground)
+      .child(v().flex_1().min_h(0).overflow_y_scrollbar().p(16)
+        .child(v().flex_none().gap(10).children(rows.map((row) => this.detailRow(t, ...row)).filter(Boolean))));
+  }
+
+  receiptsView(t) {
+    const current = shared("tasks.thread.receipts");
+    const list = Array.isArray(current?.list) ? current.list : [];
+    const selected = shared("tasks.thread.receipt");
+    const receipt = selected ? (list.find((r) => r.id === selected.id) ?? selected) : null;
+    if (receipt) return this.receiptDetail(t, receipt);
+    return v().id("ticket-receipts").size_full().min_h(0).bg(t.background).text_color(t.foreground)
+      .child(v().flex_1().min_h(0).overflow_y_scrollbar().p(6).gap(2)
+        .children(list.map((r, i) => this.receiptRow(t, r, i)))
+        .when(!list.length, (el) => el.child(v().flex_1().items_center().justify_center().p(24).gap(6)
+          .child(div().text_size(TEXT.title).text_color(t.muted).child("No delivery yet"))
+          .child(div().text_size(TEXT.label).text_color(t.dim).child("A Receipt appears when this Task is ready.")))));
   }
 
   head(t, cx) {
@@ -626,31 +932,51 @@ export default class Inbox extends View {
         .child("Pick a ticket from Inbox.");
     }
     const target = cur?.target ?? null, receipt = cur?.receipt ?? null;
-    // A ticket just opened: look for its artifacts now, not at the next tick.
-    if (target?.ref && this.artsKey !== artsKeyOf(target)) cx.timer.after(0, (cx) => { this.pollArts(cx); cx.notify(); });
+    // A ticket just opened: load its Receipts now, even if its Task record is gone.
+    const receiptRef = target?.ref ?? decision.run?.task_ref;
+    if (receiptRef && this.receiptsKey !== receiptsKeyOf({ ...target, ref: receiptRef })) {
+      cx.timer.after(0, (cx) => { this.pollReceipts(cx); cx.notify(); });
+    }
     const live = isLive(target?.terminal);
-    const active = find(layout(), BODY)?.active ?? ARTIFACTS;
-    // The driver ended while its terminal was up: back to its artifacts.
-    if (active === TERM && !live) cx.timer.after(0, () => showArtifacts());
-    const shown = active === TERM && live ? "terminal" : "artifacts";
+    const helpers = taskAgents(target, this.agentTerms?.length ? this.agentTerms : terminals());
+    const selected = shared("collie.ticket.agent") ?? null;
+    const selectedAgent = selected ? helpers.find((agent) => agent.address === selected) : null;
+    const active = find(layout(), BODY)?.active ?? DETAIL;
+    const selectedEnded = selected && (!selectedAgent || (selectedAgent.state !== "finished" && !isLive(selected)));
+    if (active === TERM && (selectedEnded || (!selected && !live))) cx.timer.after(0, () => showDetail());
+    const shown = active === RECEIPTS ? "receipts" : active === DETAIL ? "detail" : selected ? `agent:${selected}` : "terminal";
     const segs = [
+      ["detail", "Detail", {}],
+      ["receipts", this.receiptsLabel(), {}],
       ["terminal", "Terminal", { disabled: !live }],
-      ["artifacts", this.artsLabel(), {}],
+      ...helpers.map((agent) => [`agent:${agent.address}`, roleTabName(agent, helpers), {}]),
     ];
     return root.child(v().id("collie-thread-head-rows").size_full().pt(8).pb(12).gap(12).border_b(1).border_color(t.border)
       .child(v().flex_none().gap(8)
-        .child(this.barRow(t, target, cx))
+        .child(this.barRow(t, target))
         .child(this.taskBlock(t, { decision, target, receipt })))
       .child(h().id("collie-thread-views").flex_none().px(EDGE).overflow_x_scroll()
         .child(segmented("collie-thread-mode", segs, shown, (pick, _e, cx) => {
-          if (pick === "terminal") cx.spawn(async (cx) => { await showTerminal(cx); cx.notify(); });
-          else showArtifacts();
+          if (pick === "detail") showDetail();
+          else if (pick === "receipts") {
+            setShared("collie.ticket.agent", null);
+            selectPage(RECEIPTS);
+          } else if (pick === "terminal") cx.spawn(async (cx) => { await showTerminal(cx); cx.notify(); });
+          else {
+            const agent = helpers.find((item) => `agent:${item.address}` === pick);
+            if (agent) cx.spawn(async (cx) => { await showTerminal(cx, agent, roleTabName(agent, helpers)); cx.notify(); });
+          }
         }))));
   }
 
   render(cx) {
     const t = theme();
     if (this.view === "head") return this.head(t, cx);
+    if (this.view === "receipts-panel") return this.receiptsPanelView(t);
+    if (this.view === "detail") return this.detailView(t);
+    if (this.view === "receipts") return this.receiptsView(t, cx);
+    if (this.view === "action-menu") return this.actionMenuView(t);
+    if (this.view === "accept-confirm") return this.acceptConfirmView(t, cx);
     return this.queue(t);
   }
 }

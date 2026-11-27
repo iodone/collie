@@ -172,14 +172,27 @@
                                   }
                                 },
                                 {
-                                  "id": "collie-ticket-artifacts",
+                                  "id": "collie-ticket-detail",
                                   "type": "block",
                                   "content": {
-                                    "mod": "collie-artifacts"
+                                    "mod": "collie-inbox",
+                                    "props": {
+                                      "view": "detail"
+                                    }
+                                  }
+                                },
+                                {
+                                  "id": "collie-ticket-receipts",
+                                  "type": "block",
+                                  "content": {
+                                    "mod": "collie-inbox",
+                                    "props": {
+                                      "view": "receipts"
+                                    }
                                   }
                                 }
                               ],
-                              "active": "collie-ticket-artifacts"
+                              "active": "collie-ticket-detail"
                             }
                           ]
                         }
@@ -187,12 +200,12 @@
                       "active": "collie-list"
                     },
                     {
-                      "id": "artifacts",
+                      "id": "receipts",
                       "type": "block",
                       "content": {
-                        "mod": "collie-artifacts",
+                        "mod": "collie-inbox",
                         "props": {
-                          "view": "panel"
+                          "view": "receipts-panel"
                         }
                       }
                     }

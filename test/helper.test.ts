@@ -168,6 +168,13 @@ describe("helper job IPC", () => {
     expect(readdirSync(jobsDir(opts.stateDir, "alpha"))).toHaveLength(2);
   });
 
+  test("helper 保留有效 decision_ref 续接引用", () => {
+    const result = validateProposal({
+      decision_ref: "dc_existing01", state: "open", why: "继续已有任务", actions: [],
+    }, { space: "alpha", at: "2026-11-18T00:00:00Z" });
+    expect(result.decision_ref).toBe("dc_existing01");
+  });
+
   test("waiting 必须带 card；actions 按 decision schema 校验", () => {
     expect(() => validateProposal(
       { state: "waiting", why: "信息不足", actions: [{ kind: "ask", risk_tags: [], ask: { kind: "question", question: "哪个仓库？", options: ["accept"] } }] },

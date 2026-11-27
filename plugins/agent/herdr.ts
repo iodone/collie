@@ -30,10 +30,12 @@ export const defaultHerdrRunner: TaskRunner = async (args) => {
   return JSON.parse(stdout);
 };
 
-export async function runningHerdrTasks(space: string, options: HerdrAgentOptions = {}): Promise<Json[]> {
+async function readHerdrTasks(options: HerdrAgentOptions): Promise<Json[]> {
   const groups = await (options.run ?? defaultHerdrRunner)(["list", "--all", "--slim", "--json"]);
-  const now = (options.now ?? (() => new Date()))();
-  const tasks = (Array.isArray(groups) ? groups : [groups]).flatMap((group) => Array.isArray(group?.tasks) ? group.tasks : []);
+  return (Array.isArray(groups) ? groups : [groups]).flatMap((group) => Array.isArray(group?.tasks) ? group.tasks : []);
+}
+
+function runningTaskFacts(tasks: Json[], space: string, now: Date): Json[] {
   return tasks.filter((task) => task?.state === "running" && task?.space === space).slice(0, 16).map((task) => {
     if (task.started_at === null || task.started_at === undefined) throw new Error(`running task ${String(task.ref)} has no started_at`);
     const changed = new Date(task.started_at);
@@ -45,6 +47,18 @@ export async function runningHerdrTasks(space: string, options: HerdrAgentOption
       elapsed_seconds: Math.max(0, Math.floor((now.getTime() - changed.getTime()) / 1000)),
     };
   });
+}
+
+export async function runningHerdrTasks(space: string, options: HerdrAgentOptions = {}): Promise<Json[]> {
+  return runningTaskFacts(await readHerdrTasks(options), space, (options.now ?? (() => new Date()))());
+}
+
+export async function herdrTaskSnapshot(space: string, options: HerdrAgentOptions = {}): Promise<{ running: Json[]; active: Json[] }> {
+  const tasks = await readHerdrTasks(options);
+  return {
+    running: runningTaskFacts(tasks, space, (options.now ?? (() => new Date()))()),
+    active: tasks.filter((task) => task?.space === space && task?.state !== "done"),
+  };
 }
 
 const defaultRunner = defaultHerdrRunner;

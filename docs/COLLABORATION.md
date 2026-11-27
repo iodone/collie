@@ -105,8 +105,10 @@ Event 和 human message 共用同一 Decision 契约；入口只改变输入。C
 动态注入
   catalog.playbooks: { name, description, version }
   event / human input
-  queue / running / recent / policy / budget / space_note
+  queue / running / recent / active / policy / budget / space_note
 ```
+
+`active` 是未终结 Decision 和 orphan Task 的只读列表，提供 decision_id、task_ref、run.kind、目标摘要与详情引用。续接时 Coordinator 输出 `decision_ref`，service 写同一 Decision 的 revision 并保留 Task；续接与 `spawn_task` 互斥。
 
 程序从 CollaborationRegistry 读取 catalog 并注入 Case；Coordinator 只能从 catalog 选择 playbook。playbook / role 的正文不进入 Coordinator context，选中的 playbook 由 service 渲染进 task brief。
 
@@ -301,7 +303,7 @@ Helper     live terminal 状态（不进入 task state）
 
 Work 只由 Decision + Task + live agent 投影，不写回 Ledger 或 task store。唯一规范判定表见 [`TASK-LIFECYCLE.md`](TASK-LIFECYCLE.md) §2.5：Decision settled / waiting 优先，其次是 live blocked / live roles，然后才是 Task ready / done / running。Task running 没有 live agent 仍为 Working；没有更高优先级条件时 Task done 为 Settled。
 
-Ticket body 只有 Terminal 与 Artifacts。Terminal 属于 driver（已结束时可显示其历史 terminal）；reviewer / verifier / helper 各有独立 Herdr tab，helper-only 不能抢占 driver Terminal。Artifact 必须通过 `artifact.task` 或 `Task.proof` 显式绑定，不能从日志、publisher 或时间窗口推断。
+Ticket body 由 **Detail、Receipts、Terminal、Role / Agent tabs** 组成。Detail 在最左侧，只承载 Task 元信息与等待原因；Receipts 是独立 tab，展示交付列表和回执详情。Terminal 属于 driver；reviewer / verifier / helper 在详情内切换，helper-only 不能抢占 driver 的默认 Terminal。Receipt 按 Task ref 关联，Proof 通过现有 viewer 展示，不能从日志、publisher 或时间窗口推断交付。
 
 ### 7.3 phase
 

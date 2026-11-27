@@ -39,8 +39,8 @@ const artifactReceipt = {
   ...reviewReceipt,
   id: "rc_uitest02",
   decision_ref: "dc_uitest009",
-  summary: "【UI测试】产物页已准备好",
-  details: "- Artifacts tab 显示本 folder 的 seed artifact\n- 列表来自 collie-artifact 的真实记录",
+  summary: "【UI测试】Receipt 已准备好",
+  details: "- Receipts tab 显示每次 ready 的交付回执\n- 点击 Receipt 查看 summary、details 和 proof refs",
 };
 artifactReceipt.task = { ...artifactReceipt.task, id: "COLLIE-999" };
 const artifacts = ticket("dc_uitest009", "waiting", "COLLIE-999", waitingCard("question", "【UI测试】查看这次交付的产物吗？"));
@@ -61,8 +61,8 @@ const fixtures = [
   { ...ticket("dc_uitest004", "settled", "TEST-DONE"), settled: { at: "2026-11-16T11:00:00Z", by: "human", outcome: "accepted" } },
   { ...ticket("dc_uitest008", "settled", "TEST-DROPPED"), settled: { at: "2026-11-16T12:00:00Z", by: "human", outcome: "dropped" } },
 ];
-// A real task list entry, so the ticket can navigate to its worktree and the Artifacts tab can
-// list a seeded artifact. It lives beside the person's other task lists under ~/.local/share/collie/tasks.
+// A real task list entry, so the ticket can navigate to its worktree and the Receipts tab can
+// list seeded delivery records. It lives beside the person's other task lists under ~/.local/share/collie/tasks.
 const project = resolve(new URL("..", import.meta.url).pathname);
 const taskPath = join(homedir(), ".local", "share", "collie", "tasks", "work-system-weaver-projects-collie.json");
 let taskList = { version: 1, folder: project, kind: "repo", name: "collie",
@@ -73,11 +73,11 @@ for (const item of [review, artifacts]) item.run.task_ref = seedRef;
 for (const item of [reviewReceipt, artifactReceipt]) item.task.id = seedRef;
 taskList.tasks = (taskList.tasks ?? []).filter((task) => task.id !== 999 && !String(task.title ?? "").includes("【UI测试】"));
 const seedTask = {
-  id: 999, key: `${taskList.slug}#999`, ref: seedRef, title: "【UI测试】交付凭据", prompt: "Seed ticket for the Artifacts tab.",
+  id: 999, key: `${taskList.slug}#999`, ref: seedRef, title: "【UI测试】交付凭据", prompt: "Seed ticket for the Receipts tab.",
   state: "ready", created_at: Date.now(), agents: [], depends_on: [], done_by: null,
   base: "main", base_set: false, started_at: Date.now(),
   worktree: project, branch: "main", start: "HEAD",
-  summary: "Seed artifact ready", details: "Seeded for the Artifacts tab.",
+  summary: "Seed receipt ready", details: "Seeded for the Receipts tab.",
   ready_at: Date.now(), proof: { id: "seed-proof-0001", title: "【UI测试】交付凭据 · Proof" },
 };
 taskList.tasks.push(seedTask);
@@ -96,7 +96,7 @@ try {
   writeFileSync(join(recipeDir, "recipe.json"), JSON.stringify({
     recipe: 1,
     blocks: [
-      { type: "text", md: "Seed artifact for the Artifacts tab. It renders beside the real task artifacts." },
+      { type: "text", md: "Seed proof for the Receipts tab. It renders in the existing evidence viewer." },
       { type: "table", columns: ["What", { label: "Value", align: "right" }], rows: [["Tests", "Passed"], ["Files", "2"]] },
     ],
   }, null, 2));

@@ -6,8 +6,8 @@ import { Ledger, ledgerId } from "../kernel/ledger.ts";
 import { humanMessage } from "../kernel/message.ts";
 import { coordinate, recordOnlyDecision, type CoordinateOptions } from "../kernel/coordinator.ts";
 import { renderBrief } from "../kernel/brief.ts";
-import { runHerdrTask, waitForHerdrReceipt, runningHerdrTasks, defaultHerdrRunner, type HerdrAgentOptions } from "../plugins/agent/herdr.ts";
-import { answerHerdrCard, type ChannelRunner } from "../plugins/channel/herdr.ts";
+import { runHerdrTask, waitForHerdrReceipt, herdrTaskSnapshot, defaultHerdrRunner, type HerdrAgentOptions } from "../plugins/agent/herdr.ts";
+import { answerHerdrCard } from "../plugins/channel/herdr.ts";
 import { deliverGitlab } from "../plugins/delivery/gitlab.ts";
 import { deliverGithub } from "../plugins/delivery/github.ts";
 import { deliverIm } from "../plugins/delivery/im.ts";
@@ -153,11 +153,14 @@ export class CollieService {
   }
 
   async #coordinate(dispatch: Dispatch, options: CoordinateOptions): Promise<Json> {
-    const running = await runningHerdrTasks(dispatch.space, {
+    const tasks = await herdrTaskSnapshot(dispatch.space, {
       ...(this.#options.agent?.run ? { run: this.#options.agent.run } : {}),
       ...(this.#options.now ? { now: this.#options.now } : {}),
     });
-    return coordinate(dispatch, { rolePromptRef: this.#coordinatorPrompt(), ...options, running });
+    return coordinate(dispatch, {
+      rolePromptRef: this.#coordinatorPrompt(), ...options,
+      running: tasks.running, activeTasks: tasks.active,
+    });
   }
 
   #agentOptions(decision: Json): HerdrAgentOptions {
@@ -176,6 +179,7 @@ export class CollieService {
     const spawns = decision.actions.filter((action: Json) => action.kind === "spawn_task");
     if (decision.state !== "open" || !spawns.length) return decision;
     if (spawns.length !== 1) throw new Error("M1 executes exactly one spawn_task per decision");
+    if (decision.decision_ref) throw new Error("continuation cannot spawn_task; continue the existing Task");
     const workspace = this.#options.workspaces?.[decision.space];
     if (!workspace) throw new Error(`no driver workspace configured for space ${decision.space}`);
     const folder = this.#projectFolder(decision.space, decision.project);
@@ -237,7 +241,7 @@ export class CollieService {
     const brief = input.brief;
     if (typeof brief !== "string" || !brief.trim() || brief.length > 200_000) throw new Error("brief must be 1–200000 chars");
     const kind = input.kind ?? "build";
-    if (kind !== "build" && kind !== "review") throw new Error("kind must be build or review");
+    if (!["build", "review", "verify"].includes(kind)) throw new Error("kind must be build, review or verify");
     const project = input.project;
     if (project !== undefined && (typeof project !== "string" || !/^[a-z0-9][a-z0-9_-]{1,63}$/.test(project))) throw new Error("invalid project");
     const projectFolder = this.#projectFolder(space, project);
@@ -269,7 +273,7 @@ export class CollieService {
           kind: "spawn_task", risk_tags: [],
           spawn: {
             title, brief_ref: briefRef, base: "current",
-            access: kind === "review" ? "read" : "edit",
+            access: kind === "build" ? "edit" : "read",
           },
         }],
         run: { kind },
@@ -295,16 +299,22 @@ export class CollieService {
     if (typeof space !== "string" || !/^[a-z0-9][a-z0-9_-]{1,63}$/.test(space)) throw new Error("invalid space");
     const decision = input.decision;
     if (!decision || typeof decision !== "object" || Array.isArray(decision)) throw new Error("decision must be an object");
-    const project = input.project ?? decision.project;
+    const continued = typeof decision.decision_ref === "string"
+      ? this.ledger.decisions.find((item) => item.id === decision.decision_ref)
+      : null;
+    const project = input.project ?? decision.project ?? continued?.project;
     if (project !== undefined && (typeof project !== "string" || !/^[a-z0-9][a-z0-9_-]{1,63}$/.test(project))) throw new Error("invalid project");
     const folder = this.#projectFolder(space, project);
-    const playbook = decision.playbook?.name
-      ? this.collaboration.playbook(decision.playbook.name)
+    const playbookName = decision.playbook?.name ?? continued?.playbook?.name;
+    const playbook = playbookName
+      ? this.collaboration.playbook(playbookName)
       : decision.run?.kind === "review" ? this.collaboration.playbook("review") : this.collaboration.playbook("feature");
 
     const at = (this.#options.now ?? (() => new Date()))().toISOString();
     const turnKey = `human:turn:${input.turn_id ?? decision.key ?? "untracked"}`;
-    const existing = this.ledger.decisions.find((item) => item.key === turnKey);
+    const previousCase = this.ledger.cases.find((item) => item.message?.key === turnKey);
+    const existing = this.ledger.decisions.find((item) => item.key === turnKey)
+      ?? (previousCase ? this.ledger.decisions.find((item) => item.case_ref === previousCase.id) : null);
     if (existing) return existing;
     const id = ledgerId("msg");
     const directory = join(this.stateDir, "turns");
@@ -353,7 +363,7 @@ export class CollieService {
     const title = input.title;
     if (typeof title !== "string" || !/^(?![\s-])[^{}\r\n]{1,200}$/.test(title)) throw new Error("invalid title");
     const kind = input.kind ?? "build";
-    if (kind !== "build" && kind !== "review") throw new Error("kind must be build or review");
+    if (!["build", "review", "verify"].includes(kind)) throw new Error("kind must be build, review or verify");
     const existing = this.ledger.decisions.find((decision) => decision.run?.task_ref === taskRef && decision.state !== "settled");
     if (existing) return { decision_id: existing.id, ticket_ref: taskRef, adopted: false };
 
@@ -562,6 +572,7 @@ export class CollieService {
         ...(this.#options.rolePromptRef ? { rolePromptRef: this.#options.rolePromptRef } : {}),
       });
       this.ingress.bindDecision(dispatch.laneKey, decision.id);
+      if (decision.state === "settled") this.ingress.completeLane(dispatch.laneKey);
       this.#projectIngress();
       return this.#executeSpawn(decision, dispatch);
     }
@@ -591,7 +602,23 @@ export class CollieService {
     const args = [command, taskRef, "--folder", folder,
       ...(command === "start" ? ["--space", decision.space] : []), "--json"];
     if (doneBy) args.push("--done-by", doneBy);
-    return (this.#options.agent?.run ?? defaultHerdrRunner)(args);
+    const run = this.#options.agent?.run ?? defaultHerdrRunner;
+    try {
+      return await run(args);
+    } catch (error) {
+      if (command === "start") throw error;
+      // Accept/archive/drop remain valid only when show explicitly proves the Task is gone.
+      try {
+        const task = await run(["show", taskRef, "--folder", folder, "--json"]);
+        if (typeof task?.error === "string" && task.error.includes(`No task ${taskRef}`)) {
+          return { ref: taskRef, state: "done", missing: true };
+        }
+      } catch (showError) {
+        const message = String(showError instanceof Error ? showError.message : showError);
+        if (message.includes(`No task ${taskRef}`)) return { ref: taskRef, state: "done", missing: true };
+      }
+      throw error;
+    }
   }
 
   async #watchRework(decision: Json): Promise<Json> {
@@ -623,6 +650,10 @@ export class CollieService {
 
   async #finalizeAnswer(decision: Json, answered: Json, answer: Json): Promise<Json> {
     if (!decision.run?.task_ref) return answered;
+    if (answer.option === "archive") {
+      await this.#taskCommand(decision, "done", "human");
+      return this.#terminalDecision(answered, answer.at, "human", "archived");
+    }
     if (answer.option === "drop") {
       await this.#taskCommand(decision, "done", "human");
       return this.#terminalDecision(answered, answer.at, "human", "dropped");
@@ -638,12 +669,11 @@ export class CollieService {
     return answered;
   }
 
-  async answerCard(decisionId: string, answer: Json, coordinatorAddress?: string, run?: ChannelRunner): Promise<Json> {
+  async answerCard(decisionId: string, answer: Json): Promise<Json> {
     const decision = this.ledger.decisions.find((item) => item.id === decisionId);
     if (!decision) throw new Error(`unknown decision: ${decisionId}`);
-    const result = await answerHerdrCard(decision, answer, coordinatorAddress, {
-      ...(run ? { run } : {}),
-      beforeResume: async (answered) => {
+    const result = await answerHerdrCard(decision, answer, {
+      beforeCommit: async (answered) => {
         const finalized = await this.#finalizeAnswer(decision, answered, answer);
         return this.#commitDecision(finalized);
       },
@@ -666,6 +696,51 @@ export class CollieService {
       return { ...result, decision: delivered, delivered: true };
     }
     return result;
+  }
+
+  #budgetTodo(decision: Json): void {
+    if (decision.state !== "open" || !String(decision.why ?? "").startsWith("全局预算 ")) {
+      throw new Error("decision is not a budget-deferred Todo");
+    }
+  }
+
+  async runDecision(decisionId: string): Promise<Json> {
+    const decision = this.ledger.decisions.find((item) => item.id === decisionId);
+    if (!decision) throw new Error(`unknown decision: ${decisionId}`);
+    if (decision.state !== "open") throw new Error("decision is not an open Todo");
+    if (decision.run?.task_ref) {
+      await this.#taskCommand(decision, "start");
+      return decision;
+    }
+    this.#budgetTodo(decision);
+    const message = this.ledger.messages.find((item) => item.id === decision.event_ref);
+    if (!message) throw new Error(`missing source Message for budget Todo: ${decisionId}`);
+    const dispatch: Dispatch = {
+      kind: "coordinator",
+      laneKey: message.merge?.lane_key ?? decision.occurrence.object_key,
+      space: decision.space,
+      message,
+    };
+    const result = await this.#coordinate(dispatch, {
+      ledger: this.ledger, ruleset: this.#options.ruleset, catalog: this.collaboration.catalog(),
+      origin: "event", decisionId,
+      decide: this.#options.decide ?? (this.#options.coordinator
+        ? async (job) => this.#decideWithHelper(job, decision.space)
+        : () => ({ state: "open", why: decision.why, actions: decision.actions ?? [{ kind: "noop", risk_tags: [] }], run: decision.run })),
+      policy: this.#policy(decision.space),
+      ignoreBudget: true,
+      onDecision: () => this.#projectQueue(),
+    });
+    return this.#executeSpawn(result, dispatch);
+  }
+
+  async archiveDecision(decisionId: string): Promise<Json> {
+    const decision = this.ledger.decisions.find((item) => item.id === decisionId);
+    if (!decision) throw new Error(`unknown decision: ${decisionId}`);
+    if (decision.state !== "open") throw new Error("decision is not an open Todo");
+    if (decision.run?.task_ref) await this.#taskCommand(decision, "done", "human");
+    const at = (this.#options.now ?? (() => new Date()))().toISOString();
+    return this.#commitDecision(this.#terminalDecision(decision, at, "human", "archived"));
   }
 
   async deliver(decisionId: string): Promise<Json> {
@@ -707,7 +782,7 @@ export class CollieService {
     }
     if (candidate.state === "settled") {
       if (candidate.settled.outcome === "accepted") await this.#taskCommand(linked, "accept", "coordinator");
-      else if (candidate.settled.outcome === "dropped") await this.#taskCommand(linked, "done", "coordinator");
+      else if (["dropped", "archived"].includes(candidate.settled.outcome)) await this.#taskCommand(linked, "done", "coordinator");
       else throw new Error(`unsupported ready receipt outcome: ${candidate.settled.outcome}`);
       return this.#terminalDecision(candidate, candidate.settled.at, "coordinator", candidate.settled.outcome);
     }
@@ -745,8 +820,8 @@ export class CollieService {
       const question = "任务已 ready，要接受这次交付吗？";
       return {
         state: "waiting", why: "等待人验收 ready 交付",
-        actions: [{ kind: "ask", risk_tags: [], ask: { kind: "accept", question, options: ["accept", "rework", "drop"] } }],
-        card: { kind: "accept", question, options: ["accept", "rework", "drop"], state: "open", created_at: receipt.received_at,
+        actions: [{ kind: "ask", risk_tags: [], ask: { kind: "accept", question, options: ["accept", "rework", "archive"] } }],
+        card: { kind: "accept", question, options: ["accept", "rework", "archive"], state: "open", created_at: receipt.received_at,
           acked_at: null, answer: null, snooze_until: null, closed_at: null },
       };
     };

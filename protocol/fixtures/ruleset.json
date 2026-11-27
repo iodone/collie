@@ -10,7 +10,7 @@
     "change_permission"
   ],
   "budget": {
-    "per_hour": 6,
+    "per_hour": 100,
     "window_minutes": 60,
     "scope": "global"
   },

@@ -9,7 +9,7 @@ describe("README implementation claims", () => {
     const text = readme();
     expect(text.includes("Decision + Task")).toBe(true);
     expect(text.includes("todo / running / ready / done")).toBe(true);
-    expect(text.includes("Terminal 与 Artifacts")).toBe(true);
+    expect(text.includes("Terminal 与 Receipts")).toBe(true);
     expect(text.includes("Python 3.10+")).toBe(true);
     expect(text.includes("Message、Case、Decision、Receipt")).toBe(true);
     expect(text.includes("source` adapter 仍需写代码")).toBe(true);

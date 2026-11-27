@@ -1,8 +1,6 @@
-// The artifact viewer: a ticket's Artifacts list opens one here. The shell: mods/collie-artifacts'
-// toolbar (props.artifact, its bar.js) over the artifact's own mod, on a backdrop in the theme's
-// colors. From a ticket it covers the whole window. From a dialog it opens as a modal of a fitting
-// size over that dialog instead (artifact.modal), and
-// closing it returns there.
+// The Proof viewer: Receipt proof refs open this Shepherdr-compatible renderer. The toolbar
+// (props.artifact, its bar.js) sits over the proof's own mod on a themed backdrop. From a Receipt
+// it covers the window; from a dialog it opens as a modal over that dialog instead.
 // Shared: the source is lib/artview.js; bin/collie-sync copies it into each mod in lib/COPIES.
 // Edit lib/artview.js, never a mod's copy, then run bin/collie-sync.
 
@@ -74,5 +72,5 @@ export function openViewer(a, show = showViewer) {
   const older = a.latest && a.version && a.version < a.latest;
   return artifactCli(null, ["pull", a.id, ...(machine ? ["--from", machine] : []), ...(older ? ["--version", String(a.version)] : [])])
     .then((out) => show({ mod: out.mod, base: baseMod(out.mod), id: a.id, title: a.title, version: a.version, latest: a.latest ?? a.version, machine, ...(a.modal ? { modal: true } : {}) }))
-    .catch((e) => { toast({ title: "Artifact didn't open", body: plainError(e), level: "error" }); });
+    .catch((e) => { toast({ title: "Proof didn't open", body: plainError(e), level: "error" }); });
 }

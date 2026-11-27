@@ -180,13 +180,17 @@ flowchart TB
 Coordinator 读：
 
 - 消息内容
+- `snapshot.active`：未终结 Decision 与 orphan Task 的 decision_id、task_ref、run.kind、目标、详情引用和状态
 - queue / running / recent / policy / budget
 - playbook catalog（role catalog 单独给 driver）
 
 Coordinator 输出：
 
-- Decision
+- Decision；续接时带 `decision_ref`，写同一 Decision 的新 revision 并复用 Task
+- `run.kind = build / review / verify`，表示当前 Task 动作，不是状态或去重身份
 - 可选的自然语言 reply（同一个 chat 会话里的文字）
+
+同一目标续接；独立目标才新建。`decision_ref + spawn_task` 由 service 拒绝；不确定时问人或 noop。
 
 Coordinator 不执行 task，也不管理 task 内部的 role 转换。
 
@@ -202,9 +206,11 @@ Coordinator 不执行 task，也不管理 task 内部的 role 转换。
 ### 3.4 投影层
 
 - Inbox 只读 Decision + Task + live agent。
-- Ticket body 只有 **Terminal** 与 **Artifacts** 两个 tab；Terminal 指向 driver（已结束时可显示其历史 terminal），Artifacts 展示显式绑定产物。
+- Inbox 并列面板为 **Files / Inbox / Receipts**；Receipts 展示全部 Task 的交付回执，点击进入对应 Receipt 详情。
+- Ticket body 只有 **Terminal** 与 **Receipts** 两个 tab；Terminal 指向 driver（已结束时可显示其历史 terminal），Receipts 展示每次 ready 的交付回执。
 - Reviewer / verifier / helper 各有独立 Herdr tab；helper-only 不能抢占 driver Terminal。
-- Artifact 只有 `artifact.task` 指向当前 Task，或被 `Task.proof` 引用时才进入 Ticket；proof 排第一。不从 agent / chat 日志、publisher 或时间窗口推断归属。
+- Receipt 按 Task ref 关联，记录每次 ready 的 summary、details 和 proof refs；不从 agent / chat 日志、publisher 或时间窗口推断交付。
+- Proof 证据详情复用 shepherdr viewer；Artifact 只作为底层存储和 viewer 实现，不提供独立用户导航页面。
 - Coordinator chat 是人的对话面。
 
 Work 是四态只读投影；Decision 与 Task 是两个持久状态机，helper 的 live 状态记录在 Herdr terminal 中。
@@ -395,6 +401,8 @@ task 结束时，driver 只交 task-level receipt，且只有三个通用交付�
 
 `proof` 是可核验引用；review / verify 等 playbook 过程证据需要保留时，也只能通过 proof 引用，不形成额外 receipt 字段或 Task gate。receipt 回到 service，再交给 Coordinator 判断 accept / rework / drop，同时用于 Work / Ticket 只读投影。
 
+review 任务中的 MR 评论属于任务交付物：driver 完成评论后直接发布并记录 note id，不因评论再生成独立 delivery 或 accept 卡。Approve、merge、push 仍需单独 Decision 授权。
+
 ```text
 driver / helpers
       ↓
@@ -411,17 +419,57 @@ Coordinator（task-level）
 
 ## 6. 状态同步
 
-### 6.1 三层，不是一套状态
+### 6.1 第一性原理：两套持久状态机、一个进程事实、一个只读投影
+
+不要把 Decision、Task、Agent 和 Inbox 当成同一条状态链。它们分别回答四个问题：
+
+| 概念 | 回答的问题 | 状态 | 谁写入 |
+|---|---|---|---|
+| **Decision** | 当前由谁做选择？ | `open / waiting / settled` | Coordinator / service |
+| **Task** | 执行到了哪一步？ | `todo / running / ready / done` | `collie-task` / service |
+| **Agent** | 此刻有没有进程在工作？ | `live / finished` | Herdr |
+| **Inbox** | 人现在该看什么、做什么？ | `Todo / Working / Needs you / Settled` | 不写入；只读投影 |
+
+`Receipt` 不是第五种状态。它是 Task 在 `ready` 时提交的交付依据，只有 `summary / details / proof`。
+
+因此：
+
+- `Decision.settled` 表示**判断已结束**。
+- `Task.done` 表示**这次执行已结束**。
+- `Agent.finished` 表示**进程已结束**。
+- `Inbox.Settled` 是这些事实计算出的界面结果。
+
+核心关系：
 
 ```text
-Decision    open / waiting / settled          外循环判断
-Task        todo / running / ready / done     内循环执行事实
-Work        Todo / Working / Needs you / Settled  Inbox 投影
+Inbox = project(Decision, Task, liveAgents)
 ```
 
-Task state 是持久事实；Work 是读取 Decision + Task + Herdr 后算出的投影。
+### 6.2 用“下一步由谁持有”理解 Inbox
 
-### 6.2 Task lifecycle
+Inbox 只关心当前由谁持有下一步，而不是复制三套状态：
+
+| 下一步由谁持有 | Inbox 显示 |
+|---|---|
+| 还没开始 | `Todo` |
+| Agent 正在工作 | `Working` |
+| 需要人判断或验收 | `Needs you` |
+| 已经没有下一步 | `Settled` |
+
+多个条件同时成立时，按以下顺序取第一个命中：
+
+1. Decision 已 `settled` → `Settled`
+2. Decision 正 `waiting` → `Needs you`
+3. 有 live agent 被阻塞 → `Needs you`
+4. 有 live driver / reviewer / verifier 在工作 → `Working`
+5. Task 是 `ready` → `Needs you`
+6. Task 是 `done` → `Settled`
+7. Task 是 `running` → `Working`
+8. 其余 → `Todo`
+
+记忆方式：**先看 Decision，再看 live agent，最后用 Task 补全。**
+
+### 6.3 Task lifecycle：只记录执行事实
 
 ```text
 todo → running          task start
@@ -437,12 +485,39 @@ todo / running / ready → done
 |---|---|---|
 | `todo` | 已创建，未开始 | `collie task add` |
 | `running` | driver 正在工作 | `collie task start`：`todo → running`、rework 的 `ready → running`，或 stopped-running terminal 移除后的原地重启 |
-| `ready` | driver 已交付，等待 accept / rework / drop | `collie task ready`，必须提供 summary / details / proof |
-| `done` | accept / drop 后终结 | accept 用 `collie task accept`；drop / finalization 用 `collie task done` |
+| `ready` | driver 已交付，等待 accept / rework / archive / drop | `collie task ready`，必须提供 summary / details / proof |
+| `done` | 这次执行已终结 | accept 用 `collie task accept`；archive / drop / finalization 用 `collie task done` |
 
-调度、排队和外部交付由 metadata 与 Decision/Card 表达，不进入 Task lifecycle。
+`ready` 不是 done。它只表示 driver 已交付，后续由 Decision / Card 决定 accept、rework、archive 或通用 Card drop。调度、排队和外部 delivery 由 metadata 与 Decision/Card 表达，不进入 Task lifecycle。
 
-### 6.3 标准 Task schema
+### 6.4 Accept 同时写两套状态，但不要求 Agent 同步停止
+
+一次 Accept 的顺序是：
+
+1. service 执行 `collie-task accept`：Task `ready → done`。
+2. service 写入 `Decision.settled{outcome:"accepted"}`。
+3. Inbox 因 Decision settled 立即显示 `Settled`，即使 driver 当时仍是 live。
+4. Herdr 的后台 tick 再清理 driver / helper。
+
+清理不是 Accept 的第四个状态，也不存在 `resumed` 字段或 Coordinator 续接：
+
+- `DONE_GRACE_MS = 60000`：done 后至少保留 60 秒，让最后的输出先落盘。
+- Agent 空闲后由 tick 执行 `kill`，随后 `rm`。
+- Agent 仍在工作时，默认最多延长到 `DONE_WORKING_MS = 15 * 60000`。
+- `Agent.finished` 不改变已经写入的 Decision / Task，也不会把 Settled 拉回 Working。
+
+### 6.5 MATE-2：一次实际生命周期
+
+| 阶段 | Decision | Task | Agent | Inbox |
+|---|---|---|---|---|
+| 开始评审 | `open` | `running` | driver / reviewer live | `Working` |
+| Driver 交付 | `waiting` | `ready` | 仍可能活着 | `Needs you` |
+| 人执行 Accept | `settled/accepted` | `done` | 当时仍可能活着 | `Settled` |
+| 后台清理 | 不变 | 不变 | 约 60 秒后结束 | 仍为 `Settled` |
+
+本次实测：Decision 在 `01:36:28.485` settled，Task 在 `01:36:28.659` done，driver 在 `01:37:33.587` 被结束并移除，间隔 **64.928 秒**。Coordinator 的 done 来自 settled Decision 投影，不是 driver 停止；约 3 秒的界面刷新节奏也不是 agent 清理阈值。
+
+### 6.6 标准 Task schema
 
 持久化文件：
 
@@ -522,33 +597,41 @@ ready:   ready_at!=null, summary/details/proof!=null, done_at=null
 done:    done_at!=null, done_by=coordinator|human
 ```
 
-### 6.4 `ready` 是通用交付态
+### 6.7 操作与状态对照
 
-`ready` 只表示 driver 已交付，不表示后续动作已经完成。
+| 操作 | Decision | Task | Inbox |
+|---|---|---|---|
+| `ready` | `waiting` | `ready` | `Needs you` |
+| `Accept` | `settled/accepted` | `done` | `Settled` |
+| `Rework` | `open` | `running` | `Working` |
+| `Archive` | `settled/archived` | `done` | `Settled` |
+| 通用 Card `drop` | `settled/dropped` | `done` | `Settled` |
+| `Quote` | 不变 | 不变 | 不变；Coordinator 决定新工作 |
 
-```text
-running → ready   driver 调用 collie task ready
-ready → running   人/Coordinator 选择 rework，或有新指令/revision
-ready → done      accept / drop 后完成
-```
+Archive 与 drop 不复用同一个 outcome：Archive 写 `archived` 并保留全部交付证据，通用 Card drop 写 `dropped`。两者都不是删除 Settled 历史。
 
-`ready` 的下一步不在 Task 里定义：人 accept / rework / drop 属于 Decision / Card；后续执行和交付由 Coordinator 与 playbook 决定。
+### 6.8 phase、role tab 与 agent 历史
 
-Task 只记录 `todo/running/ready/done`。
+`build / review / verify` 是 Task 的执行动作，不是额外状态。Working 的动作副标签优先取 live helper 的 `herdr.role`，否则读 `Decision.run.kind`；动作变化不进入 Task state，也不构成新建或去重身份。
 
-### 6.5 Work 四态
+Role terminal 也有独立生命周期：
 
-唯一规范判定表见 [`TASK-LIFECYCLE.md`](TASK-LIFECYCLE.md) §2.5。投影按顺序取第一个命中：Decision settled / waiting，live blocked / live roles，然后才是 Task ready / done / running，最后才是 Todo。Task running 没有 live agent 仍为 Working；没有更高优先级条件时 Task done 为 Settled，包括 orphan 或 Decision 仍为 open 的情况。
+- driver 使用 Ticket 的 Terminal tab；reviewer / verifier / helper 是同一 Ticket 详情里的 Role / Agent tabs，不自动创建主页面 Herdr tab。
+- 所有 role 复用同一个详情 agent body；live role 显示 terminal，finished role 显示只读历史，切换时按需改写该布局块。
+- `status=done` 只表示不再计入 live role，不能据此隐藏已有 role terminal。
+- `state=finished` 的 role terminal 通过只读会话历史打开，不表示恢复或重启 agent。
+- 没有 live driver 时默认显示 Receipts；Receipt 和 Proof 仍可继续打开。
 
-### 6.6 phase 是 Work 的读时显示
+### 6.9 容易混淆的边界
 
-phase 来自 live helper 的 `herdr.role`，只用于 Work 显示，不进入 Task state。
+- `ready ≠ done`：ready 只是可以验收，done 才是执行结束。
+- `done ≠ settled`：done 是 Task 事实，settled 是 Decision 事实。
+- `Settled ≠ 删除`：Receipt、Proof 和 Settled 历史保留。
+- `done agent ≠ done Task`：进程结束和任务结束是两件事。
+- `failed` 不是 Task 状态：需要人处理的失败通过 Decision waiting + alert Card 表达。
+- `ack ≠ settled`：展开或读取 Card 不会结案，只有明确 outcome 才结案。
 
-### 6.7 Needs you / Settled
-
-Decision waiting、live blocked，或没有更高优先级 live role 的 Task ready 都是 Needs you。Decision settled 是 Settled；没有 Decision settled 时，Task done 仍可按上述优先级投影为 Settled。
-
-`ready` 不是 done；`ack` 不是 settled。
+唯一规范判定表见 [`TASK-LIFECYCLE.md`](TASK-LIFECYCLE.md) §2.5。没有更高优先级条件时，Task done 也投影为 Settled，包括 orphan Task 或 Decision 仍为 open 的情况；Task running 没有 live agent 仍是 Working。
 
 ---
 
@@ -611,10 +694,11 @@ task 未 ready 就结束（例如 driver 进程退出或超时）时，`#execute
 
 `ready` 之后：
 
-- 自动接受 → Settled
+- 自动接受 → `settled/accepted`
 - 需要人 → Needs you + accept Card
 - rework → 回到 Working
-- drop → Settled
+- Archive → `settled/archived`，保留交付证据
+- 通用 Card drop → `settled/dropped`
 
 `ack` 不是 settled。
 
@@ -793,7 +877,7 @@ Collie 的状态分三类，不混在同一个文件里：
 | `helper/<space>/jobs/hj_*.json` | `runHelperJob` | 递给 Coordinator helper 的 Case | 可由 Case 重建；启动时未完成 job 转 waiting Card |
 | `helper/<space>/decisions/hj_*.json` | Coordinator helper | helper 写回的 Decision proposal | service 校验后才进 Ledger |
 | `policy/<space>.md`、`policy.md` | 人 | per-space / 全局 policy | 用户配置 |
-| `ruleset.json` | installer / 人 | 护栏、预算、hops 配置 | 配置，不是运行历史 |
+| `ruleset.json` | installer / 人 | 护栏、预算、hops 配置 | 配置，不是运行历史。预算耗尽进入 Todo；`Run now` 立即执行，`Archive` 完成当前 Task 并结算 Decision，不生成 Needs you 卡 |
 | `service.sock`、`service.log`、`coordinator-runtime.json` | service / 运维 | socket、日志、Coordinator 运行时指针 | 运行态，不是业务事实 |
 
 写文件的方式：
