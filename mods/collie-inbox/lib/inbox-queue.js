@@ -43,11 +43,18 @@ export const STAGE_WORD = {
 };
 
 // A waiting Decision whose Card is an accept/rework (its task said ready) is the positive one.
-export const ticketNeed = (decision) =>
-  decision?.receipt_ref || decision?.card?.kind === "accept" ? "ready" : "needs";
+export const ticketNeed = (decision, target = null) =>
+  decision?.receipt_ref || decision?.card?.kind === "accept" || target?.state === "ready" ? "ready" : "needs";
+
+// Show real Task refs or Decision IDs; never fabricate project prefixes.
+export function ticketRef(decision, target = null) {
+  const ref = target?.ref ?? decision?.run?.task_ref;
+  return ref ? String(ref).toUpperCase() : String(decision.id);
+}
 
 // Queue dependencies are metadata on a todo Task, never another Task state.
 export function todoReason(target, decision) {
+  if (target?.reason) return target.reason;
   const dependsOn = Array.isArray(target?.depends_on) ? target.depends_on : [];
   if (dependsOn.length) return `after ${dependsOn.join(", ")}`;
   if (target?.state === "todo") return "not started";
@@ -62,7 +69,7 @@ export function taskLifecycle(task) {
 
 // Working phase: build / review / verify. It is a live-agent label, not a Task state.
 export function workKind(decision, target, live = {}) {
-  if (live.verifier) return "verify";
+  if (live.verifier || decision?.run?.kind === "verify") return "verify";
   if (live.reviewer || (decision?.run?.kind === "review" && live.driver)) return "review";
   return decision?.run?.kind === "review" ? "review" : "build";
 }
@@ -86,8 +93,7 @@ export function ticketStage(decision, target, live = {}) {
   return "todo";
 }
 
-// Needs you / each project's Todo→Working / Settled. `items`: [{ decision, stage, target }].
-const GROUP_RANK = { todo: 0, working: 1 };
+// All has four fixed groups: Needs you / Todo / Working / Settled.
 const needOrder = (a, b) => Number(Boolean(a.decision.hold)) - Number(Boolean(b.decision.hold))
   || (a.decision.priority?.value ?? 5) - (b.decision.priority?.value ?? 5)
   || time(a.decision.decided_at ?? a.decision.card?.created_at) - time(b.decision.decided_at ?? b.decision.card?.created_at)
@@ -95,30 +101,15 @@ const needOrder = (a, b) => Number(Boolean(a.decision.hold)) - Number(Boolean(b.
 
 export function ticketGroup(items) {
   const all = (Array.isArray(items) ? items : []).filter((x) => x?.decision && x.stage);
-  const top = all.filter((x) => x.stage === "needs").sort(needOrder);
-  const settled = all.filter((x) => x.stage === "settled")
-    .sort((a, b) => time(b.decision.settled?.at ?? b.decision.decided_at) - time(a.decision.settled?.at ?? a.decision.decided_at)
-      || String(a.decision.id).localeCompare(String(b.decision.id)));
-  const rest = all.filter((x) => ["todo", "working"].includes(x.stage));
-  const rank = (x) => GROUP_RANK[x.stage] ?? 99;
   const when = (x) => time(x.decision.decided_at);
-  // Working: newest first; Todo: the oldest first.
-  const sorted = (a, b) => rank(a) - rank(b)
-    || (a.stage === "working" ? when(b) - when(a) : when(a) - when(b))
-    || String(a.decision.id).localeCompare(String(b.decision.id));
-  // A project is the execution grouping: explicit Decision.project, else the task folder,
-  // else the space (older tickets had no project dimension).
-  const projectOf = (x) => String(x.decision.project ?? x.target?.project ?? x.target?.folder ?? x.decision.space ?? "");
-  const byProject = new Map();
-  for (const x of rest) {
-    const key = projectOf(x);
-    if (!byProject.has(key)) byProject.set(key, []);
-    byProject.get(key).push(x);
-  }
-  const projects = [...byProject.keys()]
-    .sort((a, b) => a.localeCompare(b))
-    .map((key) => ({ key, rows: byProject.get(key).sort(sorted) }));
-  return { top, projects, settled };
+  const byId = (a, b) => String(a.decision.id).localeCompare(String(b.decision.id));
+  return {
+    needs: all.filter((x) => x.stage === "needs").sort(needOrder),
+    todo: all.filter((x) => x.stage === "todo").sort((a, b) => when(a) - when(b) || byId(a, b)),
+    working: all.filter((x) => x.stage === "working").sort((a, b) => when(b) - when(a) || byId(a, b)),
+    settled: all.filter((x) => x.stage === "settled")
+      .sort((a, b) => time(b.decision.settled?.at ?? b.decision.decided_at) - time(a.decision.settled?.at ?? a.decision.decided_at) || byId(a, b)),
+  };
 }
 
 const prefixed = (machine, address) => machine && address && !String(address).includes("/")
@@ -182,6 +173,9 @@ export function taskTarget(decision, receipt, groups, detail = null) {
     agents: Array.isArray(task.agents) ? task.agents : [],
     live,
     depends_on: Array.isArray(task.depends_on) ? task.depends_on : [],
+    reason: task.reason ?? task.held ?? null,
+    queued_at: task.queued_at ?? null,
+    scheduled_for: task.scheduled_for ?? null,
     progress: task.progress ?? null,
     proof: task.proof ?? null,
     terminal: prefixed(machine, address),
@@ -222,8 +216,7 @@ export function orphanTickets(decisions, groups) {
 
 const driverRole = (role) => !role || role === "driver" || role === "worker";
 
-// Live helper roles, merging the task record with current terminal labels. Drivers stay in the
-// fixed Ticket Terminal; the returned agents are rendered as separate Herdr tabs.
+// Role terminals stay visible after status becomes done; liveRoles() separately tracks active work.
 export function taskAgents(target, terms = []) {
   const key = target?.key;
   const label = key ? `${key.slug}#${key.id}` : null;
@@ -233,9 +226,9 @@ export function taskAgents(target, terms = []) {
     if (agent?.address) byAddress.set(agent.address, agent);
   }
   if (label) for (const term of terms) {
-    if (term.state !== "live" || term.labels?.["herdr.task"] !== label) continue;
+    if (!["live", "finished"].includes(term.state) || term.labels?.["herdr.task"] !== label) continue;
     const old = byAddress.get(term.address) ?? {};
     byAddress.set(term.address, { ...old, address: term.address, role: old.role ?? term.labels?.["herdr.role"] ?? "worker", status: old.status ?? term.status });
   }
-  return [...byAddress.values()].filter((agent) => agent.address && !driverRole(agent.role) && agent.status !== "done");
+  return [...byAddress.values()].filter((agent) => agent.address && !driverRole(agent.role));
 }

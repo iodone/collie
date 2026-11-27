@@ -24,7 +24,7 @@
 - `bun`、`git` 在 `PATH`；
 - 至少一个已登录的 CLI agent（Claude Code / Codex）；
 - collie 自带 vendored `collie-task` / `collie-artifact`，不要求安装 shepherdr 的 `tasks` / `chat` / `artifacts` add-on；
-- Inbox 使用独立 layout；Ticket 详情的 Terminal 用 herdr 的 terminal block，Artifacts 用 collie 自有的 `collie-artifacts`（列表与 viewer 工具栏同一个 mod）。
+- Inbox 使用独立 layout；Ticket 详情的 Terminal 用 herdr 的 terminal block，Receipts 用 collie 自有 Receipt 投影；Proof viewer 复用 `collie-artifacts` 的内部渲染实现。
 
 安装器在写入前检查 bundled `collie-task`、`bun`、`git`；不再读取 shepherdr 的 `installed.json`。
 
@@ -117,9 +117,10 @@ space 配置覆盖 Everywhere；未配置有效 `cli` 时不会静默选择另�
 - 队列只有 `waiting` 的 Decision；Todo / Working 不是队列。
 - `~/.local/state/collie/queue.json` 是 Ledger 投影，含全部 Decision，**不是**队列本身。
 - Decision `settled { at, by, outcome }` 是 Settled；没有更高优先级条件时 Task `done` 也投影 Settled，包括 orphan 或 Decision 仍为 open 的情况。`failed` 带卡属于 Needs you；`ack` 不等于 settled。
-- Ticket body 只有 Terminal 与 Artifacts。Terminal 指向 driver（已结束时可显示其历史 terminal），reviewer / verifier / helper 使用独立 Herdr tab；helper-only 不能抢占 driver Terminal。Artifact 仅通过 `artifact.task` 或 `Task.proof` 显式绑定，不从日志或时间窗口推断。
-- review 工作必须由 coordinator 写 `Decision.run.kind="review"`；没有这个字段时，它按 build 显示。
+- Ticket 默认打开最左侧 Detail，只展示 Task 元信息和等待原因；Receipts 是独立 tab，展示交付列表和回执详情。Terminal 指向 driver，reviewer / verifier / helper 使用详情内的 Role / Agent tabs，不自动创建主页面 Herdr tab。Proof 通过现有 viewer 展示，不从日志或时间窗口推断。
+- Task 动作由 Coordinator 写 `Decision.run.kind = build | review | verify`；Working chip 显示对应动作后缀，没有动作字段的旧记录按 build 兼容展示。
 - 用户 policy 放在 `~/.local/state/collie/policy/<space>.md`（没有时读 `policy.md`），coordinator 只读。
+- `ruleset.json` 的 `budget.per_hour` 控制唤醒预算，默认每 60 分钟滑动窗口 100 次。耗尽后进入 `open` Todo，不生成 Needs you 卡；Todo 提供 `Run now / Archive / Quote`，Run now 绕过本次预算立即执行，Archive 完成当前 Task 并结算 Decision。其它 `max_hops` 与 `ask_first` 护栏不受影响。
 
 ## Card answer
 
@@ -128,13 +129,15 @@ space 配置覆盖 Everywhere；未配置有效 `cli` 时不会静默选择另�
 ```bash
 ~/.config/herdr-app/bin/collie-answer --decision dc_xxx --option accept
 ~/.config/herdr-app/bin/collie-answer --decision dc_xxx --option rework --note "..." --file path --line N
+~/.config/herdr-app/bin/collie-answer --decision dc_xxx --option archive
 ~/.config/herdr-app/bin/collie-answer --decision dc_xxx --option drop
 ~/.config/herdr-app/bin/collie-answer --decision dc_xxx --option later --snooze 2026-11-18T09:00:00Z
 ```
 
-- `accept / rework` 需要该 space 有且只有一个可用的 coordinator；`drop / later` 不需要。
+- Card answer 只提交并结算 Decision；`accept / rework / archive / drop / later` 均不续接或唤醒原 Coordinator，返回结果也没有 `resumed` 字段。增量工作通过 Inbox Quote 交给 Coordinator，由其决定是否新建 Task。
 - 对 `ready` Task 选择 `accept` 时，service 调 `collie-task accept`，只执行 `ready → done`，再把 Decision settle；accept 不创建 PR，也不以 merge / comment / close 或其他 delivery 为前提。
-- 选择 `rework` 时，service 对同一 Task 调 `collie-task start`，形成 `ready → running`；terminal 已移除的 stopped-running Task 也通过 `start` 原地恢复，不换 Task ref。选择 `drop` 时先调 `collie-task done`，成功后再写 `settled{dropped}`；`later` 保持 `waiting`。
+- Inbox 选择 `archive` 时，service 调 `collie-task done`，写入 `settled{archived}` 并保留全部交付证据。旧 accept Card 的 `drop` 选项会迁移为 `archive`；通用 question/alert Card 的 drop 保持原语义。
+- 选择 `rework` 时，service 对同一 Task 调 `collie-task start`，形成 `ready → running`；terminal 已移除的 stopped-running Task 也通过 `start` 原地恢复，不换 Task ref。选择通用 Card 的 `drop` 时先调 `collie-task done`，成功后再写 `settled{dropped}`；`later` 保持 `waiting`。
 - 对含 `emit_command` 的授权 Card 选择 `accept` 时，service 执行对应 Decision delivery；失败可用 `collie decision deliver --decision <id>` 重试。这条授权路径与 Task accept 分离，delivery 不改变 Task state。
 - 打开/展开只是 `ack`，不会结案；只有 Card answer 的 outcome 才结案。
 
@@ -273,6 +276,6 @@ bin/collie-sync --check
 | doctor 报 pending update | 处理对应 `.new`，不要删除原文件 |
 | update 报 source unavailable | 恢复 manifest 中的源码 checkout；不要另换来源静默更新 |
 | layout mod 缺失 | 重装 collie（layout 的 mod 都在 `addons.json` 的 `mods` 里），或先修复本包 layout 与 mod 的交付完整性 |
-| review 工作被当成 build 显示 | coordinator 没写 `Decision.run.kind="review"`；补上后 Work 显示 `kind=review` |
+| review / verify 动作没有副标签 | 确认 `Decision.run.kind` 为对应动作，或存在 live reviewer / verifier；动作不改变 Task 状态 |
 | Accept 后未 Settled | 确认 Task 为 `ready`，并检查 service 是否成功执行 `collie-task accept`；accept 不等待 merge 或其他 delivery |
 | `Settled` 数量不对 | 按 [`TASK-LIFECYCLE.md`](TASK-LIFECYCLE.md) §2.5 检查 Decision settled 与 Task done 的投影；`failed` 与 `ack` 都不算 |

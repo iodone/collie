@@ -19,6 +19,7 @@ export interface CoordinateOptions {
   now?: () => Date;
   spaceNote?: string;
   running?: Json[];
+  activeTasks?: Json[];
   rolePromptRef?: string;
   policy?: string;
   origin?: "event" | "human";
@@ -28,9 +29,39 @@ export interface CoordinateOptions {
   onDecision?: (decision: Json) => void;
   decisionId?: string;
   beforeCommit?: (decision: Json) => Promise<Json> | Json;
+  /** Run a deferred budget Todo immediately without creating another waiting Card. */
+  ignoreBudget?: boolean;
 }
 
 const messageOf = (dispatch: Dispatch): Json => dispatch.message ?? dispatch.event;
+
+function activeSnapshot(ledger: Ledger, space: string, rawTasks: Json[]): Json[] {
+  const tasks = rawTasks.filter((task) => task?.space === space && task?.state !== "done" && task?.ref);
+  const byRef = new Map(tasks.map((task) => [String(task.ref), task]));
+  const active = ledger.decisions
+    .filter((decision) => decision.space === space && ["open", "waiting"].includes(decision.state))
+    .sort((a, b) => Date.parse(b.decided_at ?? "") - Date.parse(a.decided_at ?? "") || String(b.id).localeCompare(String(a.id)))
+    .slice(0, RECENT_DECISIONS_MAX)
+    .map((decision) => {
+      const spawn = decision.actions?.find((action: Json) => action.kind === "spawn_task")?.spawn;
+      const task = decision.run?.task_ref ? byRef.get(String(decision.run.task_ref)) : null;
+      return {
+        decision_id: decision.id, task_ref: decision.run?.task_ref ?? null, kind: decision.run?.kind ?? null,
+        goal: String(spawn?.title ?? decision.title ?? decision.why ?? decision.id).slice(0, 200),
+        detail_ref: spawn?.brief_ref ?? null,
+        decision_state: decision.state, task_state: task?.state ?? null,
+      };
+    });
+  const linked = new Set(active.map((item) => item.task_ref).filter(Boolean));
+  const orphans = tasks.filter((task) => !linked.has(String(task.ref)))
+    .sort((a, b) => String(a.ref).localeCompare(String(b.ref)))
+    .map((task) => ({
+      decision_id: null, task_ref: String(task.ref), kind: null,
+      goal: String(task.title ?? task.ref).slice(0, 200), detail_ref: null,
+      decision_state: null, task_state: task.state,
+    }));
+  return [...active, ...orphans].slice(0, RECENT_DECISIONS_MAX);
+}
 
 const baseDecision = (dispatch: Dispatch, at: string, caseRef: string | null, meta: Json = {}): Json => {
   const message = messageOf(dispatch);
@@ -68,18 +99,12 @@ const baseDecision = (dispatch: Dispatch, at: string, caseRef: string | null, me
 function budgetDecision(dispatch: Dispatch, at: string, reason: string): Json {
   return {
     ...baseDecision(dispatch, at, null),
-    state: "waiting",
+    state: "open",
     why: reason,
     decided_by: "system",
-    actions: [{
-      kind: "ask", risk_tags: [],
-      ask: { kind: "question", question: "本小时判断预算已用完，要现在处理这条事件吗？", options: ["accept", "later", "drop"] },
-    }],
-    human_boundary: { form: "card", chat_injection: false },
-    card: {
-      kind: "question", question: "本小时判断预算已用完，要现在处理这条事件吗？", options: ["accept", "later", "drop"],
-      state: "open", created_at: at, acked_at: null, answer: null, snooze_until: null, closed_at: null,
-    },
+    actions: [],
+    human_boundary: { form: "none", chat_injection: false },
+    card: null,
   };
 }
 
@@ -109,7 +134,7 @@ export async function coordinate(dispatch: Dispatch, options: CoordinateOptions)
     decision_id: decision.id, object_key: decision.occurrence.object_key, why: decision.why,
   }));
   const queue = ledger.waiting().slice(0, RECENT_DECISIONS_MAX).map((decision) => ({ key: decision.key, why: decision.why.slice(0, 40) }));
-  const existing = options.decisionId
+  let existing = options.decisionId
     ? ledger.decisions.find((decision) => decision.id === options.decisionId)
     : null;
   if (options.decisionId && !existing) throw new Error(`unknown decision: ${options.decisionId}`);
@@ -125,21 +150,22 @@ export async function coordinate(dispatch: Dispatch, options: CoordinateOptions)
     settled: null,
     human_boundary: { form: "none", chat_injection: false },
   } : baseDecision(dispatch, at, caseRef, { origin, ...(options.playbook ? { playbook: options.playbook } : {}) });
+
   const budget = checkBudget(ledger.cases, at, {
     limit: ruleset.budget.per_hour, window_minutes: ruleset.budget.window_minutes,
   });
-  if (origin === "event" && !budget.allowed) {
+  if (origin === "event" && !budget.allowed && !options.ignoreBudget) {
     const fallback = budgetDecision(dispatch, at, `全局预算 ${budget.used}/${budget.limit}，本次不唤醒 coordinator`);
     const decision = existing ? {
       ...existing,
-      state: "waiting",
+      state: "open",
       why: fallback.why,
       decided_by: "system",
       decided_at: at,
       case_ref: null,
-      actions: fallback.actions,
+      actions: [],
       human_boundary: fallback.human_boundary,
-      card: fallback.card,
+      card: null,
       settled: null,
     } : fallback;
     assertValid(decision, "urn:collie:decision:v1");
@@ -166,7 +192,7 @@ export async function coordinate(dispatch: Dispatch, options: CoordinateOptions)
     scope: { forbidden_expand: true, snapshot_bytes_max: SNAPSHOT_BYTES_MAX },
     snapshot: {
       bytes: 0, truncated: false, space_note: options.spaceNote ?? `${dispatch.space} · coordinator`,
-      queue, running: options.running ?? [], recent, rules_version: ruleset.version,
+      queue, running: options.running ?? [], recent, active: activeSnapshot(ledger, dispatch.space, options.activeTasks ?? []), rules_version: ruleset.version,
       policy: (options.policy ?? "").slice(0, 2000),
       budget: {
         scope: "global", limit: budget.limit, used: budget.used + (origin === "event" ? 1 : 0), remaining: budget.remaining - (origin === "event" ? 1 : 0),
@@ -187,14 +213,26 @@ export async function coordinate(dispatch: Dispatch, options: CoordinateOptions)
       else if (job.snapshot.queue.length) job.snapshot.queue.pop();
       else if (job.snapshot.running.length) job.snapshot.running.pop();
       else if (job.snapshot.policy) job.snapshot.policy = job.snapshot.policy.slice(0, Math.max(0, job.snapshot.policy.length - 200));
-      else job.snapshot.space_note = job.snapshot.space_note.slice(0, Math.max(0, job.snapshot.space_note.length - 100));
-      if (!job.snapshot.space_note && !job.snapshot.policy) break;
+      else if (job.snapshot.space_note) job.snapshot.space_note = job.snapshot.space_note.slice(0, Math.max(0, job.snapshot.space_note.length - 100));
+      else if (job.snapshot.active.length) job.snapshot.active.pop();
+      else break;
     }
   }
   job.snapshot.bytes = Buffer.byteLength(JSON.stringify(job.snapshot));
   if (job.snapshot.bytes > SNAPSHOT_BYTES_MAX) throw new Error("coordinator snapshot exceeds 4KB");
   assertValid(job, "urn:collie:case:v1");
   ledger.append("case", job);
+
+  const output = await decide(structuredClone(job));
+  if (output.decision_ref !== undefined && output.decision_ref !== null) {
+    const target = typeof output.decision_ref === "string"
+      ? ledger.decisions.find((decision) => decision.id === output.decision_ref)
+      : null;
+    if (!target || target.state === "settled") throw new Error(`unknown or settled decision_ref: ${String(output.decision_ref)}`);
+    if (target.space !== dispatch.space) throw new Error("decision_ref must belong to the current space");
+    if (existing && existing.id !== target.id) throw new Error("decision_ref conflicts with the current Decision");
+    existing = target;
+  }
 
   const thinking = {
     ...baseFor(job.id),
@@ -205,10 +243,9 @@ export async function coordinate(dispatch: Dispatch, options: CoordinateOptions)
   ledger.append("decision", thinking);
   options.onDecision?.(thinking);
 
-  const output = await decide(structuredClone(job));
   const occurrenceKey = message.merge?.object_key ?? `${message.object?.kind ?? "none"}:${message.object?.id ?? message.id}`;
   const round = existing ? existing.occurrence.round + 1
-    : ledger.decisions.filter((decision) => decision.occurrence.object_key === occurrenceKey).length + 1;
+    : ledger.decisions.filter((decision) => decision.id !== thinking.id && decision.occurrence.object_key === occurrenceKey).length + 1;
   const base = baseFor(job.id);
   const candidate = {
     ...base, ...output,
@@ -224,6 +261,9 @@ export async function coordinate(dispatch: Dispatch, options: CoordinateOptions)
   };
   if (!candidate.why || candidate.why.length > 140) throw new Error("coordinator decision requires why ≤ 140 chars");
   if (!Array.isArray(candidate.actions)) throw new Error("coordinator decision requires actions");
+  if (candidate.decision_ref && candidate.actions.some((action: Json) => action.kind === "spawn_task")) {
+    throw new Error("continuation cannot spawn_task; continue the existing Task");
+  }
 
   // Project the non-spawn actions onto the Decision. Inbox reads these fields for ordering
   // and attention; task-internal priority is the driver's concern, not a second state machine.

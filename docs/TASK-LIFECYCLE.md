@@ -143,7 +143,127 @@ Work = Decision.state
 
 没有 Decision 的 orphan Task 从 live / Task 条件开始投影，因此 orphan `done` 是 Settled，orphan `running` 没有 live agent 仍是 Working。`Decision.open + Task.done` 在没有更高优先级 live 条件时也是 Settled；Task ready 但 helper 仍活跃时是 Working。
 
-## 3. 状态图
+## 3. Task / Receipt / Proof 结构化模型
+
+### 3.1 三个对象，不再引入 Artifact 领域对象
+
+```text
+Task     执行事实与当前交付证据指针
+Receipt  每次 ready 的交付回执
+Proof    可复核的实际证据与展示内容
+```
+
+`artifact` 只作为 shepherdr 的存储和 viewer 实现存在，不再作为 Collie 的独立领域对象。
+
+### 3.2 Task
+
+```ts
+type Task = {
+  id: string
+  title: string
+  state: "todo" | "running" | "ready" | "done"
+  proof: {
+    id: string
+    title: string
+  } | null
+  receipts: string[]
+}
+```
+
+- `proof` 是当前交付对应的证据 id，不参与 Task 状态转移。
+- `receipts` 按时间倒序保存该 Task 的 Receipt id；每次 `ready` 新增一条，rework 不覆盖历史。
+- Task 不需要按开发场景分类；playbook 决定执行方式。
+
+### 3.3 Receipt
+
+```ts
+type Receipt = {
+  id: string
+  task: string
+  summary: string
+  details: string
+  proof: {
+    id: string
+    title: string
+    refs: string[]
+  }
+}
+```
+
+Receipt 回答三个问题：完成了什么、结果如何、证据在哪。它只在 Task `ready` 时产生；helper 局部输出不直接形成 Receipt，`done` 不再产生 Receipt。
+
+### 3.4 Proof
+
+```ts
+type Proof = {
+  id: string
+  title: string
+  refs: string[]
+  content?: {
+    format: "recipe" | "custom" | "file"
+    location: string
+  }
+}
+```
+
+`refs` 可以指向 proof artifact、commit、文件、评论、测试输出、日志、图片或 URL。`content` 是可选的 viewer 数据，`recipe` 只是其中一种展示格式，不是业务分类。
+
+### 3.5 关系
+
+```text
+Task.ready
+  → 产生一个 Receipt
+  → Receipt.proof.id 指向一个 Proof
+
+Task.receipts
+  → 保存该 Task 的全部交付回执
+
+done / archive
+  → 不再产生 Receipt
+  → 已有 Receipt 和 Proof 全部保留
+
+rework
+  → 同一 Task 再次 ready
+  → 产生新的 Receipt 和证据版本
+```
+
+`done` 不是 Receipt，也不是删除动作。归档或放弃都不删除交付证据。
+
+## 4. Inbox 交互
+
+Ticket 使用两个主 tab：
+
+```text
+Terminal   当前 driver / live agent
+Receipts   当前 Task 的交付回执
+```
+
+- `Receipts` 按时间倒序展示 summary、ready_at 和 proof 标记；proof 排第一。
+- 点击 Receipt 进入详情，展示 summary、details 和 `proof.refs`。
+- `proof.refs` 可以逐项打开 commit、文件、评论、测试输出、日志、图片或 proof viewer。
+- 证据详情复用 shepherdr 当前的 Artifact viewer；没有 live driver 时默认打开 Receipts。
+- 没有 ready 时显示 `No delivery yet`；done 后 Receipt 与 Proof 仍可打开。
+- Reviewer / Verifier 等 role terminal 在 `status=done` 后仍可从 Ticket 打开；done 只表示不再计入 live role，不隐藏历史终端。
+
+操作：
+
+操作入口位于 Inbox 列表行尾的 `⋯` 菜单，不在 Ticket header 或 Receipt 详情页。`Accept` 先弹出当前 Decision 最新 Receipt 的 Summary、Details 和 Proof refs，确认后才执行；`Cancel` 不改变状态。
+
+| 状态 | 操作 |
+|---|---|
+| `ready` | `Accept` / `Archive` / `Quote` |
+| `done` | `Quote`（只读引用，用于增量工作） |
+
+All 固定分为 **Needs you / Todo / Working / Settled**，四组标题始终显示，Settled 默认折叠。列表保留原有第二行：canonical ref、状态、playbook、简述和 space；简述可选择，列表标题不绑定复制。点击复制只放在 Task 详情的标题上。没有 `Decision.run.task_ref` 时使用 `dc_*` Decision ID，不生成伪造的 `COLLIE-*`。Todo 直接显示 scheduler 的 `reason`，覆盖依赖、folder 并发上限和机器 CPU / 内存 / 磁盘等待，不在 UI 里另算一套。
+预算耗尽的 Decision 必须是 `open` Todo 且 `card=null`，并保留已有 `Decision.run.task_ref`。所有 Todo Task 都有 `Run now / Archive / Quote`；Run now 对已有 Task 直接执行 `start`，继续当前 Task，不唤醒 Coordinator、不重复创建 Task；尚无 Task 的预算 Decision 才重新交给 Coordinator。Archive 完成已有 Task 并把真实 Decision 结算为 `archived`。
+
+- `Accept`：接受交付，Task → done，Decision → settled，不隐式 merge。
+- `Review comment`：review 任务完成评论后直接发布到 MR 并记录 note id / URL，然后才能 ready。评论是任务交付物，不需要为评论再设 accept 卡；Ticket accept 只负责结束 Ticket。
+- `Archive`：结束执行，Task → done，Decision → `settled{outcome:"archived"}`，保留全部证据；没有 ready 时不伪造 Receipt。Archive 不复用 `drop/dropped`，也不删除 Settled 历史。
+- `Reply`：返工，Task 回到 running，复用同一 Task，产生下一份 Receipt。
+- `Quote`：把 Receipt id、summary、details 和 proof refs 引用到 Coordinator chat 并聚焦；不直接改变 Task 或 Decision 状态。Settled 中的增量工作也通过 Quote 交给 Coordinator，由其决定新的 Task；不把 done Task 拉回 running。Card answer 不包含 `resumed`，也不续接原 Coordinator。
+
+## 5. 状态图
 
 ```mermaid
 stateDiagram-v2
@@ -162,7 +282,7 @@ stateDiagram-v2
 `ready` 不是 `done`。
 `ready` 表示“driver 已交付，等待下一步”；`done` 表示“这次执行已被 accept 或 drop，记录已经终结”。
 
-## 4. 端到端流程
+## 6. 端到端流程
 
 ```mermaid
 sequenceDiagram
@@ -195,6 +315,11 @@ sequenceDiagram
     S->>T: task start
     T-->>S: running
     S-->>C: Decision open
+  else archive
+    H->>S: archive
+    S->>T: task done
+    T-->>S: done
+    S-->>C: Decision settled(archived)
   else drop
     H->>S: drop
     S->>T: task done
@@ -203,7 +328,7 @@ sequenceDiagram
   end
 ```
 
-## 5. 分阶段状态
+## 7. 分阶段状态
 
 | 阶段 | Task | Decision | Work | 触发 |
 |---|---|---|---|---|
@@ -221,7 +346,7 @@ sequenceDiagram
 
 这些例子都服从 §2.5 的首个命中规则；不能把 Task ready 或 done 单独当作无视 Decision / live 条件的映射。
 
-## 6. 构建
+## 8. 构建
 
 Coordinator 只提交判断：
 
@@ -235,7 +360,7 @@ Decision
     project?
     playbook?
   run:
-    kind: build | review
+    kind: build | review | verify
 ```
 
 service 收到 Decision 后做三件事：
@@ -263,7 +388,7 @@ Work = Working
 
 `todo` 是创建到启动之间的短暂状态；运行中的 task 不应停留在 `todo`。
 
-## 7. 执行
+## 9. 执行
 
 Driver 收到：
 
@@ -300,14 +425,14 @@ Work = Needs you
 
 没有 receipt 的 `ready` 不算交付。`summary / details / proof` 都是必填通用字段，review verdict 不是额外要求。`proof` 必须有可核验的引用，不能只截一段最后消息。
 
-Ticket 的 Artifacts 只接受两种显式绑定：
+Ticket 的 Receipts 只接受 Task ref 的显式交付记录：
 
-1. artifact 自身的 `artifact.task` 指向该 Task；
-2. artifact 被 `Task.proof` 引用，此时 proof 排在列表首位。
+1. `Receipt.task.ref` 指向该 Task，形成一条交付记录；
+2. `Task.proof` 指向当前交付的 Proof，Receipt 通过 `proof.refs` 保存可复核证据。
 
-Ticket 不扫描 agent / chat 日志，也不按 publisher 或时间窗口推断 artifact 归属。Ticket body 只有 Terminal 与 Artifacts 两个 tab：Terminal 指向 driver（已结束时可显示其历史 terminal），reviewer / verifier / helper 使用独立 Herdr tab，helper-only 不能抢占 driver Terminal。
+Ticket 不扫描 agent / chat 日志，也不按 publisher 或时间窗口推断 Receipt 归属。Ticket 默认打开最左侧 Detail，只展示 Task 元信息与等待原因；独立 Receipts tab 展示交付列表和回执详情。Terminal 指向 driver，Role / Agent tabs 在详情内显示 reviewer / verifier / helper 的 live terminal 或只读历史，证据详情复用 shepherdr viewer。
 
-## 8. 回执到 Coordinator
+## 10. 回执到 Coordinator
 
 Service 把 task-level receipt 交给 Coordinator，而不是每个 helper 都触发一次判断。
 
@@ -337,7 +462,7 @@ Work = Needs you
 Task.state = ready
 ```
 
-## 9. 最终完成
+## 11. 最终完成
 
 ### Accept
 
@@ -390,22 +515,22 @@ Driver 没有交出 `ready` 就退出时：
 - 人可以 rework（重新启动 task）或 drop（终结 task）。
 - 失败细节属于 Receipt / Card / task facts，不新增 Task state。
 
-## 10. 最终交付边界
+## 12. 最终交付边界
 
 - Task `done` 的条件：交付被 accept，或工作被 drop / finalization。
 - `merge / emit_command / 评论 / 关闭 issue` 属于 delivery，由 playbook / Decision 决定；它们不产生新的 Task state。
 - delivery 失败由 Decision / Card / playbook 处理，不回退 Task lifecycle。
 - `ready` 是 driver 已交付，`done` 是 accept / drop 后执行记录终结。
-- 同一个 Work 继续下一轮时，复用同一 Task ref；新工作才创建新 Decision / Task。
+- 同一 Decision 继续下一轮时，复用同一 Task ref；独立目标才创建新 Decision / Task。
 - Coordinator 只处理 task-level 结果；helper 的 findings / verdict 不直接进入 Coordinator。
 
-## 11. 不变量
+## 13. 不变量
 
 1. Task 只有 `todo / running / ready / done`。
 2. Driver 只交 `ready`；`done` 由验收或放弃终结。
 3. `ready` 必须有 receipt：summary、details、proof。
-4. 对有 Decision 的 Work，`done` 与 `Decision.settled` 同向发生；不能只完成一个。
-5. Work 是投影，不写回 Ledger 或 task store。
+4. 对有 Decision 的 Task，`done` 与 `Decision.settled` 同向发生；不能只完成一个。
+5. Inbox 是投影，不写回 Ledger 或 task store，也不引入新的实体。
 6. 一个 task 只有一个 driver；helper 不是第二个 task。
 7. Rework 复用同一 task，不重复派工。
 8. delivery 动作不改变 Task state；是否 merge 由 playbook 决定。

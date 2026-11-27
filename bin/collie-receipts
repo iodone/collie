@@ -1,0 +1,58 @@
+#!/usr/bin/env python3
+"""Read Collie's durable Task Receipts for the Inbox."""
+
+import argparse
+import json
+import os
+from pathlib import Path
+
+
+def state_dir() -> Path:
+    return Path(os.environ.get("COLLIE_STATE_DIR", "~/.local/state/collie")).expanduser()
+
+
+def read_receipts() -> list[dict]:
+    root = state_dir() / "receipts"
+    if not root.is_dir():
+        return []
+    out = []
+    for path in root.glob("rc_*.json"):
+        try:
+            value = json.loads(path.read_text())
+            if isinstance(value, dict) and value.get("id"):
+                out.append(value)
+        except (OSError, ValueError):
+            continue
+    return out
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(prog="collie-receipts")
+    sub = parser.add_subparsers(dest="command", required=True)
+    listing = sub.add_parser("list")
+    listing.add_argument("--task", required=False)
+    listing.add_argument("--json", action="store_true")
+    show = sub.add_parser("show")
+    show.add_argument("id")
+    show.add_argument("--json", action="store_true")
+    args = parser.parse_args()
+    receipts = read_receipts()
+    if args.command == "list":
+        if args.task:
+            ref = args.task.upper()
+            receipts = [r for r in receipts if str((r.get("task") or {}).get("ref", (r.get("task") or {}).get("id", ""))).upper() == ref]
+        receipts.sort(key=lambda r: r.get("received_at", ""), reverse=True)
+        result = {"receipts": receipts}
+    else:
+        result = next((r for r in receipts if r.get("id") == args.id), None)
+        if result is None:
+            parser.error(f"unknown receipt: {args.id}")
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False))
+    else:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -33,6 +33,8 @@ service 的本地 HTTP 路由（`/ticket`、`/decision`、`/v1/collaboration`）
 | `collie ticket adopt` | 给已有 task 补一条持久 Decision |
 | `collie ticket show` | 按 Decision id 或 task ref 读 Ticket 投影 |
 | `collie decision commit` | 提交一个已经判断好的 Decision JSON |
+| `collie decision run` | 立即执行一个 open Todo；已有 Task 时启动同一 Task |
+| `collie decision archive` | 归档一个 open Todo，并终结其已有 Task |
 | `collie decision deliver` | 重试一个已授权 Decision 的 `emit_command` |
 | `collie task add/list/show/start/status/ready/accept/done` | 读取或推进四态 Task；不提供其他子命令 |
 | `collie intake event` | 以 native Event client 身份调用 `/v1/ingress` |
@@ -76,7 +78,7 @@ collie ticket create \
 - `--space`：协作 space
 - `--title`：任务标题
 - `--brief`：brief 文件路径、`-`（stdin），或直接内联文本
-- `--kind`：`build` | `review`
+- `--kind`：`build` | `review` | `verify`
 - `--project`：可选，space 下的 project
 - `--playbook`：可选，必须来自 `collie roles list`
 
@@ -142,7 +144,16 @@ collie decision deliver --decision dc_...
 当 Decision 含 `emit_command`，并且人在 Card 上选择 accept 后，service 会自动 delivery。
 如果 delivery 失败，使用此命令重试。
 
-### 3.5 `collie ticket show`
+### 3.5 `collie decision run / archive`
+
+```sh
+collie decision run --decision dc_...
+collie decision archive --decision dc_...
+```
+
+两个命令接受 `state=open` 的 Todo。Run now 对已有 Task 直接 `start` 同一个 Task，不唤醒 Coordinator、不重复 spawn；尚无 Task 时只支持预算耗尽的 Decision，并重新进入 Coordinator。Archive 对已有 Task 执行 `done`，再把 Decision 结算为 `archived`。其它护栏与 playbook 不变。
+
+### 3.6 `collie ticket show`
 
 ```sh
 collie ticket show --decision dc_...
@@ -164,7 +175,7 @@ collie ticket show --ticket COLL-42
 }
 ```
 
-### 3.6 `collie ticket adopt`
+### 3.7 `collie ticket adopt`
 
 ```sh
 collie ticket adopt \
@@ -208,7 +219,7 @@ collie task ready COLL-42 \
 
 Coordinator 或人选择 accept / drop 后由 service 终结 Task；选择 rework 时，service 对同一 Task 调用 `start`。`start` 也用于 terminal 已移除的 stopped-running Task 原地恢复，不新建 Task。`drop` 是 Card 选项，不是 `collie task` 子命令。merge / comment / close 由 playbook / Decision delivery 控制，与 Task accept 无关。
 
-Artifact 只有在 `artifact.task` 指向该 Task，或被 `Task.proof` 显式引用时，才进入 Ticket 的 Artifacts；不会根据日志或发布时间推断归属。
+Receipt 按 Task ref 关联，记录每次 ready 的 summary、details 和 proof refs；Ticket 的独立 Receipts tab 读取这些交付回执，不根据日志或发布时间推断归属。
 
 ## 5. Event Ingress
 

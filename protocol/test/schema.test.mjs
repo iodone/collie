@@ -130,6 +130,19 @@ test("Message：fixture 合法；人的消息不伪装成 Event", async () => {
   assertInvalid({ ...message, data_ref: "https://example.com/body" }, "urn:collie:message:v1", "pattern", "内联正文");
 });
 
+test("Message / Decision：对象类型不被开发场景枚举锁死", async () => {
+  const message = await fixture("message");
+  const genericMessage = {
+    ...message, object: { kind: "calendar", id: "team-week" }, object_key: "calendar:team-week",
+  };
+  assert.equal(validate(genericMessage, "urn:collie:message:v1").valid, true);
+  const dc = await fixture("decision");
+  const genericDecision = {
+    ...dc, occurrence: { ...dc.occurrence, object_key: "calendar:team-week", kind: "calendar" },
+  };
+  assert.equal(validate(genericDecision, "urn:collie:decision:v1").valid, true);
+});
+
 test("Case：fixture 合法；Message 来源必须是 event 或 human", async () => {
   const ca = await fixture("case");
   assert.deepEqual(validate(ca, "urn:collie:case:v1").errors, []);
@@ -187,6 +200,20 @@ test("Decision：终态必须有 settled（ack 结不了账）", async () => {
   assertInvalid(settledNoRecord, "urn:collie:decision:v1", "type", "settled 但没有 settled 记录");
 });
 
+test("Decision：run.kind 固定为 build / review / verify", async () => {
+  const dc = await fixture("decision");
+  for (const kind of ["build", "review", "verify"]) {
+    assert.equal(validate({ ...dc, run: { ...dc.run, kind } }, "urn:collie:decision:v1").valid, true);
+  }
+  assertInvalid({ ...dc, run: { ...dc.run, kind: "merge" } }, "urn:collie:decision:v1", "enum");
+});
+
+test("Decision：decision_ref 引用可续接的既有 Decision", async () => {
+  const dc = await fixture("decision");
+  assert.equal(validate({ ...dc, decision_ref: "dc_existing01" }, "urn:collie:decision:v1").valid, true);
+  assertInvalid({ ...dc, decision_ref: "TASK-1" }, "urn:collie:decision:v1", "pattern");
+});
+
 test("Decision：settled 存在时 state 必须是终态", async () => {
   const dc = await fixture("decision");
   const settledButOpen = {
@@ -223,6 +250,15 @@ test("Decision：coordinator 不能塞护栏旁路字段", async () => {
   const dc = await fixture("decision");
   assertInvalid({ ...dc, guard_bypass: true }, "urn:collie:decision:v1", "additionalProperties");
   assertInvalid({ ...dc, risk: { tags: ["delete_data"], forced_waiting: false } }, "urn:collie:decision:v1", "const");
+});
+
+test("Decision：archived 是合法 settled outcome", async () => {
+  const dc = await fixture("decision");
+  const archived = {
+    ...dc, state: "settled",
+    settled: { at: "2026-11-13T10:30:00Z", by: "human", outcome: "archived" },
+  };
+  assert.equal(validate(archived, "urn:collie:decision:v1").valid, true);
 });
 
 test("Decision：waiting 必须带 card；emit_command 必须带 egress", async () => {

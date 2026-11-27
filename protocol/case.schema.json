@@ -192,6 +192,7 @@
         "queue",
         "running",
         "recent",
+        "active",
         "rules_version",
         "budget"
       ],
@@ -296,7 +297,7 @@
               },
               "object_key": {
                 "type": "string",
-                "pattern": "^(mr|issue|pipeline|none):.+$",
+                "pattern": "^[a-z0-9][a-z0-9_-]*:.+$",
                 "description": "该决定绑定的对象键。"
               },
               "why": {
@@ -304,6 +305,51 @@
                 "minLength": 1,
                 "maxLength": 140,
                 "description": "当时的一行理由，用来防止同一件事被反复改判。"
+              }
+            }
+          }
+        },
+        "active": {
+          "type": "array",
+          "maxItems": 10,
+          "description": "未终结的 Decision 与 orphan Task 的只读判断视图。身份来自 Ledger / Task store；目标与详情用于语义续接，不新增实体。",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["decision_id", "task_ref", "kind", "goal", "detail_ref", "decision_state", "task_state"],
+            "properties": {
+              "decision_id": {
+                "type": ["string", "null"],
+                "pattern": "^dc_[0-9a-z]{8,32}$",
+                "description": "可续接的 Decision；orphan Task 为 null。"
+              },
+              "task_ref": {
+                "type": ["string", "null"],
+                "maxLength": 240,
+                "description": "canonical Task ref；尚未派发时为 null。"
+              },
+              "kind": {
+                "enum": ["build", "review", "verify", null],
+                "description": "Task 当前动作；未知或 orphan 未分类时为 null，不参与身份去重。"
+              },
+              "goal": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "description": "目标摘要，供 Coordinator 判断是否同一目标。"
+              },
+              "detail_ref": {
+                "type": ["string", "null"],
+                "pattern": "^/[^\\s]+$",
+                "description": "完整 Task brief 的本地引用；需要细节时读取，不把长正文塞进快照。"
+              },
+              "decision_state": {
+                "enum": ["open", "waiting", null],
+                "description": "活跃 Decision 状态；orphan Task 为 null。"
+              },
+              "task_state": {
+                "enum": ["todo", "running", "ready", "done", null],
+                "description": "当前 Task 执行事实；尚未关联 Task 时为 null。"
               }
             }
           }
@@ -333,8 +379,8 @@
             "limit": {
               "type": "integer",
               "minimum": 1,
-              "maximum": 60,
-              "description": "窗口上限，默认 6。"
+              "maximum": 100,
+              "description": "窗口上限，默认 100。"
             },
             "used": {
               "type": "integer",

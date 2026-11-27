@@ -9,5 +9,6 @@ inbox-settings.js: collie-settings
 definition-files.js: collie-settings
 ui.js: collie-inbox collie-tabs collie-chrome collie-settings collie-artifacts
 core/task-artifacts.js: collie-inbox collie-artifacts
+core/task-receipts.js: collie-inbox
 core/spaces.js: collie-inbox collie-tabs
 terminal-tab.js: collie-chat collie-pane-chat collie-inbox

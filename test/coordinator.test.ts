@@ -50,23 +50,68 @@ describe("M3 Coordinator + Ledger", () => {
     expect(ledger.history("decision").map((item) => item.state)).toEqual(["open", "open"]);
   });
 
-  test("全局 6 次预算用完后第 7 次不调用 coordinator，只落 waiting 卡", async () => {
+  test("Case.active 提供活跃 Decision、动作、目标、详情与 orphan Task", async () => {
     const ledger = Ledger.open(join(scratch(), "ledger.json"));
-    let calls = 0;
-    for (let n = 1; n <= 7; n += 1) {
-      const dispatch = dispatchFor(n);
-      // Independent lanes model seven unrelated objects.
-      dispatch.event = { ...dispatch.event, id: `ev_budget${String(n).padStart(10, "0")}`, key: `mr!${n}@head`, object: { ...dispatch.event.object, id: `mr!${n}` } };
-      dispatch.event.merge = { ...dispatch.event.merge, lane_key: `mr-review:mr:mr!${n}`, object_key: `mr:mr!${n}` };
-      await coordinate(dispatch, {
-        ledger, ruleset, decide: () => { calls += 1; return decision(`决定 ${n}`); },
-        now: () => new Date("2026-11-13T10:00:00Z"),
-      });
-    }
-    expect(calls).toBe(6);
-    expect(ledger.cases).toHaveLength(6);
-    expect(ledger.decisions.at(-1).state).toBe("waiting");
-    expect(ledger.decisions.at(-1).case_ref).toBeNull();
+    ledger.append("decision", {
+      id: "dc_active01", space: "collie", state: "open", why: "评审发布方案",
+      decided_at: "2026-11-13T09:00:00Z",
+      occurrence: { object_key: "none:publish", kind: "none", round: 1, hops: 0 },
+      run: { task_ref: "TASK-7", kind: "review" },
+      actions: [{ kind: "spawn_task", risk_tags: [], spawn: { title: "评审发布方案", brief_ref: "/tmp/review.md" } }],
+    });
+    ledger.append("decision", {
+      id: "dc_settled01", space: "collie", state: "settled", why: "已结束",
+      decided_at: "2026-11-13T09:30:00Z", run: { task_ref: "TASK-OLD", kind: "build" },
+      occurrence: { object_key: "none:old", kind: "none", round: 1, hops: 0 },
+    });
+    let active: unknown;
+    await coordinate(dispatchFor(1), {
+      ledger, ruleset,
+      activeTasks: [
+        { ref: "TASK-7", title: "评审发布方案", state: "running", space: "collie" },
+        { ref: "TASK-9", title: "核对发布检查单", state: "ready", space: "collie" },
+        { ref: "TASK-10", title: "已结束", state: "done", space: "collie" },
+      ],
+      decide: (job) => { active = job.snapshot.active; return decision(); },
+    });
+    expect(active).toEqual([
+      {
+        decision_id: "dc_active01", task_ref: "TASK-7", kind: "review", goal: "评审发布方案",
+        detail_ref: "/tmp/review.md", decision_state: "open", task_state: "running",
+      },
+      {
+        decision_id: null, task_ref: "TASK-9", kind: null, goal: "核对发布检查单",
+        detail_ref: null, decision_state: null, task_state: "ready",
+      },
+    ]);
+  });
+
+  test("decision_ref 续接同一 Decision 和 Task，round 增加且不新建", async () => {
+    const ledger = Ledger.open(join(scratch(), "ledger.json"));
+    const first = await coordinate(dispatchFor(1), {
+      ledger, ruleset,
+      decide: () => ({ state: "open", why: "产出发布方案", actions: [{ kind: "noop", risk_tags: [] }], run: { kind: "build", task_ref: "TASK-7" } }),
+    });
+    const continued = await coordinate(dispatchFor(2), {
+      ledger, ruleset,
+      decide: () => ({
+        decision_ref: first.id, state: "open", why: "评审同一份发布方案",
+        actions: [{ kind: "noop", risk_tags: [] }], run: { kind: "review" },
+      }),
+    });
+    expect(continued.id).toBe(first.id);
+    expect(first.occurrence.round).toBe(1);
+    expect(continued.run).toMatchObject({ task_ref: "TASK-7", kind: "review" });
+    expect(continued.occurrence.round).toBe(2);
+    expect(ledger.decisions).toHaveLength(1);
+  });
+
+  test("decision_ref 只能引用同一 space 的活跃 Decision", async () => {
+    const ledger = Ledger.open(join(scratch(), "ledger.json"));
+    await expect(coordinate(dispatchFor(1), {
+      ledger, ruleset,
+      decide: () => ({ decision_ref: "dc_missing01", state: "open", why: "无效续接", actions: [{ kind: "noop", risk_tags: [] }] }),
+    })).rejects.toThrow("unknown or settled decision_ref");
   });
 
   test("coordinator 改不了 hops；full 权限被护栏钉成 approval 卡", async () => {

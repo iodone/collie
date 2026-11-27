@@ -81,7 +81,7 @@ const rule = (t) => div().w(1).h(18).mx(4).flex_none().bg(t.border);
 
 export function artifactBar(view, a, handle) {
   const t = theme();
-  const title = String(a.title ?? "Artifact").split(" · ")[0];
+  const title = String(a.title ?? "Proof").split(" · ")[0];
   const vs = view.art?.versions ?? [];
   const latest = latestOf(a, vs);
   const shown = a.version ?? latest;

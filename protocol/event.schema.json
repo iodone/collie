@@ -112,7 +112,7 @@
         },
         "object_key": {
           "type": "string",
-          "pattern": "^(mr|issue|pipeline|none):.+$",
+          "pattern": "^[a-z0-9][a-z0-9_-]*:.+$",
           "description": "对象键，形如 mr:mr!93。priority 变更计数与卡片绑定都以它为单位。"
         },
         "first_seen_at": {

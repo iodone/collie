@@ -183,6 +183,6 @@ export class CollaborationRegistry {
   }
 
   defaultPlaybook(kind: string): string {
-    return kind === "review" ? "review" : "feature";
+    return kind === "review" ? "review" : kind === "verify" ? "investigation" : "feature";
   }
 }

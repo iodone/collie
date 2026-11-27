@@ -34,9 +34,9 @@ Ticket 通常由 Decision 驱动。`collie task` 可以产生没有 Decision 的
 - **两种消息来源**：外部事件和人的消息都是 Message；来源只决定展示和预算，不改变 Coordinator / Decision 契约。
 - **一个队列**：只有 `waiting` 的 Decision 进队列；Todo / Working 是执行投影，不是队列。
 - **一个正式出口**：外部机器事件到人的正式决策出口是 Card；worker 的权限/问题 hook 是另一类终端交互，不伪造 Decision。政策由用户定义，coordinator 只能起草不能自改。
-- **一个独立界面**：Inbox 是 Collie 自己的工作台；Ticket body 只有 Terminal 与 Artifacts。Terminal 属于 driver，helper 使用独立 Herdr tab，helper-only 不会抢占 driver Terminal。
+- **一个独立界面**：Inbox 是 Collie 自己的工作台；Ticket body 只有 Terminal 与 Receipts。Terminal 属于 driver，helper 使用独立 Herdr tab，helper-only 不会抢占 driver Terminal。
 - **一个判断台账**：Ledger 记录 Message、Case、Decision、Receipt；Task 由独立 task store 维护。Decision 与 Task 都是持久状态机，Work 不是；Card 不是新对象，是 `Decision.state = waiting`。
-- **显式产物归属**：Artifact 只通过 `artifact.task` 或 `Task.proof` 绑定 Ticket，不扫描日志，也不按发布时间推断。
+- **交付与证据分离**：Receipt 记录每次 ready 的 summary、details 和 proof refs；Proof 通过现有 viewer 展示，不扫描日志或按发布时间推断。
 - **执行与交付分离**：playbook 决定 review / verify 和 merge / comment / close 等 delivery；它们不是 Task 状态或 accept 前置条件。
 - **四道缝**：`source`（进）/ `agent`（干）/ `channel`（问人）/ `delivery`（出）。前三个是可替换接口；当前 `source` adapter 仍需写代码，不能只加配置目录。
 

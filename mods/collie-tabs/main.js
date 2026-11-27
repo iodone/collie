@@ -156,9 +156,9 @@ export default class Tabs extends View {
       ? Math.max(10, (root.traffic_lights[0] + 64) / settings().zoom - (sidebar?.hidden ? 0 : sidebar?.size?.px ?? 0))
       : 10;
     const panel = find(root, "panel"), body = find(root, "panel-body");
-    // The panel's pages, all collie's own: Files, Inbox, Artifacts (the layout mounts them as
-    // "files", "collie" and "artifacts"). Shep's pages are gone.
-    const enabled = ["files", "collie", "artifacts"];
+    // The panel's pages, all collie's own: Files, Inbox, Receipts (the layout mounts them as
+    // "files", "collie" and "receipts"). Shep's pages are gone.
+    const enabled = ["files", "collie", "receipts"];
     const waiting = shared("inbox.queue")?.waiting ?? 0;
     this.syncPanel(space, panel, body, enabled);
     // The side panel's button: icon first; the label when the bar has room (the open one keeps
@@ -187,7 +187,7 @@ export default class Tabs extends View {
         : openOverlay({ mod: "collie-menu", kind: "popup", width: 250, props: { mode: "new", target: { space: space.id } } })))
       .child(panelButton("files", "Files", "mods/collie-files/file.svg"))
       .child(panelButton("collie", "Inbox", "mods/collie-chrome/files.svg", [waiting, 0]))
-      .child(panelButton("artifacts", "Artifacts", "mods/collie-artifacts/artifacts.svg"))
+      .child(panelButton("receipts", "Receipts", "mods/collie-chrome/file-text.svg"))
       .when(w?.buttons, el => el.child(button("minimize", w.platform === "windows" ? svg("mods/collie-tabs/win-min.svg").size(16) : "−", () => run("window.minimize")))
         .child(button("maximize", w.platform === "windows" ? svg(`mods/collie-tabs/${w.maximized ? "win-restore" : "win-max"}.svg`).size(16) : "□", () => run("window.maximize")))
         .child(button("close-window", w.platform === "windows" ? svg("mods/collie-tabs/win-close.svg").size(16) : svg("mods/collie-tabs/win-close.svg").size(13), () => run("window.close"))));

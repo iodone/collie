@@ -168,6 +168,7 @@ function jobPrompt(options: HelperJobOptions, jobPath: string, outputPath: strin
     "Read the job, follow the role prompt and the job snapshot/policy, and write one Decision JSON to the output path.",
     "Every action needs kind and risk_tags ([] when none). spawn_task needs spawn{title,brief_ref,base,access}; ask needs ask{kind,question,options}; waiting needs a card.",
     "Include playbook{name,version} when the Decision selects one; at most one spawn_task per Decision.",
+    "To continue an active target, copy its decision_id into decision_ref, preserve its Task, and never combine decision_ref with spawn_task. run.kind is build, review or verify.",
     "For spawn_task set brief_ref to /pending/brief; the service renders the trusted brief.",
     "Do not write the Ledger or policy and do not spawn anything yourself. Reply DONE.",
   ].join("\n");
@@ -277,6 +278,7 @@ export function validateProposal(value: unknown, options: { space: string; at: s
     id: "dc_00000000", key: "helper:validate", space: options.space,
     space_candidates: [options.space], event_ref: null, case_ref: null,
     state: proposal.state, why: proposal.why, decided_by: "coordinator", decided_at: options.at,
+    decision_ref: proposal.decision_ref ?? null,
     playbook,
     occurrence: { object_key: "none:helper", kind: "none", round: 1, hops: 0 },
     actions: proposal.actions,
@@ -301,6 +303,7 @@ export function validateProposal(value: unknown, options: { space: string; at: s
     throw new Error(`helper Decision is invalid: ${result.errors.map((error: Json) => `${error.path || "/"} ${error.message}`).join("; ")}`);
   }
   return {
+    ...(proposal.decision_ref ? { decision_ref: proposal.decision_ref } : {}),
     state: proposal.state,
     why: proposal.why,
     actions: proposal.actions,
